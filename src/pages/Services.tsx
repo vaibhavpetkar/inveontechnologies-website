@@ -5,116 +5,14 @@ import {
   ArrowRight, Brain, Code2, Settings, Shield, Headphones,
   CheckCircle, Cpu, Zap, Lock, Database, Cloud
 } from 'lucide-react';
+import { SERVICES } from '@/data/services';
 
 const fadeUp = {
   hidden: { opacity: 0, y: 32 },
   visible: (i = 0) => ({ opacity: 1, y: 0, transition: { duration: 0.6, delay: i * 0.1, ease: 'easeOut' } }),
 };
 
-const services = [
-  {
-    icon: Brain,
-    title: 'AI Development',
-    tagline: 'Custom models, intelligent automation, ML solutions',
-    description: 'Custom AI models, intelligent automation, and machine learning solutions tailored to your business processes.',
-    color: 'from-primary/10 to-blue-500/10',
-    borderColor: 'border-border hover:border-primary/40',
-    accentColor: 'text-primary',
-    features: [
-      'Custom model development & training',
-      'LLM fine-tuning & RAG implementations',
-      'Computer vision & NLP pipelines',
-      'MLOps & model deployment',
-      'AI strategy & feasibility assessment',
-      'Generative AI applications',
-    ],
-  },
-  {
-    icon: Code2,
-    title: 'Custom Software',
-    tagline: 'Web platforms, APIs, microservices, enterprise apps',
-    description: 'End-to-end bespoke software development — web platforms, APIs, microservices, and enterprise applications.',
-    color: 'from-blue-500/10 to-indigo-500/10',
-    borderColor: 'border-border hover:border-blue-500/40',
-    accentColor: 'text-blue-500',
-    features: [
-      'Full-stack web application development',
-      'API design & microservices architecture',
-      'Legacy system modernization',
-      'Mobile & cross-platform apps',
-      'DevOps & CI/CD pipeline setup',
-      'Performance optimization & scaling',
-    ],
-  },
-  {
-    icon: Settings,
-    title: 'ERP/CRM Solutions',
-    tagline: 'End-to-end implementation & integrations',
-    description: 'Streamline your operations with fully integrated ERP and CRM platforms built for scale and performance.',
-    color: 'from-indigo-500/10 to-violet-500/10',
-    borderColor: 'border-border hover:border-indigo-500/40',
-    accentColor: 'text-indigo-500',
-    features: [
-      'ERP needs assessment & gap analysis',
-      'End-to-end ERP/CRM implementation',
-      'Third-party integrations (Stripe, Salesforce, etc.)',
-      'Data migration & cleansing',
-      'User training & change management',
-      'Post-deployment optimization & support',
-    ],
-  },
-  {
-    icon: Cpu,
-    title: 'ERPNext Customization',
-    tagline: 'Open-source power, enterprise polish',
-    description: 'Inveon Technologies works with ERPNext, the world\'s most powerful open-source ERP, and bends it to your exact requirements.',
-    color: 'from-violet-500/10 to-purple-500/10',
-    borderColor: 'border-border hover:border-violet-500/40',
-    accentColor: 'text-violet-500',
-    features: [
-      'Custom DocType & workflow development',
-      'ERPNext module configuration & tuning',
-      'Print format & report customization',
-      'Multi-company & multi-currency setup',
-      'ERPNext-to-third-party integrations',
-      'Version upgrades & ongoing maintenance',
-    ],
-  },
-  {
-    icon: Headphones,
-    title: 'Managed Tech Support',
-    tagline: '24/7 SLA-backed support & monitoring',
-    description: 'SLA-backed IT support that keeps your operations running at peak performance. From helpdesk tickets to infrastructure monitoring.',
-    color: 'from-emerald-500/10 to-teal-500/10',
-    borderColor: 'border-border hover:border-emerald-500/40',
-    accentColor: 'text-emerald-500',
-    features: [
-      '24/7 helpdesk with guaranteed SLAs',
-      'Proactive infrastructure monitoring',
-      'Incident response & root cause analysis',
-      'Server & network administration',
-      'Patch management & software updates',
-      'Dedicated account manager & monthly reports',
-    ],
-  },
-  {
-    icon: Shield,
-    title: 'IT Auditing & Transformation',
-    tagline: 'Security-first modernization roadmaps',
-    description: 'We assess your current technology landscape, identify vulnerabilities, and build a strategic roadmap to modernize your infrastructure — securely and efficiently.',
-    color: 'from-orange-500/10 to-red-500/10',
-    borderColor: 'border-border hover:border-orange-500/40',
-    accentColor: 'text-orange-500',
-    features: [
-      'Comprehensive IT security audits',
-      'GDPR, SOC2, ISO 27001 compliance reviews',
-      'Penetration testing & vulnerability assessments',
-      'Digital transformation strategy & roadmap',
-      'Cloud migration planning & execution',
-      'Technology stack optimization advisory',
-    ],
-  },
-];
+const iconMap = { Brain, Code2, Settings, Shield, Headphones, Cpu } as const;
 
 const whyUs = [
   { icon: Zap, title: 'Rapid Delivery', desc: 'Agile sprints with weekly demos, so you always see progress.' },
@@ -154,9 +52,11 @@ export default function Services() {
       <section className="section-padding bg-white">
         <div className="section-container">
           <div className="flex flex-col gap-8">
-            {services.map((s, i) => (
+            {SERVICES.map((s, i) => {
+              const Icon = iconMap[s.icon as keyof typeof iconMap] ?? Brain;
+              return (
               <motion.div
-                key={s.title}
+                key={s.slug}
                 custom={i}
                 variants={fadeUp}
                 initial="hidden"
@@ -168,7 +68,7 @@ export default function Services() {
                   <div>
                     <div className="flex items-center gap-3 mb-4">
                       <div className="w-12 h-12 rounded-xl bg-white/60 border border-border flex items-center justify-center">
-                        <s.icon className={`w-6 h-6 ${s.accentColor}`} />
+                        <Icon className={`w-6 h-6 ${s.accentColor}`} />
                       </div>
                       <div>
                         <h2 className="text-xl font-bold" style={{ fontFamily: 'Outfit, sans-serif' }}>{s.title}</h2>
@@ -176,9 +76,14 @@ export default function Services() {
                       </div>
                     </div>
                     <p className="text-muted-foreground leading-relaxed text-sm">{s.description}</p>
-                    <Link href="/contact" className={`mt-5 inline-flex items-center gap-2 text-sm font-semibold ${s.accentColor} hover:gap-3 transition-all`}>
-                      Discuss this service <ArrowRight className="w-4 h-4" />
-                    </Link>
+                    <div className="mt-5 flex flex-wrap gap-4">
+                      <Link href={`/services/${s.slug}`} className={`inline-flex items-center gap-2 text-sm font-semibold ${s.accentColor} hover:gap-3 transition-all`}>
+                        View details <ArrowRight className="w-4 h-4" />
+                      </Link>
+                      <Link href="/contact" className="inline-flex items-center gap-2 text-sm font-semibold text-muted-foreground hover:text-foreground transition-all">
+                        Discuss this service
+                      </Link>
+                    </div>
                   </div>
                   <div>
                     <h3 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-4">What's Included</h3>
@@ -193,7 +98,8 @@ export default function Services() {
                   </div>
                 </div>
               </motion.div>
-            ))}
+            );
+            })}
           </div>
         </div>
       </section>
@@ -222,6 +128,7 @@ export default function Services() {
 
       {/* CTA */}
       <section className="section-padding bg-white text-center">
+        <div className="section-container">
         <motion.div variants={fadeUp} initial="hidden" whileInView="visible" viewport={{ once: true }}>
           <h2 className="text-3xl lg:text-4xl font-bold mb-4" style={{ fontFamily: 'Outfit, sans-serif' }}>
             Not sure which service you need?
@@ -231,6 +138,7 @@ export default function Services() {
             Book a Free Consultation <ArrowRight className="w-4 h-4" />
           </Link>
         </motion.div>
+        </div>
       </section>
     </>
   );

@@ -183,6 +183,7 @@ export default function Clients() {
 
       {/* CTA */}
       <section className="section-padding bg-white text-center border-t border-border">
+        <div className="section-container">
         <motion.div variants={fadeUp} initial="hidden" whileInView="visible" viewport={{ once: true }}>
           <h2 className="text-3xl lg:text-4xl font-bold mb-4" style={{ fontFamily: 'Outfit, sans-serif' }}>
             Ready to become our next success story?
@@ -192,6 +193,7 @@ export default function Clients() {
             Let's Talk <ArrowRight className="w-4 h-4" />
           </Link>
         </motion.div>
+        </div>
       </section>
     </>
   );

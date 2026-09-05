@@ -278,6 +278,7 @@ export default function Contact() {
 
       {/* CTA */}
       <section className="section-padding bg-white text-center">
+        <div className="section-container">
         <motion.div variants={fadeUp} initial="hidden" whileInView="visible" viewport={{ once: true }}>
           <h2 className="text-3xl lg:text-4xl font-bold mb-4" style={{ fontFamily: 'Outfit, sans-serif' }}>
             Prefer to start with a conversation?
@@ -287,6 +288,7 @@ export default function Contact() {
             Email Us <ArrowRight className="w-4 h-4" />
           </a>
         </motion.div>
+        </div>
       </section>
     </>
   );

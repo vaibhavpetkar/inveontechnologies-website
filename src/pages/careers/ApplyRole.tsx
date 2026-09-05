@@ -38,7 +38,9 @@ export default function ApplyRole() {
         <title>Applying for {role?.title ?? 'Role'} - Inveon Technologies</title>
       </Helmet>
       <div className="section-padding flex items-center justify-center min-h-[50vh]">
-        <p className="text-muted-foreground">Preparing your application...</p>
+        <div className="section-container text-center">
+          <p className="text-muted-foreground">Preparing your application...</p>
+        </div>
       </div>
     </>
   );

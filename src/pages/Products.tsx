@@ -138,9 +138,14 @@ export default function Products() {
                     </div>
                     <p className={`text-sm ${p.accentColor} font-medium`}>{p.tagline}</p>
                   </div>
-                  <Link href="/contact" className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-border text-sm font-semibold hover:border-primary/40 transition-all ${p.accentColor}`}>
-                    Get a Demo <ArrowRight className="w-4 h-4" />
-                  </Link>
+                  <div className="flex flex-wrap gap-3">
+                    <Link href={`/products/${p.id}`} className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-border text-sm font-semibold hover:border-primary/40 transition-all ${p.accentColor}`}>
+                      View details <ArrowRight className="w-4 h-4" />
+                    </Link>
+                    <Link href="/contact" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl border border-border text-sm font-semibold hover:border-primary/40 transition-all">
+                      Get a Demo
+                    </Link>
+                  </div>
                 </div>
 
                 <p className="text-muted-foreground text-sm leading-relaxed mb-8 max-w-2xl">{p.description}</p>
@@ -175,6 +180,7 @@ export default function Products() {
 
       {/* CTA */}
       <section className="section-padding bg-white text-center">
+        <div className="section-container">
         <motion.div variants={fadeUp} initial="hidden" whileInView="visible" viewport={{ once: true }}>
           <h2 className="text-3xl lg:text-4xl font-bold mb-4" style={{ fontFamily: 'Outfit, sans-serif' }}>
             Ready to see it in action?
@@ -184,6 +190,7 @@ export default function Products() {
             Request a Product Demo <ArrowRight className="w-4 h-4" />
           </Link>
         </motion.div>
+        </div>
       </section>
     </>
   );

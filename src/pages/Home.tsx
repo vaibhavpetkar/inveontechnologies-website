@@ -22,6 +22,7 @@ const stats = [
 const services = [
   {
     icon: Brain,
+    href: '/services/ai-development',
     title: 'AI Development',
     desc: 'Custom AI models, intelligent automation, and machine learning solutions tailored to your business processes.',
     color: 'from-primary/10 to-blue-500/10',
@@ -29,6 +30,7 @@ const services = [
   },
   {
     icon: Code2,
+    href: '/services/custom-software',
     title: 'Custom Software',
     desc: 'End-to-end bespoke software development — web platforms, APIs, microservices, and enterprise applications.',
     color: 'from-blue-500/10 to-indigo-500/10',
@@ -36,6 +38,7 @@ const services = [
   },
   {
     icon: Settings,
+    href: '/services/erp-crm',
     title: 'ERP/CRM Solutions',
     desc: 'Streamline your operations with fully integrated ERP and CRM platforms built for scale and performance.',
     color: 'from-indigo-500/10 to-violet-500/10',
@@ -43,6 +46,7 @@ const services = [
   },
   {
     icon: Cpu,
+    href: '/services/erpnext',
     title: 'ERPNext Customization',
     desc: 'Deep ERPNext expertise — custom modules, workflows, integrations, and enterprise-grade support.',
     color: 'from-violet-500/10 to-purple-500/10',
@@ -50,6 +54,7 @@ const services = [
   },
   {
     icon: Headphones,
+    href: '/services/tech-support',
     title: 'Tech Support',
     desc: '24/7 managed IT support, SLA-backed helpdesk, and proactive infrastructure monitoring.',
     color: 'from-emerald-500/10 to-teal-500/10',
@@ -57,6 +62,7 @@ const services = [
   },
   {
     icon: Shield,
+    href: '/services/it-auditing',
     title: 'IT Auditing',
     desc: 'Comprehensive security audits, compliance reviews, vulnerability assessments, and digital transformation roadmaps.',
     color: 'from-orange-500/10 to-red-500/10',
@@ -67,18 +73,21 @@ const services = [
 const products = [
   {
     name: 'Inveon CRM',
+    href: '/products/crm',
     tagline: 'Relationship intelligence at scale',
     features: ['Pipeline Management', 'AI Lead Scoring', 'Omnichannel Inbox', 'Custom Dashboards'],
     badge: 'Most Popular',
   },
   {
     name: 'Inveon ERP',
+    href: '/products/erp',
     tagline: 'Operations unified, growth amplified',
     features: ['Finance & Accounting', 'Inventory Control', 'HR & Payroll', 'Supply Chain'],
     badge: 'Enterprise',
   },
   {
     name: 'ERPNext Platform',
+    href: '/products/erpnext',
     tagline: 'Open-source power, enterprise polish',
     features: ['Full ERPNext Suite', 'Custom Modules', 'Data Migration', 'Ongoing Support'],
     badge: 'Open Source',
@@ -278,7 +287,7 @@ export default function Home() {
                   <h3 className="text-lg font-semibold mb-1.5">{s.title}</h3>
                   <p className="text-sm text-muted-foreground leading-relaxed">{s.desc}</p>
                 </div>
-                <Link href="/services" className="mt-auto inline-flex items-center gap-1 text-xs font-semibold text-primary hover:gap-2 transition-all">
+                <Link href={s.href} className="mt-auto inline-flex items-center gap-1 text-xs font-semibold text-primary hover:gap-2 transition-all">
                   Learn more <ArrowRight className="w-3 h-3" />
                 </Link>
               </motion.div>
@@ -334,7 +343,7 @@ export default function Home() {
                     </li>
                   ))}
                 </ul>
-                <Link href="/products" className="mt-auto pt-4 border-t border-border inline-flex items-center gap-2 text-sm font-semibold text-primary hover:gap-3 transition-all">
+                <Link href={p.href} className="mt-auto pt-4 border-t border-border inline-flex items-center gap-2 text-sm font-semibold text-primary hover:gap-3 transition-all">
                   Learn more <ArrowRight className="w-4 h-4" />
                 </Link>
               </motion.div>

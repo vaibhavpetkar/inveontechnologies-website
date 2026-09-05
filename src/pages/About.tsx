@@ -252,6 +252,7 @@ export default function About() {
 
       {/* CTA */}
       <section className="section-padding bg-white text-center">
+        <div className="section-container">
         <motion.div variants={fadeUp} initial="hidden" whileInView="visible" viewport={{ once: true }}>
           <Award className="w-10 h-10 text-primary mx-auto mb-4" />
           <h2 className="text-3xl lg:text-4xl font-bold mb-4" style={{ fontFamily: 'Outfit, sans-serif' }}>
@@ -262,6 +263,7 @@ export default function About() {
             Work With Us <ArrowRight className="w-4 h-4" />
           </Link>
         </motion.div>
+        </div>
       </section>
     </>
   );

@@ -76,7 +76,7 @@ export default function Navbar() {
                   <>
                     <button
                       className={`flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
-                        location === link.href || hoveredDropdown === link.href
+                        location === link.href || location.startsWith(`${link.href}/`) || hoveredDropdown === link.href
                           ? 'text-primary bg-primary/5'
                           : 'text-muted-foreground hover:text-foreground hover:bg-muted'
                       }`}
