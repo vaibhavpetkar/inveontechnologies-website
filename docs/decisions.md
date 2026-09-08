@@ -52,3 +52,24 @@ Register → verify-email → login → `/me` → refresh (rotates cookie) → r
 - Real email sending — Phase 9.
 - Seed script (`npm run db:seed`) creates a Super Admin from env vars but there's no CLI/UI yet to promote other users to privileged roles — direct DB access or a future admin endpoint is the only way for now.
 
+## Phase 2 — what shipped
+
+Verified live end-to-end against real local Postgres (register → verify → complete profile → apply → duplicate-blocked → admin pipeline transitions → timeline → withdraw → cross-user 403s):
+
+- Opportunities: create (draft), edit, publish, archive — draft/archived hidden from non-privileged callers, enforced server-side via `optionalAuth`
+- Skills taxonomy: freeform tag input auto-creates/reuses `skills` rows (dedup by slug)
+- Candidate profile: name/phone/bio/degree/graduationYear/cgpa + skills; `profileCompleted` gate blocks applying until name+phone are set
+- Eligibility: configurable per-opportunity JSON criteria (minCgpa/degrees/maxGraduationYear), checked at apply time as a **soft warning**, not a hard block (documented scoping decision — automated checks can't see legitimate context a human reviewer might)
+- Applications: apply, list mine, get one, withdraw — DB-level unique constraint on (user, opportunity) prevents duplicates even under a race, not just an app-level check
+- Admin pipeline: list applications per opportunity (filterable by status), transition endpoint enforcing the exact state machine in `state-machines.md` — verified both valid chains and invalid/terminal-state rejections
+- Every transition writes an `application_events` row (actor, from, to, note, timestamp) — full timeline verified via API
+- Human-readable business IDs (`OPP-2026-00001`, `APP-2026-00001`) generated transactionally from a DB identity sequence, not a naive counter prone to races
+
+**Scoping decision**: `application_status` enum includes `assessment_invited`/`assessment_completed` (reserved) so Phase 3 won't need an enum migration, but no transitions reach them yet — Phase 2's pipeline only goes submitted → under_review → shortlisted → selected/rejected, plus withdrawn. Phase 3 adds the assessment states as an insertion into this chain, not a redesign.
+
+**Known limitations / explicitly deferred**:
+- No resume/file upload yet — `resumeUrl` column exists but is unused until the private object storage phase
+- Eligibility check is soft (warns, doesn't block) — flip to hard-block is a one-line change in `applications/routes.ts` if you want it enforced instead
+- Manager role has no team-scoping yet (`manager` can see/transition any application in the pipeline, not just "their team's") — the plan calls for team scoping later; deferring until org/team structure exists
+- No opportunity edit history / diffing, just an audit log entry per edit
+

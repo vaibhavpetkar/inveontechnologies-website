@@ -30,6 +30,26 @@ export function requireAuth(env: Env) {
 }
 
 /**
+ * Populates req.user when a valid access token is present, but never
+ * rejects the request otherwise. Used on endpoints that behave differently
+ * for privileged vs anonymous/candidate callers (e.g. opportunity browsing
+ * shows drafts to HR/Admin) without requiring login for everyone.
+ */
+export function optionalAuth(env: Env) {
+  return (req: Request, _res: Response, next: NextFunction) => {
+    const header = req.headers.authorization;
+    if (header?.startsWith("Bearer ")) {
+      try {
+        req.user = verifyAccessToken(header.slice("Bearer ".length), env);
+      } catch {
+        // Invalid/expired token on an optional-auth route — proceed as anonymous.
+      }
+    }
+    next();
+  };
+}
+
+/**
  * Server-side role check. This is the enforcement point referenced in
  * docs/permissions.md — never trust a role claim from the frontend for
  * anything the frontend itself asserts; this middleware re-derives the

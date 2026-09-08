@@ -9,6 +9,10 @@ import { logger } from "./modules/shared/logger.js";
 import { errorHandler } from "./modules/shared/errors.js";
 import { createDb } from "./modules/shared/db/client.js";
 import { authRouter } from "./modules/auth/routes.js";
+import { opportunitiesRouter } from "./modules/opportunities/routes.js";
+import { profileRouter } from "./modules/profile/routes.js";
+import { applicationsRouter } from "./modules/applications/routes.js";
+import { verifyAccessToken } from "./modules/auth/tokens.js";
 
 const env = loadEnv();
 const { db, pool } = createDb(env);
@@ -57,9 +61,12 @@ app.get("/api/v1/health/ready", async (_req, res) => {
 });
 
 app.use("/api/v1/auth", authRouter(db, env));
+app.use("/api/v1/opportunities", opportunitiesRouter(db, env));
+app.use("/api/v1/profile", profileRouter(db, env));
+app.use("/api/v1/applications", applicationsRouter(db, env));
 
 // Future feature routes mount here:
-// app.use("/api/v1/opportunities", opportunitiesRouter(db, env));
+// app.use("/api/v1/assessments", assessmentsRouter(db, env));
 // etc.
 
 app.use(errorHandler);
