@@ -18,8 +18,8 @@ const caseStudies: { company: string; industry: string; challenge: string; solut
 const clientLogos: string[] = [];
 
 const stats = [
-  { icon: Users, value: '200+', label: 'Companies Served' },
-  { icon: Globe, value: '15+', label: 'Countries' },
+  { icon: Users, value: '20+', label: 'Companies Served' },
+  { icon: Globe, value: '2+', label: 'Countries' },
 ];
 
 export default function Clients() {
@@ -27,7 +27,7 @@ export default function Clients() {
     <>
       <Helmet>
         <title>Clients - Trusted by Companies Worldwide | Inveon Technologies</title>
-        <meta name="description" content="Inveon Technologies is trusted by 200+ companies across 15+ countries for AI development, ERP/CRM solutions, and digital transformation." />
+        <meta name="description" content="Inveon Technologies is trusted by 20+ companies across 2+ countries for AI development, ERP/CRM solutions, and digital transformation." />
         <meta property="og:title" content="Inveon Technologies Clients" />
         <meta property="og:url" content="https://inveontechnologies.in/clients" />
         <link rel="canonical" href="https://inveontechnologies.in/clients" />
@@ -44,7 +44,7 @@ export default function Clients() {
             Trusted by <span className="gradient-text">Companies Worldwide</span>
           </motion.h1>
           <motion.p variants={fadeUp} initial="hidden" animate="visible" custom={2} className="text-muted-foreground text-lg max-w-2xl mx-auto">
-            200+ companies across 15+ countries trust Inveon Technologies to architect their most critical technology.
+            20+ companies across 2+ countries trust Inveon Technologies to architect their most critical technology.
           </motion.p>
         </div>
       </section>
@@ -188,7 +188,7 @@ export default function Clients() {
           <h2 className="text-3xl lg:text-4xl font-bold mb-4" style={{ fontFamily: 'Outfit, sans-serif' }}>
             Ready to become our next success story?
           </h2>
-          <p className="text-muted-foreground mb-8 max-w-md mx-auto">Join 200+ companies that have transformed their operations with Inveon Technologies.</p>
+          <p className="text-muted-foreground mb-8 max-w-md mx-auto">Join 20+ companies that have transformed their operations with Inveon Technologies.</p>
           <Link href="/contact" className="btn-primary inline-flex items-center gap-2">
             Let's Talk <ArrowRight className="w-4 h-4" />
           </Link>

@@ -41,7 +41,7 @@ const links = {
 
 const features = [
   { icon: Shield, title: 'Security-Focused', desc: 'Security-conscious engineering on every engagement' },
-  { icon: Globe, title: 'Global Reach', desc: 'Serving 200+ companies across 15+ countries' },
+  { icon: Globe, title: 'Global Reach', desc: 'Serving 20+ companies across 2+ countries' },
   { icon: ZapIcon, title: 'AI-Powered', desc: 'AI development built into our delivery approach' },
 ];
 
@@ -168,7 +168,7 @@ export default function Footer() {
                 </a>
                 <span className="flex items-center gap-3 group">
                   <Globe className="w-5 h-5 text-primary" />
-                  <span>Serving clients across 15+ countries</span>
+                  <span>Serving clients across 2+ countries</span>
                 </span>
               </div>
             </div>

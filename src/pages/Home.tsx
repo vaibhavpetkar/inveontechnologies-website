@@ -15,8 +15,8 @@ const fadeUp = {
 
 // TODO: figures below are the only ones confirmed from inveontechnologies.in — replace/expand once more real data is available
 const stats = [
-  { value: '200+', label: 'Companies Served', icon: Users },
-  { value: '15+', label: 'Countries Served', icon: Globe },
+  { value: '20+', label: 'Companies Served', icon: Users },
+  { value: '2+', label: 'Countries Served', icon: Globe },
 ];
 
 const services = [
@@ -106,7 +106,7 @@ const valueProps = [
   },
   {
     title: "Global Delivery Model",
-    desc: "Technology partnership for companies across 15+ countries, backed by a consistent delivery process.",
+    desc: "Technology partnership for companies across 2+ countries, backed by a consistent delivery process.",
   },
 ];
 
@@ -122,7 +122,7 @@ export default function Home() {
     <>
       <Helmet>
         <title>Inveon Technologies - AI Development, Custom Software & ERP/CRM Solutions</title>
-        <meta name="description" content="Inveon Technologies delivers AI development, ERP/CRM solutions, and digital transformation. Trusted by 200+ companies across 15+ countries." />
+        <meta name="description" content="Inveon Technologies delivers AI development, ERP/CRM solutions, and digital transformation. Trusted by 20+ companies across 2+ countries." />
         <meta property="og:title" content="Inveon Technologies - Technology That Empowers Your Business" />
         <meta property="og:description" content="Professional technology partner delivering AI development, ERP/CRM solutions, and digital transformation." />
         <meta property="og:url" content="https://inveontechnologies.in/" />

@@ -69,7 +69,7 @@ export default function About() {
     <>
       <Helmet>
         <title>About Inveon Technologies - Our Mission</title>
-        <meta name="description" content="Learn about Inveon Technologies' mission to deliver AI development, ERP/CRM solutions, and digital transformation for 200+ companies across 15+ countries." />
+        <meta name="description" content="Learn about Inveon Technologies' mission to deliver AI development, ERP/CRM solutions, and digital transformation for 20+ companies across 2+ countries." />
         <meta property="og:title" content="About Inveon Technologies" />
         <meta property="og:url" content="https://inveontechnologies.in/about" />
         <link rel="canonical" href="https://inveontechnologies.in/about" />
@@ -87,7 +87,7 @@ export default function About() {
               We Build the Software<br /><span className="gradient-text">Your Business Deserves</span>
             </motion.h1>
             <motion.p variants={fadeUp} initial="hidden" animate="visible" custom={2} className="text-muted-foreground text-lg leading-relaxed">
-              Inveon Technologies is a professional technology partner delivering AI development, ERP/CRM solutions, and digital transformation — trusted by 200+ companies across 15+ countries.
+              Inveon Technologies is a professional technology partner delivering AI development, ERP/CRM solutions, and digital transformation — trusted by 20+ companies across 2+ countries.
             </motion.p>
           </div>
         </div>
@@ -144,8 +144,8 @@ export default function About() {
               {/* TODO: only these two figures are confirmed from inveontechnologies.in — add more once available */}
               <div className="grid grid-cols-2 gap-4">
                 {[
-                  { v: '200+', l: 'Companies Served' },
-                  { v: '15+', l: 'Countries Served' },
+                  { v: '20+', l: 'Companies Served' },
+                  { v: '2+', l: 'Countries Served' },
                 ].map((s) => (
                   <div key={s.l} className="rounded-xl border border-border bg-white p-6 text-center card-hover">
                     <p className="text-3xl font-bold text-primary mb-1" style={{ fontFamily: 'Outfit, sans-serif' }}>{s.v}</p>
