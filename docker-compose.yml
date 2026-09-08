@@ -27,6 +27,30 @@ services:
         certbot renew --webroot -w /var/www/certbot --quiet;
         sleep 12h & wait $${!};
       done"
+  portal-frontend:
+    build: ./portal-frontend
+    container_name: portal_frontend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+    networks:
+      - crm_network
+    # No published ports — reached only via the shared nginx reverse proxy
+    # over crm_crm_network, same as crm_frontend.
+  portal-backend:
+    build: ./portal-backend
+    container_name: portal_backend
+    restart: unless-stopped
+    env_file:
+      - ./portal-backend/.env
+    environment:
+      NODE_ENV: production
+      PORTAL_PORT: 4000
+    networks:
+      - crm_network
+    # No published ports — reached only via the shared nginx reverse proxy
+    # over crm_crm_network, same as crm_backend. Provide ./portal-backend/.env
+    # on the server (see portal-backend/.env.example); it is git-ignored.
 volumes:
   certbot-conf:
   certbot-www:
