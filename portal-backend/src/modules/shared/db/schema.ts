@@ -204,3 +204,94 @@ export const applicationsRelations = relations(applications, ({ one, many }) => 
   user: one(users, { fields: [applications.userId], references: [users.id] }),
   events: many(applicationEvents),
 }));
+
+/**
+ * Phase 3 schema: MCQ-based assessment engine. Wires into the two
+ * reserved application_status values (assessment_invited/
+ * assessment_completed) that Phase 2 left unreachable — see
+ * applications/state-machine.ts for the updated transition table.
+ *
+ * Scoping decisions (recorded here + docs/decisions.md):
+ * - MCQ only, auto-scored. Free-text/manually-graded questions are a
+ *   later phase.
+ * - One assessment belongs to exactly one opportunity (not a reusable
+ *   template library) — simplest correct thing for MVP; can be
+ *   decoupled into a template + per-opportunity assignment later
+ *   without breaking this shape (assessment stays the "instance").
+ * - One attempt per application, enforced by a DB unique constraint.
+ * - Expiry is checked lazily (on next read/submit of the attempt), not
+ *   via a background job/cron — there is no scheduler in this stack yet.
+ *   An attempt that nobody ever looks at again after expiring will sit as
+ *   "in_progress" until someone (candidate or admin) next hits it. This
+ *   is an accepted limitation for Phase 3, not an oversight — a cron-based
+ *   sweep can be added later without changing this schema.
+ */
+
+export const assessmentAttemptStatusEnum = pgEnum("assessment_attempt_status", [
+  "not_started",
+  "in_progress",
+  "submitted",
+  "expired",
+  "scored",
+]);
+
+export const assessments = pgTable("assessments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  opportunityId: uuid("opportunity_id").notNull().references(() => opportunities.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  description: text("description"),
+  durationMinutes: integer("duration_minutes").notNull(),
+  // Percentage (0-100) of total points required to pass.
+  passingScorePercent: integer("passing_score_percent").notNull().default(60),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const assessmentQuestions = pgTable("assessment_questions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  assessmentId: uuid("assessment_id").notNull().references(() => assessments.id, { onDelete: "cascade" }),
+  questionText: text("question_text").notNull(),
+  // [{ id: "a", text: "..." }, { id: "b", text: "..." }, ...]
+  options: jsonb("options").notNull(),
+  correctOptionId: text("correct_option_id").notNull(),
+  points: integer("points").notNull().default(1),
+  orderIndex: integer("order_index").notNull().default(0),
+});
+
+export const assessmentAttempts = pgTable("assessment_attempts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  applicationId: uuid("application_id").notNull().unique().references(() => applications.id, { onDelete: "cascade" }),
+  assessmentId: uuid("assessment_id").notNull().references(() => assessments.id, { onDelete: "cascade" }),
+  status: assessmentAttemptStatusEnum("status").notNull().default("not_started"),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  submittedAt: timestamp("submitted_at", { withTimezone: true }),
+  scorePercent: integer("score_percent"),
+  passed: boolean("passed"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const assessmentAttemptAnswers = pgTable(
+  "assessment_attempt_answers",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    attemptId: uuid("attempt_id").notNull().references(() => assessmentAttempts.id, { onDelete: "cascade" }),
+    questionId: uuid("question_id").notNull().references(() => assessmentQuestions.id, { onDelete: "cascade" }),
+    selectedOptionId: text("selected_option_id"),
+    isCorrect: boolean("is_correct"),
+    pointsAwarded: integer("points_awarded").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ uniqAttemptQuestion: unique("attempt_answers_attempt_question_unique").on(t.attemptId, t.questionId) }),
+);
+
+export const assessmentsRelations = relations(assessments, ({ many }) => ({
+  questions: many(assessmentQuestions),
+}));
+
+export const assessmentAttemptsRelations = relations(assessmentAttempts, ({ one, many }) => ({
+  assessment: one(assessments, { fields: [assessmentAttempts.assessmentId], references: [assessments.id] }),
+  application: one(applications, { fields: [assessmentAttempts.applicationId], references: [applications.id] }),
+  answers: many(assessmentAttemptAnswers),
+}));

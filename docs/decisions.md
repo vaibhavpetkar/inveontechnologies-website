@@ -73,3 +73,21 @@ Verified live end-to-end against real local Postgres (register → verify → co
 - Manager role has no team-scoping yet (`manager` can see/transition any application in the pipeline, not just "their team's") — the plan calls for team scoping later; deferring until org/team structure exists
 - No opportunity edit history / diffing, just an audit log entry per edit
 
+## Phase 3 — what shipped
+
+MCQ-based assessment engine, wired into the exact `assessment_invited`/`assessment_completed` states Phase 2 reserved. Verified live end-to-end (not just typechecked): create assessment → answer-key validated at creation → invite → application transitions to `assessment_invited` → candidate starts (gets questions, never sees correct answers) → submits → auto-scored → application **automatically** transitions to `assessment_completed` (system-triggered, not an admin action) → admin reviews full answer breakdown → admin moves to `shortlisted` → full timeline confirmed accurate.
+
+- One assessment belongs to one opportunity (not a reusable template library) — documented scoping decision, see schema.ts
+- One attempt per application, DB-enforced (unique constraint on `applicationId`)
+- Auto-scoring is a pure function (`assessments/scoring.ts`) shared by both the normal submit path and the expiry path, so they can't drift out of sync
+- **Lazy expiry** (no cron/scheduler in this stack): an in-progress attempt past its `expiresAt` is finalized the next time anything reads it (candidate GET, or submit attempt) — scored with unanswered questions counted as incorrect, then the application auto-transitions just like a normal submission. **Verified live**: forced an attempt's `expiresAt` into the past via direct DB update, then GET'd it — attempt correctly resolved to `expired`/scored 0%, application correctly moved to `assessment_completed`. An attempt nobody ever looks at again after expiring will sit as `in_progress` indefinitely — a real background sweep can be added later without a schema change.
+- The generic admin `/transition` endpoint deliberately cannot reach `assessment_invited` or `assessment_completed` — those go through the dedicated invite endpoint and the system-triggered path respectively, keeping "who/what causes this transition" unambiguous at the call site
+- Admins can still reject an `assessment_invited` application directly (e.g. no-show, suspected cheating) without waiting for the attempt to resolve
+
+**Known limitations / explicitly deferred**:
+- MCQ only — free-text/manually-graded questions are a later phase
+- No partial credit / negative marking — each question is all-or-nothing at its point value
+- No proctoring, tab-switch detection, or plagiarism checks
+- Lazy expiry only (see above) — a background sweep for attempts nobody revisits is a nice-to-have, not built
+- Assessment templates aren't reusable across opportunities in this MVP shape
+

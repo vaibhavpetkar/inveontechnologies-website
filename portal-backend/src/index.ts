@@ -12,6 +12,8 @@ import { authRouter } from "./modules/auth/routes.js";
 import { opportunitiesRouter } from "./modules/opportunities/routes.js";
 import { profileRouter } from "./modules/profile/routes.js";
 import { applicationsRouter } from "./modules/applications/routes.js";
+import { assessmentsRouter } from "./modules/assessments/routes.js";
+import { attemptRouter } from "./modules/assessments/attempt-routes.js";
 import { verifyAccessToken } from "./modules/auth/tokens.js";
 
 const env = loadEnv();
@@ -64,9 +66,11 @@ app.use("/api/v1/auth", authRouter(db, env));
 app.use("/api/v1/opportunities", opportunitiesRouter(db, env));
 app.use("/api/v1/profile", profileRouter(db, env));
 app.use("/api/v1/applications", applicationsRouter(db, env));
+app.use("/api/v1/assessments", assessmentsRouter(db, env));
+app.use("/api/v1/assessment-attempts", attemptRouter(db, env));
 
 // Future feature routes mount here:
-// app.use("/api/v1/assessments", assessmentsRouter(db, env));
+// app.use("/api/v1/onboarding", onboardingRouter(db, env));
 // etc.
 
 app.use(errorHandler);
