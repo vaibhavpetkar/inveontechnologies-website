@@ -27,6 +27,19 @@ services:
         certbot renew --webroot -w /var/www/certbot --quiet;
         sleep 12h & wait $${!};
       done"
+  portal-postgres:
+    image: postgres:16-alpine
+    container_name: portal_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: portal
+      POSTGRES_USER: portal
+      POSTGRES_PASSWORD: ${PORTAL_POSTGRES_PASSWORD:?Set PORTAL_POSTGRES_PASSWORD in your server .env}
+    volumes:
+      - portal-postgres-data:/var/lib/postgresql/data
+    networks:
+      - portal_internal
+    # No published ports — only portal-backend (same network) can reach it.
   portal-frontend:
     build: ./portal-frontend
     container_name: portal_frontend
@@ -41,6 +54,8 @@ services:
     build: ./portal-backend
     container_name: portal_backend
     restart: unless-stopped
+    depends_on:
+      - portal-postgres
     env_file:
       - ./portal-backend/.env
     environment:
@@ -48,14 +63,21 @@ services:
       PORTAL_PORT: 4000
     networks:
       - crm_network
-    # No published ports — reached only via the shared nginx reverse proxy
-    # over crm_crm_network, same as crm_backend. Provide ./portal-backend/.env
+      - portal_internal
+    # Reached only via the shared nginx reverse proxy (crm_network) for
+    # HTTP, and reaches portal-postgres over portal_internal — no ports
+    # published to the host on either side. Provide ./portal-backend/.env
     # on the server (see portal-backend/.env.example); it is git-ignored.
+    # PORTAL_DATABASE_URL in that file should point at
+    # postgres://portal:<same password as above>@portal_postgres:5432/portal
 volumes:
   certbot-conf:
   certbot-www:
+  portal-postgres-data:
 
 networks:
   crm_network:
     external: true
     name: crm_crm_network
+  portal_internal:
+    driver: bridge

@@ -1,17 +1,23 @@
-import express, { type Request, type Response } from "express";
+import "dotenv/config";
+import "express-async-errors";
+import express from "express";
+import cookieParser from "cookie-parser";
 import { pinoHttp } from "pino-http";
 import { randomUUID } from "node:crypto";
 import { loadEnv } from "./modules/shared/env.js";
 import { logger } from "./modules/shared/logger.js";
 import { errorHandler } from "./modules/shared/errors.js";
+import { createDb } from "./modules/shared/db/client.js";
+import { authRouter } from "./modules/auth/routes.js";
 
 const env = loadEnv();
+const { db, pool } = createDb(env);
 const app = express();
 
 app.use(
   pinoHttp({
     logger,
-    genReqId: (req: Request, res: Response) => {
+    genReqId: (req, res) => {
       const existing = req.headers["x-request-id"];
       const id = typeof existing === "string" ? existing : randomUUID();
       res.setHeader("x-request-id", id);
@@ -20,23 +26,40 @@ app.use(
   }),
 );
 
-app.use(express.json());
+app.use((req, res, next) => {
+  // CORS. Credentialed (cookies for refresh token) so origin must be
+  // explicit — never "*" when credentials are allowed.
+  res.setHeader("Access-Control-Allow-Origin", env.PORTAL_CORS_ORIGIN);
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+  if (req.method === "OPTIONS") {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
 
-// Liveness — process is up.
+app.use(express.json());
+app.use(cookieParser());
+
 app.get("/api/v1/health/live", (_req, res) => {
   res.json({ status: "ok" });
 });
 
-// Readiness — process is up AND ready to serve (DB reachable etc).
-// Phase 0: no DB wired yet, so readiness == liveness for now.
-// Phase 1 must extend this to actually check the DB connection.
-app.get("/api/v1/health/ready", (_req, res) => {
-  res.json({ status: "ok", checks: { database: "not-configured-yet" } });
+app.get("/api/v1/health/ready", async (_req, res) => {
+  try {
+    await pool.query("SELECT 1");
+    res.json({ status: "ok", checks: { database: "up" } });
+  } catch {
+    res.status(503).json({ status: "degraded", checks: { database: "down" } });
+  }
 });
 
-// Feature routes are mounted here starting in Phase 1:
-// app.use("/api/v1/auth", authRouter);
-// app.use("/api/v1/opportunities", opportunitiesRouter);
+app.use("/api/v1/auth", authRouter(db, env));
+
+// Future feature routes mount here:
+// app.use("/api/v1/opportunities", opportunitiesRouter(db, env));
 // etc.
 
 app.use(errorHandler);

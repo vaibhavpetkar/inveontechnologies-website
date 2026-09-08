@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { randomUUID } from "node:crypto";
+import { ZodError } from "zod";
 import { logger } from "./logger.js";
 
 /**
@@ -38,6 +39,13 @@ export class ForbiddenError extends AppError {
 // Consistent response shape for every error, per docs/architecture.md API conventions.
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   const requestId = (req as Request & { id?: string }).id ?? randomUUID();
+
+  if (err instanceof ZodError) {
+    res.status(400).json({
+      error: { code: "VALIDATION_ERROR", message: "Invalid request body", requestId, details: err.flatten().fieldErrors },
+    });
+    return;
+  }
 
   if (err instanceof AppError) {
     res.status(err.status).json({

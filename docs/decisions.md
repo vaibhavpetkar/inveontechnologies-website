@@ -20,9 +20,35 @@ Recorded per the project plan's instruction: the AI must not silently invent the
 
 ## Open decisions for you to confirm before Phase 1 starts
 
-These need your explicit answer — I'm not guessing them:
+**Status: proceeded on defaults below since you said "go with next phase" without objecting to any of them. All are still overridable — say so and I'll adjust.**
 
-1. **Migration tool**: Drizzle ORM or Prisma? (Drizzle is lighter and closer to raw SQL; Prisma has a more batteries-included DX.)
-2. **Where does Postgres run?** New container in this compose file, or does it point at an existing DB server you already run for the CRM?
-3. **Who are your actual initial roles?** The plan suggests Candidate, Intern, Employee, Manager, HR, Admin, Super Admin — confirm or trim this list for MVP.
-4. **Email/SMS for OTP or verification** — in scope for Phase 1 login, or can email verification be deferred until Phase 9 (Mailcow phase) lands? (Recommendation: stub it — log the link instead of sending — until Phase 9.)
+1. **Migration tool**: ~~Drizzle ORM or Prisma?~~ → **Decided: Drizzle** (implemented).
+2. **Where does Postgres run?** ~~New container vs existing server~~ → **Decided: new `portal-postgres` container**, dedicated `portal` DB/user, on an internal-only `portal_internal` Docker network (not exposed to host or to `crm_crm_network`) — only `portal-backend` can reach it.
+3. **Roles**: ~~confirm/trim~~ → **Decided: kept the full list** (Candidate, Intern, Employee, Manager, HR, Admin, Super Admin) as a Postgres enum. Trimming later is a migration, not a rewrite, so this is low-cost to revisit.
+4. **Email/OTP**: ~~stub or real~~ → **Decided: stubbed.** Verification and password-reset links are logged (`[EMAIL STUB]` in server logs) instead of emailed, until Phase 9 (Mailcow). The call sites (`auth/routes.ts`) already isolate this behind `auth/email-stub.ts` so swapping in real Mailcow sending later doesn't touch route logic.
+
+## Phase 1 — what shipped
+
+Implemented, typechecked, and verified end-to-end against a real local Postgres instance (not just "should work" — actually run):
+
+- Env validation (fails fast on missing `PORTAL_DATABASE_URL` / `PORTAL_JWT_SECRET` / `PORTAL_REFRESH_SECRET`)
+- Drizzle schema + generated migration: `users`, `refresh_tokens`, `verification_tokens`, `audit_logs`
+- Registration (with user-enumeration-safe responses), email verification (stubbed), login, logout
+- Access token (JWT, 15 min) + rotating refresh token (opaque, hashed at rest, httpOnly cookie scoped to `/api/v1/auth`)
+- **Refresh-token reuse detection**: if an already-rotated token is presented again, every active session for that user is revoked (tested — see below)
+- Account lockout after 5 failed logins (15 min), tested live
+- Forgot/reset password (stubbed email, resets revoke all sessions)
+- `requireAuth` / `requireRole` middleware enforcing the permission matrix server-side
+- Rate limiting on all auth endpoints (tested — 429 after 10 requests/15min)
+- Audit log entries written for register, verify, login, login-failed, reuse-detected, password-reset (confirmed rows in DB)
+- `portal-postgres` added to `docker-compose.yml` on a new internal-only network
+
+### Verified live (not just typechecked)
+Register → verify-email → login → `/me` → refresh (rotates cookie) → replay old cookie (correctly revoked, "Session revoked") → 5x wrong password (locks account, 6th attempt rejected as `ACCOUNT_LOCKED` even with correct password) → rate limiter trips at request #10.
+
+### Known limitations / explicitly deferred
+- MFA (TOTP) for HR/Admin/Super Admin — not yet implemented, flagged as a requirement in `permissions.md`, will land before those roles are used for anything sensitive.
+- No `/api/v1/users` admin endpoints yet (list/edit users, change roles) — Phase 1 only covers self-service auth.
+- Real email sending — Phase 9.
+- Seed script (`npm run db:seed`) creates a Super Admin from env vars but there's no CLI/UI yet to promote other users to privileged roles — direct DB access or a future admin endpoint is the only way for now.
+
