@@ -1,6 +1,12 @@
-/** Formats a DB identity sequence number into a human-readable business ID, e.g. OPP-2026-00001 or INV-CERT-2026-000001. */
-export function formatBusinessId(prefix: "OPP" | "APP" | "INV-CERT", seqNumber: number): string {
+/**
+ * Formats a DB identity sequence number into a human-readable business ID.
+ * OPP/APP/INV-CERT include the current year; INV-EMP does not (per the
+ * plan's spec: "unique INV-EMP-###### business ID" — no year segment).
+ */
+export function formatBusinessId(prefix: "OPP" | "APP" | "INV-CERT" | "INV-EMP", seqNumber: number): string {
+  const width = prefix === "INV-CERT" || prefix === "INV-EMP" ? 6 : 5;
+  const padded = String(seqNumber).padStart(width, "0");
+  if (prefix === "INV-EMP") return `${prefix}-${padded}`;
   const year = new Date().getFullYear();
-  const width = prefix === "INV-CERT" ? 6 : 5;
-  return `${prefix}-${year}-${String(seqNumber).padStart(width, "0")}`;
+  return `${prefix}-${year}-${padded}`;
 }

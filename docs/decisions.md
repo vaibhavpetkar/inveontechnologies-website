@@ -127,3 +127,20 @@ Courses, modules, lessons, enrollment/progress, and certificates. Verified live 
 - "Test" lessons do NOT reuse the Phase 3 assessment engine (that engine is application-scoped, not lesson-scoped) — course tests are pass/fail marked by a reviewer, not auto-scored MCQ. Unifying these into one "gradable thing" abstraction is a real refactor, not done here.
 - `recipientName` on certificates falls back to email since `candidateProfiles.fullName` isn't joined in — cosmetic gap, easy follow-up
 - No lesson-level file/video hosting — `contentUrl` is a placeholder, same pattern as every other file reference in this codebase so far
+## Phase 6 — what shipped
+
+Employee/intern onboarding and portal. Verified live end-to-end against real local Postgres, including both required tests from the plan: employees cannot access another employee's private data, and unauthorized users cannot generate or download letters.
+
+- **Authorized selection-to-onboarding workflow, enforced not assumed**: creating an employee record requires the application to be `selected` **and** have an **accepted** offer — verified live (attempting without an accepted offer correctly 400s `OFFER_NOT_ACCEPTED`)
+- **Real portal transition, not just a new row**: creating the employee record also updates the underlying `users.role` (intern→`intern`, full_time/contract→`employee`) in the same transaction as the `INV-EMP-######` business ID assignment — verified live by re-logging in and confirming the JWT now carries the new role
+- **Duplicate prevention**: one application can only ever produce one employee record (DB-unique on `applicationId`) — verified live, second attempt correctly 409s
+- **Application history preserved**: `employees.applicationId` links back; nothing about the original application is touched or deleted
+- **Protected documents & letters — self + HR/Admin/Super Admin ONLY, explicitly not Manager**: verified live with a second, unrelated candidate account correctly getting 403 on both an employee's documents and their employee record; an unauthorized (candidate-role) user correctly 403s trying to generate or download a letter
+- **Access activation is a real gate**: the employee dashboard endpoint 403s (`ACCESS_NOT_ACTIVATED`) until a privileged user explicitly activates access — which itself is blocked (`ONBOARDING_INCOMPLETE`) until all required onboarding tasks are done. Verified live: dashboard blocked → task completed → activation blocked-then-allowed → dashboard now works.
+- **Letters are versioned and immutable**: regenerating a joining letter creates version 2, not an edit to version 1 — verified live. Every download is audit-logged (confirmed real rows in `audit_logs`), and a template/letter-type mismatch is rejected at generation time.
+
+**Known limitations / explicitly deferred**:
+- No real PDF generation for letters — `content` is the immutable rendered text, same "renderer input, not renderer output" pattern as certificates in Phase 8
+- No `authorized signatory` registry/validation — `signatoryName`/`signatoryTitle` are free text typed by whoever generates the letter, not checked against a list of people actually authorized to sign
+- Manager role has no read access to their direct reports' employee records in this phase (deliberately, per "protected") — a future phase could add a narrower manager view (e.g. name/department/status only, never documents/letters) if the business wants that
+- `employeeOnboardingTasks` is a separate table from the Phase 4 application-scoped `onboardingTasks` by design (see schema.ts) — the two are not merged

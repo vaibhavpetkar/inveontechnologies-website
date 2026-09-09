@@ -515,3 +515,108 @@ export const certificates = pgTable(
     // index (WHERE status = 'issued') declaratively yet.
   }),
 );
+
+/**
+ * Phase 6 schema: employee/intern records, department/designation
+ * taxonomy, protected employee documents, and joining/appointment
+ * letters. Scoping decisions recorded here + docs/decisions.md:
+ *
+ * - Employees are created ONLY from a selected application with an
+ *   ACCEPTED offer (checked in code, not the schema) — "authorized
+ *   selection-to-onboarding workflow" per the plan. employees.applicationId
+ *   preserves the link back to full application history; nothing about the
+ *   original application is deleted or overwritten on the transition.
+ * - employeeType (intern/full_time/contract) is a DIFFERENT axis from the
+ *   platform `role` enum (candidate/intern/employee/...). Creating an
+ *   employee record also promotes the underlying user's role
+ *   (intern->intern, full_time/contract->employee) so their portal access
+ *   actually changes, not just a label on a new table.
+ * - Documents and letters are deliberately restricted to the employee
+ *   themselves + HR/Admin/Super Admin — NOT Manager — per the plan's
+ *   explicit requirement that these are "protected" and the required test
+ *   that "employees cannot access another employee's private data."
+ * - Letters are versioned, immutable once generated (a correction is a new
+ *   version, never an edit) — same pattern as offers/certificates.
+ * - `portalAccessActive` is a real gate, not just a status label — the
+ *   employee dashboard endpoint checks it and 403s until activated.
+ */
+
+export const employeeTypeEnum = pgEnum("employee_type", ["intern", "full_time", "contract"]);
+export const employeeStatusEnum = pgEnum("employee_status", ["preboarding", "active", "on_leave", "offboarded"]);
+export const employeeDocumentStatusEnum = pgEnum("employee_document_status", ["uploaded", "verified", "rejected"]);
+export const letterTypeEnum = pgEnum("letter_type", ["joining", "appointment"]);
+
+export const departments = pgTable("departments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull().unique(),
+});
+
+export const designations = pgTable("designations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  title: text("title").notNull().unique(),
+});
+
+export const employees = pgTable("employees", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: text("business_id").unique(), // set post-insert in a transaction — same pattern as opportunities/applications/certificates
+  seqNumber: integer("seq_number").generatedAlwaysAsIdentity(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  applicationId: uuid("application_id").references(() => applications.id).unique(), // preserves application history; unique so one application can only ever produce one employee record
+  employeeType: employeeTypeEnum("employee_type").notNull(),
+  departmentId: uuid("department_id").references(() => departments.id),
+  designationId: uuid("designation_id").references(() => designations.id),
+  managerId: uuid("manager_id").references(() => users.id),
+  hrManagerId: uuid("hr_manager_id").references(() => users.id),
+  joiningDate: timestamp("joining_date", { withTimezone: true }).notNull(),
+  durationMonths: integer("duration_months"), // for interns/contract; null = indefinite
+  status: employeeStatusEnum("status").notNull().default("preboarding"),
+  portalAccessActive: boolean("portal_access_active").notNull().default(false),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const employeeOnboardingTasks = pgTable("employee_onboarding_tasks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  employeeId: uuid("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+  taskType: text("task_type", { enum: ["policy_consent", "access_activation", "document", "custom"] }).notNull(),
+  title: text("title").notNull(),
+  description: text("description"),
+  required: boolean("required").notNull().default(true),
+  status: onboardingTaskStatusEnum("status").notNull().default("pending"),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const employeeDocuments = pgTable("employee_documents", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  employeeId: uuid("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+  documentType: text("document_type").notNull(),
+  fileUrl: text("file_url").notNull(), // placeholder — see earlier phases' note on deferred object storage
+  status: employeeDocumentStatusEnum("status").notNull().default("uploaded"),
+  verifiedBy: uuid("verified_by").references(() => users.id),
+  note: text("note"),
+  uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const letterTemplates = pgTable("letter_templates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  letterType: letterTypeEnum("letter_type").notNull(),
+  title: text("title").notNull(),
+  bodyTemplate: text("body_template").notNull(),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const employeeLetters = pgTable("employee_letters", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  employeeId: uuid("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+  letterType: letterTypeEnum("letter_type").notNull(),
+  version: integer("version").notNull().default(1),
+  content: text("content").notNull(), // immutable rendered snapshot — see module comment above
+  signatoryName: text("signatory_name").notNull(),
+  signatoryTitle: text("signatory_title").notNull(),
+  generatedBy: uuid("generated_by").notNull().references(() => users.id),
+  generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+});

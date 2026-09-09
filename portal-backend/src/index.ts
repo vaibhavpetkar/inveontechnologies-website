@@ -20,6 +20,8 @@ import { offersRouter } from "./modules/recruitment/offers-routes.js";
 import { onboardingRouter } from "./modules/recruitment/onboarding-routes.js";
 import { coursesRouter, lessonsRouter } from "./modules/courses/routes.js";
 import { certificateTemplatesRouter, certificatesRouter, courseCertificateIssueRouter } from "./modules/certificates/routes.js";
+import { employeesRouter } from "./modules/employees/routes.js";
+import { letterTemplatesRouter, employeeLettersRouter } from "./modules/employees/letters-routes.js";
 import { verifyAccessToken } from "./modules/auth/tokens.js";
 
 const env = loadEnv();
@@ -83,6 +85,9 @@ app.use("/api/v1/courses", courseCertificateIssueRouter(db, env));
 app.use("/api/v1/lessons", lessonsRouter(db, env));
 app.use("/api/v1/certificate-templates", certificateTemplatesRouter(db, env));
 app.use("/api/v1/certificates", certificatesRouter(db, env));
+app.use("/api/v1/employees", employeesRouter(db, env));
+app.use("/api/v1/letter-templates", letterTemplatesRouter(db, env));
+app.use("/api/v1", employeeLettersRouter(db, env));
 
 // Future feature routes mount here:
 // app.use("/api/v1/employees", employeesRouter(db, env));
