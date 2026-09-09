@@ -91,3 +91,17 @@ MCQ-based assessment engine, wired into the exact `assessment_invited`/`assessme
 - Lazy expiry only (see above) — a background sweep for attempts nobody revisits is a nice-to-have, not built
 - Assessment templates aren't reusable across opportunities in this MVP shape
 
+## Phase 4 — what shipped
+
+Recruitment operations: document requests, interviews, offers, onboarding checklist. All four deliberately live **outside** the `applications.status` enum (documented in schema.ts) rather than adding more states — an application sits at `selected` while these run. Verified live end-to-end: document request → candidate upload → admin verify; interview schedule → reschedule → feedback (with decision + scorecard) → re-feedback correctly blocked; offer draft (HR) → send blocked when drafter tries it themselves → send succeeds from a different privileged user → candidate can't see the draft before it's sent → candidate accepts; onboarding tasks created → candidate completes one → list reflects both states correctly.
+
+- **Documents**: metadata/status tracking only — `fileUrl` is a placeholder text column (same pattern as `candidateProfiles.resumeUrl`), no real object storage yet (documented, consistent with earlier phases)
+- **Interviews**: schedule/reschedule/no-show/cancel/feedback, with a scorecard as freeform JSON. Candidates see scheduling info but never feedback/scorecard/decision (filtered server-side, not just hidden in a UI)
+- **Offers**: versioned (a reissue is a new row, `version+1` — a sent offer's content is never mutated), with **separation of duties enforced server-side**: whoever drafts an offer cannot also send it (`generatedBy !== approvedBy`, checked in code, verified live with a 403). Lazy expiry on `acceptanceDeadline`, same pattern as assessment attempts.
+- **Onboarding checklist**: simple task list (policy_consent/emergency_contact/document/custom types), gated on the application being `selected`, completable by the candidate or a privileged reviewer
+
+**Known limitations / explicitly deferred**:
+- Interview scorecard is unstructured JSON, not a defined rubric schema — fine for MVP, a real rubric builder is future work
+- No calendar integration (Google Calendar/Outlook) — `meetingUrl` is just a plain link the admin pastes in
+- Offer content is a plain text blob, not a templated/merge-field system — each offer is hand-written per application for now
+- No role-promotion endpoint yet — promoting a user to HR/Admin/etc. still requires direct DB access (same limitation flagged in Phase 1); used a direct SQL update to test the offer separation-of-duties flow

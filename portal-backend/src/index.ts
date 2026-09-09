@@ -14,6 +14,10 @@ import { profileRouter } from "./modules/profile/routes.js";
 import { applicationsRouter } from "./modules/applications/routes.js";
 import { assessmentsRouter } from "./modules/assessments/routes.js";
 import { attemptRouter } from "./modules/assessments/attempt-routes.js";
+import { documentsRouter } from "./modules/recruitment/documents-routes.js";
+import { interviewsRouter } from "./modules/recruitment/interviews-routes.js";
+import { offersRouter } from "./modules/recruitment/offers-routes.js";
+import { onboardingRouter } from "./modules/recruitment/onboarding-routes.js";
 import { verifyAccessToken } from "./modules/auth/tokens.js";
 
 const env = loadEnv();
@@ -68,6 +72,10 @@ app.use("/api/v1/profile", profileRouter(db, env));
 app.use("/api/v1/applications", applicationsRouter(db, env));
 app.use("/api/v1/assessments", assessmentsRouter(db, env));
 app.use("/api/v1/assessment-attempts", attemptRouter(db, env));
+app.use("/api/v1", documentsRouter(db, env));
+app.use("/api/v1", interviewsRouter(db, env));
+app.use("/api/v1", offersRouter(db, env));
+app.use("/api/v1", onboardingRouter(db, env));
 
 // Future feature routes mount here:
 // app.use("/api/v1/onboarding", onboardingRouter(db, env));

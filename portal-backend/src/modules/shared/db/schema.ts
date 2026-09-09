@@ -295,3 +295,85 @@ export const assessmentAttemptsRelations = relations(assessmentAttempts, ({ one,
   application: one(applications, { fields: [assessmentAttempts.applicationId], references: [applications.id] }),
   answers: many(assessmentAttemptAnswers),
 }));
+
+/**
+ * Phase 4 schema: recruitment operations — document requests, interviews,
+ * offers, and the onboarding checklist. All four are deliberately kept
+ * OUTSIDE the applications.status state machine (see decisions.md Phase 4)
+ * rather than adding more enum values — an application stays "selected"
+ * while these run in parallel/afterward, each tracked by its own status.
+ *
+ * Scoping decision: document uploads are metadata-only in this phase —
+ * `fileUrl` is a placeholder text column, same pattern as
+ * candidateProfiles.resumeUrl. Real private object storage with signed
+ * URLs (as the plan specifies) is still deferred; wiring it in later only
+ * means populating this column for real instead of leaving it null.
+ */
+
+export const documentRequestStatusEnum = pgEnum("document_request_status", ["requested", "uploaded", "verified", "rejected"]);
+
+export const documentRequests = pgTable("document_requests", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  applicationId: uuid("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
+  documentName: text("document_name").notNull(),
+  status: documentRequestStatusEnum("status").notNull().default("requested"),
+  fileUrl: text("file_url"), // placeholder — see module comment above
+  note: text("note"),
+  requestedBy: uuid("requested_by").notNull().references(() => users.id),
+  verifiedBy: uuid("verified_by").references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const interviewStatusEnum = pgEnum("interview_status", ["scheduled", "completed", "rescheduled", "no_show", "cancelled"]);
+export const interviewDecisionEnum = pgEnum("interview_decision", ["pass", "fail", "hold"]);
+
+export const interviewRounds = pgTable("interview_rounds", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  applicationId: uuid("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
+  roundNumber: integer("round_number").notNull().default(1),
+  interviewerId: uuid("interviewer_id").notNull().references(() => users.id),
+  scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
+  timezone: text("timezone").notNull().default("Asia/Kolkata"),
+  meetingUrl: text("meeting_url"),
+  status: interviewStatusEnum("status").notNull().default("scheduled"),
+  feedback: text("feedback"),
+  scorecard: jsonb("scorecard"), // freeform { criteria: [{name, rating, comment}], ... }
+  decision: interviewDecisionEnum("decision"),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const offerStatusEnum = pgEnum("offer_status", ["draft", "sent", "accepted", "rejected", "expired"]);
+
+export const offers = pgTable("offers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  applicationId: uuid("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
+  version: integer("version").notNull().default(1),
+  status: offerStatusEnum("status").notNull().default("draft"),
+  // Immutable-once-sent content snapshot (role, stipend/salary, start date,
+  // etc., rendered as text). A later "reissue" is a NEW row with version+1,
+  // never an edit to a sent offer — preserves what was actually offered.
+  content: text("content").notNull(),
+  acceptanceDeadline: timestamp("acceptance_deadline", { withTimezone: true }),
+  generatedBy: uuid("generated_by").notNull().references(() => users.id),
+  approvedBy: uuid("approved_by").references(() => users.id),
+  sentAt: timestamp("sent_at", { withTimezone: true }),
+  respondedAt: timestamp("responded_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const onboardingTaskStatusEnum = pgEnum("onboarding_task_status", ["pending", "completed"]);
+
+export const onboardingTasks = pgTable("onboarding_tasks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  applicationId: uuid("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
+  taskType: text("task_type", { enum: ["policy_consent", "emergency_contact", "document", "custom"] }).notNull(),
+  title: text("title").notNull(),
+  description: text("description"),
+  required: boolean("required").notNull().default(true),
+  status: onboardingTaskStatusEnum("status").notNull().default("pending"),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
