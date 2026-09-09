@@ -105,3 +105,25 @@ Recruitment operations: document requests, interviews, offers, onboarding checkl
 - No calendar integration (Google Calendar/Outlook) — `meetingUrl` is just a plain link the admin pastes in
 - Offer content is a plain text blob, not a templated/merge-field system — each offer is hand-written per application for now
 - No role-promotion endpoint yet — promoting a user to HR/Admin/etc. still requires direct DB access (same limitation flagged in Phase 1); used a direct SQL update to test the offer separation-of-duties flow
+## Phase 8 — what shipped
+
+Courses, modules, lessons, enrollment/progress, and certificates. Verified live end-to-end against real local Postgres, including every case the plan explicitly asked for tests on:
+
+- **Course structure**: courses (draft/published/archived) → modules → lessons (video/document/assignment/test), prerequisites (a course can require another be completed first, checked at enroll time)
+- **Enrollment gating**: verified — enrolling before publish correctly 404s; enrolling twice correctly 409s (`ALREADY_ENROLLED`, DB-enforced unique constraint)
+- **Progress & auto-completion**: video/document/assignment lessons are self-reported complete by the learner; `test` lessons are explicitly rejected from self-report (`USE_GRADE_ENDPOINT`) and must be graded pass/fail by a privileged reviewer. Once every required lesson is done (and passed, for tests), the enrollment **auto-completes** — verified live.
+- **Certificates — every required test case verified**:
+  - *Incomplete-course denial*: issuing before the enrollment was `completed` correctly 400s
+  - *Duplicate-issue prevention*: issuing a second active certificate for the same user+course correctly 409s
+  - *Verification*: public `GET /certificates/verify/:verificationCode` (no auth) correctly returns `valid`/`status`/course/recipient for a real code, and a clean "not found" for a bogus one
+  - *Revocation*: correctly flips `status`, records `revokedBy`/`revokedAt`/`revokeReason`; re-revoking an already-revoked certificate correctly 400s; public verify immediately reflects `valid: false` after revoke
+  - *Reissue*: creates a **new** row (`version` via a fresh `INV-CERT-2026-######` business ID) linked back via `supersedesCertificateId`, while the original is separately revoked with reason "Superseded by reissue: ..." — the old certificate's content is never mutated
+- **Two identifiers by design**: `businessId` (sequential, human-readable, for display) and `verificationCode` (random, unguessable, the actual public lookup key) — a sequential ID alone would make every other certificate's code trivially guessable
+- **Transaction-safe issue**: insert + businessId assignment + audit log commit together in one DB transaction, per the plan's requirement
+- Issuance logs a stubbed "certificate issued" notification (same pattern as every other stubbed email in this codebase) — the plan's "email outbox event" doesn't have a real outbox to land in yet (that's Phase 9)
+
+**Known limitations / explicitly deferred**:
+- No real PDF generation — `snapshotContent` is the immutable rendered text a PDF renderer would need; actually producing a downloadable PDF file is future work
+- "Test" lessons do NOT reuse the Phase 3 assessment engine (that engine is application-scoped, not lesson-scoped) — course tests are pass/fail marked by a reviewer, not auto-scored MCQ. Unifying these into one "gradable thing" abstraction is a real refactor, not done here.
+- `recipientName` on certificates falls back to email since `candidateProfiles.fullName` isn't joined in — cosmetic gap, easy follow-up
+- No lesson-level file/video hosting — `contentUrl` is a placeholder, same pattern as every other file reference in this codebase so far

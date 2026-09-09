@@ -18,6 +18,8 @@ import { documentsRouter } from "./modules/recruitment/documents-routes.js";
 import { interviewsRouter } from "./modules/recruitment/interviews-routes.js";
 import { offersRouter } from "./modules/recruitment/offers-routes.js";
 import { onboardingRouter } from "./modules/recruitment/onboarding-routes.js";
+import { coursesRouter, lessonsRouter } from "./modules/courses/routes.js";
+import { certificateTemplatesRouter, certificatesRouter, courseCertificateIssueRouter } from "./modules/certificates/routes.js";
 import { verifyAccessToken } from "./modules/auth/tokens.js";
 
 const env = loadEnv();
@@ -76,9 +78,14 @@ app.use("/api/v1", documentsRouter(db, env));
 app.use("/api/v1", interviewsRouter(db, env));
 app.use("/api/v1", offersRouter(db, env));
 app.use("/api/v1", onboardingRouter(db, env));
+app.use("/api/v1/courses", coursesRouter(db, env));
+app.use("/api/v1/courses", courseCertificateIssueRouter(db, env));
+app.use("/api/v1/lessons", lessonsRouter(db, env));
+app.use("/api/v1/certificate-templates", certificateTemplatesRouter(db, env));
+app.use("/api/v1/certificates", certificatesRouter(db, env));
 
 // Future feature routes mount here:
-// app.use("/api/v1/onboarding", onboardingRouter(db, env));
+// app.use("/api/v1/employees", employeesRouter(db, env));
 // etc.
 
 app.use(errorHandler);

@@ -377,3 +377,141 @@ export const onboardingTasks = pgTable("onboarding_tasks", {
   completedAt: timestamp("completed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Phase 8 schema: courses, modules, lessons, enrollment/progress,
+ * certificates. Scoping decisions recorded here + docs/decisions.md:
+ *
+ * - Lesson content is metadata-only (contentUrl placeholder), same pattern
+ *   as resumeUrl/document fileUrl in earlier phases — no real video/file
+ *   hosting yet.
+ * - "test" lessons do NOT reuse the Phase 3 assessment engine. That engine
+ *   is application-scoped (assessmentAttempts.applicationId is NOT NULL);
+ *   decoupling it into a reusable "gradable thing" abstraction shared by
+ *   both applications and course lessons is real work deferred to a later
+ *   refactor, not done silently here. Course "test" lessons are marked
+ *   pass/fail by a privileged reviewer for Phase 8.
+ * - Certificates use TWO identifiers: businessId (INV-CERT-YYYY-######,
+ *   human-readable, sequential — same transactional pattern as
+ *   opportunities/applications) for display, and a separate random
+ *   verificationCode for the public verification URL. Sequential IDs are
+ *   guessable; the public lookup key must not be.
+ * - Certificate PDF generation is NOT implemented — `snapshotContent` is
+ *   the immutable rendered text at issue time. Turning that into an actual
+ *   PDF file is future work (would use the pdf skill / object storage);
+ *   this phase gives the exact content a PDF renderer would need.
+ * - "Certificate audit history" reuses the existing generic audit_logs
+ *   table rather than a new one — issue/revoke/reissue already fit its
+ *   shape (actor, action, entity, metadata).
+ */
+
+export const courseStatusEnum = pgEnum("course_status", ["draft", "published", "archived"]);
+export const lessonContentTypeEnum = pgEnum("lesson_content_type", ["video", "document", "assignment", "test"]);
+export const courseEnrollmentStatusEnum = pgEnum("course_enrollment_status", ["enrolled", "completed", "dropped"]);
+export const lessonProgressStatusEnum = pgEnum("lesson_progress_status", ["not_started", "in_progress", "completed"]);
+export const certificateStatusEnum = pgEnum("certificate_status", ["issued", "revoked"]);
+
+export const courses = pgTable("courses", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  title: text("title").notNull(),
+  description: text("description").notNull(),
+  status: courseStatusEnum("status").notNull().default("draft"),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  publishedAt: timestamp("published_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const coursePrerequisites = pgTable(
+  "course_prerequisites",
+  {
+    courseId: uuid("course_id").notNull().references(() => courses.id, { onDelete: "cascade" }),
+    prerequisiteCourseId: uuid("prerequisite_course_id").notNull().references(() => courses.id, { onDelete: "cascade" }),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.courseId, t.prerequisiteCourseId] }) }),
+);
+
+export const courseModules = pgTable("course_modules", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  courseId: uuid("course_id").notNull().references(() => courses.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  orderIndex: integer("order_index").notNull().default(0),
+});
+
+export const courseLessons = pgTable("course_lessons", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  moduleId: uuid("module_id").notNull().references(() => courseModules.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  contentType: lessonContentTypeEnum("content_type").notNull(),
+  contentUrl: text("content_url"), // placeholder — see module comment above
+  contentText: text("content_text"), // for text-based lessons/instructions
+  required: boolean("required").notNull().default(true),
+  orderIndex: integer("order_index").notNull().default(0),
+});
+
+export const courseEnrollments = pgTable(
+  "course_enrollments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    courseId: uuid("course_id").notNull().references(() => courses.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    status: courseEnrollmentStatusEnum("status").notNull().default("enrolled"),
+    enrolledAt: timestamp("enrolled_at", { withTimezone: true }).notNull().defaultNow(),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => ({ uniqCourseUser: unique("course_enrollments_course_user_unique").on(t.courseId, t.userId) }),
+);
+
+export const lessonProgress = pgTable(
+  "lesson_progress",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    enrollmentId: uuid("enrollment_id").notNull().references(() => courseEnrollments.id, { onDelete: "cascade" }),
+    lessonId: uuid("lesson_id").notNull().references(() => courseLessons.id, { onDelete: "cascade" }),
+    status: lessonProgressStatusEnum("status").notNull().default("not_started"),
+    // For "test" lessons only — set by a privileged reviewer's pass/fail call.
+    passed: boolean("passed"),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+  },
+  (t) => ({ uniqEnrollmentLesson: unique("lesson_progress_enrollment_lesson_unique").on(t.enrollmentId, t.lessonId) }),
+);
+
+export const certificateTemplates = pgTable("certificate_templates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  title: text("title").notNull(),
+  // Merge-field body, e.g. "This certifies that {{recipientName}} completed {{courseTitle}} on {{issuedDate}}."
+  bodyTemplate: text("body_template").notNull(),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const certificates = pgTable(
+  "certificates",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    businessId: text("business_id").unique(), // set post-insert in a transaction, same pattern as opportunities/applications
+    seqNumber: integer("seq_number").generatedAlwaysAsIdentity(),
+    verificationCode: text("verification_code").notNull().unique(), // random, unguessable — the public lookup key
+    userId: uuid("user_id").notNull().references(() => users.id),
+    courseId: uuid("course_id").notNull().references(() => courses.id),
+    templateId: uuid("template_id").notNull().references(() => certificateTemplates.id),
+    snapshotContent: text("snapshot_content").notNull(), // immutable rendered text at issue time
+    status: certificateStatusEnum("status").notNull().default("issued"),
+    issuedBy: uuid("issued_by").notNull().references(() => users.id),
+    issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+    revokedBy: uuid("revoked_by").references(() => users.id),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    revokeReason: text("revoke_reason"),
+    // A reissue creates a NEW row pointing back at the one it replaces —
+    // the old row is separately marked revoked with reason "reissued".
+    // Never mutate a previously issued certificate's snapshotContent.
+    supersedesCertificateId: uuid("supersedes_certificate_id"),
+  },
+  (t) => ({
+    // One ACTIVE (issued) certificate per user+course at a time is enforced
+    // in application code (see certificates/routes.ts), not here — a
+    // simple DB unique on (userId, courseId) would also block a legitimate
+    // reissue-after-revoke, and Drizzle can't express a partial unique
+    // index (WHERE status = 'issued') declaratively yet.
+  }),
+);
