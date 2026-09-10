@@ -417,6 +417,10 @@ export const courses = pgTable("courses", {
   title: text("title").notNull(),
   description: text("description").notNull(),
   status: courseStatusEnum("status").notNull().default("draft"),
+  // Null or 0 = free. No real payment gateway is integrated (see
+  // course_enrollments.paymentStatus comment below) — this just records
+  // the price a course is meant to cost.
+  priceAmount: numeric("price_amount", { precision: 10, scale: 2 }),
   createdBy: uuid("created_by").notNull().references(() => users.id),
   publishedAt: timestamp("published_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -450,6 +454,8 @@ export const courseLessons = pgTable("course_lessons", {
   orderIndex: integer("order_index").notNull().default(0),
 });
 
+export const coursePaymentStatusEnum = pgEnum("course_payment_status", ["not_required", "pending", "paid"]);
+
 export const courseEnrollments = pgTable(
   "course_enrollments",
   {
@@ -457,6 +463,18 @@ export const courseEnrollments = pgTable(
     courseId: uuid("course_id").notNull().references(() => courses.id, { onDelete: "cascade" }),
     userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     status: courseEnrollmentStatusEnum("status").notNull().default("enrolled"),
+    // "Skip for now" flow (added post-Phase-11, no real payment gateway
+    // integrated — Phase 5/Cashfree was never built in this priority
+    // order, and a leaked production key was explicitly NOT used). A
+    // paid course can be entered with paymentStatus="pending" — access is
+    // granted immediately, the debt is tracked and visible to admins via
+    // GET /courses/:id/pending-payments, and an admin can manually mark
+    // it "paid" (offline payment, bank transfer, etc.) via a real,
+    // audited endpoint. This is a genuine temporary-skip-with-tracking
+    // flow, not a permanent bypass and not a fake "paid" status.
+    paymentStatus: coursePaymentStatusEnum("payment_status").notNull().default("not_required"),
+    markedPaidBy: uuid("marked_paid_by").references(() => users.id),
+    markedPaidAt: timestamp("marked_paid_at", { withTimezone: true }),
     enrolledAt: timestamp("enrolled_at", { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
   },

@@ -21,6 +21,7 @@ const createCourseSchema = z.object({
   title: z.string().min(3).max(200),
   description: z.string().min(10),
   prerequisiteCourseIds: z.array(z.string().uuid()).default([]),
+  priceAmount: z.number().min(0).optional(), // omitted or 0 = free
 });
 
 const createModuleSchema = z.object({ title: z.string().min(2).max(200), orderIndex: z.number().int().default(0) });
@@ -87,7 +88,7 @@ export function coursesRouter(db: Database, env: Env) {
 
   router.post("/", requireAuth(env), requireRole(...PRIVILEGED_ROLES), async (req, res) => {
     const body = createCourseSchema.parse(req.body);
-    const [course] = await db.insert(courses).values({ title: body.title, description: body.description, createdBy: req.user!.sub }).returning();
+    const [course] = await db.insert(courses).values({ title: body.title, description: body.description, priceAmount: body.priceAmount?.toString(), createdBy: req.user!.sub }).returning();
     if (body.prerequisiteCourseIds.length > 0) {
       await db.insert(coursePrerequisites).values(body.prerequisiteCourseIds.map((prerequisiteCourseId) => ({ courseId: course.id, prerequisiteCourseId })));
     }
@@ -172,9 +173,26 @@ export function coursesRouter(db: Database, env: Env) {
       }
     }
 
+    const isPaidCourse = course.priceAmount !== null && Number(course.priceAmount) > 0;
+    let paymentStatus: "not_required" | "pending" | "paid" = "not_required";
+
+    if (isPaidCourse) {
+      const paymentChoice = z.enum(["pay", "skip"]).parse((req.body ?? {}).paymentChoice);
+      if (paymentChoice === "pay") {
+        // No real payment gateway is integrated (Phase 5/Cashfree was
+        // never built) — honestly refuse rather than fake a charge.
+        throw new AppError(
+          "PAYMENT_NOT_IMPLEMENTED",
+          "Online payment is not available yet. Choose \"skip\" to access the course now (payment will be tracked as pending), or contact an admin to be marked paid manually.",
+          501,
+        );
+      }
+      paymentStatus = "pending";
+    }
+
     let enrollment;
     try {
-      [enrollment] = await db.insert(courseEnrollments).values({ courseId: course.id, userId: req.user!.sub }).returning();
+      [enrollment] = await db.insert(courseEnrollments).values({ courseId: course.id, userId: req.user!.sub, paymentStatus }).returning();
     } catch (err: unknown) {
       if (typeof err === "object" && err !== null && "code" in err && (err as { code?: string }).code === "23505") {
         throw new AppError("ALREADY_ENROLLED", "You are already enrolled in this course", 409);
@@ -183,8 +201,41 @@ export function coursesRouter(db: Database, env: Env) {
     }
 
     await ensureProgressRows(db, enrollment.id, course.id);
-    await writeAuditLog(db, { actorUserId: req.user!.sub, action: "course.enroll", entityType: "course_enrollment", entityId: enrollment.id, ipAddress: req.ip });
-    res.status(201).json({ enrollment });
+    await writeAuditLog(db, {
+      actorUserId: req.user!.sub,
+      action: "course.enroll",
+      entityType: "course_enrollment",
+      entityId: enrollment.id,
+      metadata: { paymentStatus, coursePriceAmount: course.priceAmount },
+      ipAddress: req.ip,
+    });
+    res.status(201).json({ enrollment, paymentSkipped: paymentStatus === "pending" });
+  });
+
+  // Who owes payment for a course — visible to privileged roles so
+  // pending "skip for now" enrollments don't just disappear from view.
+  router.get("/:id/pending-payments", requireAuth(env), requireRole(...PRIVILEGED_ROLES), async (req, res) => {
+    const rows = await db.query.courseEnrollments.findMany({ where: and(eq(courseEnrollments.courseId, req.params.id), eq(courseEnrollments.paymentStatus, "pending")) });
+    res.json({ pendingPayments: rows });
+  });
+
+  // Manual reconciliation — offline payment (bank transfer, cash, etc.),
+  // not a real gateway confirmation. Audited like everything else.
+  router.post("/enrollments/:id/mark-paid", requireAuth(env), requireRole(...PRIVILEGED_ROLES), async (req, res) => {
+    const enrollment = await db.query.courseEnrollments.findFirst({ where: eq(courseEnrollments.id, req.params.id) });
+    if (!enrollment) throw new NotFoundError("Enrollment not found");
+    if (enrollment.paymentStatus !== "pending") {
+      throw new AppError("INVALID_STATE", `Cannot mark paid — payment status is "${enrollment.paymentStatus}", not "pending"`, 400);
+    }
+
+    const [updated] = await db
+      .update(courseEnrollments)
+      .set({ paymentStatus: "paid", markedPaidBy: req.user!.sub, markedPaidAt: new Date() })
+      .where(eq(courseEnrollments.id, enrollment.id))
+      .returning();
+
+    await writeAuditLog(db, { actorUserId: req.user!.sub, action: "course_enrollment.mark_paid", entityType: "course_enrollment", entityId: enrollment.id, ipAddress: req.ip });
+    res.json({ enrollment: updated });
   });
 
   router.get("/:id/progress", requireAuth(env), async (req, res) => {

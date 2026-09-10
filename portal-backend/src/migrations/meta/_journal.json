@@ -64,6 +64,13 @@
       "when": 1789065815895,
       "tag": "0008_moaning_shiver_man",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789066512993,
+      "tag": "0009_chief_makkari",
+      "breakpoints": true
     }
   ]
 }
