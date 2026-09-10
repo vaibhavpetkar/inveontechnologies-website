@@ -28,6 +28,8 @@ import { communitiesRouter } from "./modules/chat/communities-routes.js";
 import { conversationsRouter } from "./modules/chat/conversations-routes.js";
 import { messagesRouter } from "./modules/chat/messages-routes.js";
 import { presenceRouter } from "./modules/chat/presence-routes.js";
+import { reportsRouter } from "./modules/reports/routes.js";
+import { featureFlagsRouter, notificationPreferencesRouter, bulkActionsRouter } from "./modules/admin/routes.js";
 import { verifyAccessToken } from "./modules/auth/tokens.js";
 
 const env = loadEnv();
@@ -100,6 +102,10 @@ app.use("/api/v1/communities", communitiesRouter(db, env));
 app.use("/api/v1/conversations", conversationsRouter(db, env));
 app.use("/api/v1/messages", messagesRouter(db, env));
 app.use("/api/v1/presence", presenceRouter(db, env));
+app.use("/api/v1/reports", reportsRouter(db, env));
+app.use("/api/v1/feature-flags", featureFlagsRouter(db, env));
+app.use("/api/v1/notification-preferences", notificationPreferencesRouter(db, env));
+app.use("/api/v1/bulk", bulkActionsRouter(db, env));
 
 // Future feature routes mount here:
 // app.use("/api/v1/employees", employeesRouter(db, env));

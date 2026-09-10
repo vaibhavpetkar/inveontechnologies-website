@@ -57,6 +57,13 @@
       "when": 1789026180922,
       "tag": "0007_noisy_cannonball",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789065815895,
+      "tag": "0008_moaning_shiver_man",
+      "breakpoints": true
     }
   ]
 }

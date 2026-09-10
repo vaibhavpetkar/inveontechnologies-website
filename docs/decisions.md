@@ -191,3 +191,24 @@ Moderated communication: communities/channels/membership, private conversations,
 - Presence is a simple `lastSeenAt` heartbeat (2-minute online window), not real connection tracking — would need the WebSocket layer above to exist first
 - Search across messages (permission-aware, retention-respecting) is not implemented in this pass — the ordered, paginated list endpoint exists but there's no full-text search yet
 - No retention/auto-purge policy implemented — messages persist indefinitely
+## Phase 11 — what shipped
+
+Permission-aware reporting, CSV export, saved views, feature flags, notification preferences, and one real bulk action (application status transition) with genuine preview and partial-success semantics. Verified live end-to-end.
+
+**Scoping decision — payment and email-job reports are NOT implemented.** The plan asks for payment reports and a payment/gateway reconciliation report, but Phase 5 (Cashfree) and Phase 9 (real email/outbox) were never built — your priority order was 4, 8, 6, 7, 10, 11, which explicitly skipped 5 and 9. Rather than fake data or return a bare 404 that looks like a bug, `GET /reports/payments`, `/reports/payment-reconciliation`, and `/reports/email-jobs` all return a clear `501 { implemented: false, reason: "..." }` explaining exactly why — verified live.
+
+**What's implemented, verified live**:
+- Report endpoints for every phase that *does* exist: candidates, applications, assessments, employees, tasks, projects, courses, certificates, audit logs, plus a recruitment-conversion funnel (submitted→shortlisted→selected rates) — genuinely aggregates real data across the whole system (confirmed real counts, real conversion percentages from actual test data)
+- **Permission tiers**: HR can see operational reports (applications, courses, etc.); employee PII (`employees`) and `audit-logs` require Admin/Super Admin — verified live that HR correctly 403s on both sensitive reports while accessing operational ones fine
+- **CSV export is real**, not simulated: verified live — downloaded an actual CSV file with real header row and real data rows, `Content-Disposition` attachment headers correct
+- **XLSX/PDF export is honestly NOT implemented** — no library is wired in. Verified live: requesting xlsx returns a clear 501 explaining why, and still records an audit-visible `export_jobs` row with `status: "not_implemented"` rather than silently failing
+- Saved views: create/list/delete, ownership-enforced (verified live that one user can't delete another's saved view)
+- Feature flags: read is open to any authenticated user (a client checking "is this on" shouldn't need admin rights), writing requires Admin/Super Admin — verified live
+- **Bulk application transition** — the one concrete bulk action built, with real dry-run preview and real partial-success execution, verified live: a 2-item batch (one terminal/invalid, one valid) correctly previewed 1-valid/1-invalid *before* touching the database, then executing it produced exactly the same split — the valid one actually transitioned, the invalid one was left untouched, confirmed against actual DB state afterward
+
+**Known limitations / explicitly deferred**:
+- Payment and email-job reports: not implemented, honestly flagged (see scoping decision above) — would need Phase 5/9 to exist first
+- XLSX/PDF export: not implemented, honestly flagged — would need a real spreadsheet/PDF generation library
+- "Rules" (mentioned in the plan's settings list alongside departments/designations/skills/templates) was too undefined to implement without a concrete spec of what a "rule" is in this system — not built, not guessed at
+- Bulk actions: only ONE concrete action (application transition) is implemented, not a generic bulk-action framework — building a truly generic one covering every entity type is its own project
+- Report pagination is in-memory (fetch all matching rows, then slice) rather than SQL `LIMIT`/`OFFSET` — fine at this data scale, would need revisiting if any single report's underlying table grows very large

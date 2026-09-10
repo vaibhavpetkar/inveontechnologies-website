@@ -932,3 +932,74 @@ export const readStates = pgTable("read_states", {
   lastReadSeq: integer("last_read_seq").notNull().default(0),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Phase 11 schema: reporting and administration. Scoping decisions
+ * recorded here + docs/decisions.md:
+ *
+ * - NO payment or email-job reporting tables here. The plan asks for
+ *   payment and email-job reports and a payment/gateway reconciliation
+ *   report, but Phase 5 (Cashfree) and Phase 9 (real email/outbox) were
+ *   never built in this priority order (4, 8, 6, 7, 10, 11 — 5 and 9
+ *   were skipped). Building reconciliation logic against data that
+ *   doesn't exist would mean either faking rows or writing dead code
+ *   against tables with nothing in them. Those two reports are simply
+ *   not implemented; the report endpoints that DO exist cover every
+ *   other phase that's actually been built.
+ * - Export jobs genuinely generate CSV synchronously (real data, real
+ *   file, returned immediately). XLSX/PDF are schema-ready (the enum
+ *   includes them) but return a clear "not implemented" response rather
+ *   than fake success — no xlsx/pdf generation library is wired in.
+ * - "Rules" (from "departments, designations, skills, technologies,
+ *   employee types, rules, templates...") is too undefined to build
+ *   without a real spec of what a "rule" is in this system — not
+ *   implemented, flagged rather than guessed at.
+ * - Bulk actions: ONE concrete bulk action is implemented (bulk
+ *   application status transition) rather than a generic bulk-action
+ *   framework, since building a truly generic one is its own project.
+ *   Preview (dry-run) and partial-success are real; each item transitions
+ *   in its own independent small transaction, so "rollback" is
+ *   per-item-atomic rather than all-or-nothing across the whole batch —
+ *   an all-or-nothing rollback would actually contradict the
+ *   "partial-success report" requirement, so per-item atomicity is the
+ *   correct resolution of that tension, not a shortcut.
+ */
+
+export const exportFormatEnum = pgEnum("export_format", ["csv", "xlsx", "pdf"]);
+export const exportJobStatusEnum = pgEnum("export_job_status", ["completed", "failed", "not_implemented"]);
+
+export const savedReportViews = pgTable("saved_report_views", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  reportKey: text("report_key").notNull(),
+  name: text("name").notNull(),
+  filters: jsonb("filters").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const exportJobs = pgTable("export_jobs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  requestedBy: uuid("requested_by").notNull().references(() => users.id),
+  reportKey: text("report_key").notNull(),
+  format: exportFormatEnum("format").notNull(),
+  filters: jsonb("filters").notNull().default({}),
+  status: exportJobStatusEnum("status").notNull(),
+  rowCount: integer("row_count"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const featureFlags = pgTable("feature_flags", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  key: text("key").notNull().unique(),
+  enabled: boolean("enabled").notNull().default(false),
+  description: text("description"),
+  updatedBy: uuid("updated_by").references(() => users.id),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const notificationPreferences = pgTable("notification_preferences", {
+  userId: uuid("user_id").primaryKey().references(() => users.id),
+  emailEnabled: boolean("email_enabled").notNull().default(true),
+  inAppEnabled: boolean("in_app_enabled").notNull().default(true),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
