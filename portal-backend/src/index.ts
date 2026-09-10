@@ -24,6 +24,10 @@ import { employeesRouter } from "./modules/employees/routes.js";
 import { letterTemplatesRouter, employeeLettersRouter } from "./modules/employees/letters-routes.js";
 import { projectsRouter } from "./modules/projects/routes.js";
 import { tasksRouter } from "./modules/tasks/routes.js";
+import { communitiesRouter } from "./modules/chat/communities-routes.js";
+import { conversationsRouter } from "./modules/chat/conversations-routes.js";
+import { messagesRouter } from "./modules/chat/messages-routes.js";
+import { presenceRouter } from "./modules/chat/presence-routes.js";
 import { verifyAccessToken } from "./modules/auth/tokens.js";
 
 const env = loadEnv();
@@ -92,6 +96,10 @@ app.use("/api/v1/letter-templates", letterTemplatesRouter(db, env));
 app.use("/api/v1", employeeLettersRouter(db, env));
 app.use("/api/v1/projects", projectsRouter(db, env));
 app.use("/api/v1/tasks", tasksRouter(db, env));
+app.use("/api/v1/communities", communitiesRouter(db, env));
+app.use("/api/v1/conversations", conversationsRouter(db, env));
+app.use("/api/v1/messages", messagesRouter(db, env));
+app.use("/api/v1/presence", presenceRouter(db, env));
 
 // Future feature routes mount here:
 // app.use("/api/v1/employees", employeesRouter(db, env));

@@ -25,6 +25,7 @@ export const users = pgTable("users", {
   mfaEnabled: boolean("mfa_enabled").notNull().default(false),
   failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
   lockedUntil: timestamp("locked_until", { withTimezone: true }),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }), // heartbeat-driven presence, see chat/presence-routes.ts
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -776,4 +777,158 @@ export const taskEvents = pgTable("task_events", {
   toStatus: taskStatusEnum("to_status"),
   note: text("note"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Phase 10 schema: moderated communication. Scoping decisions recorded
+ * here + docs/decisions.md:
+ *
+ * - REAL-TIME DELIVERY IS NOT IMPLEMENTED. The plan asks for
+ *   "permission-aware real-time delivery with reconnect handling and
+ *   message ordering." This stack has no WebSocket/SSE server and adding
+ *   one is a meaningfully different runtime shape (persistent connections,
+ *   a pub/sub layer) that can't be responsibly bolted on and verified in
+ *   this pass. What IS built: every message gets a server-assigned
+ *   monotonic seqNumber (a single global identity column across the whole
+ *   messages table — NOT reset per channel/conversation), so
+ *   ordering is well-defined regardless of transport — a client can poll
+ *   `GET .../messages?afterSeq=N` today, and a future WebSocket layer can
+ *   push the exact same ordered rows without a data model change.
+ * - Malware scanning is a STUB — `malwareScanStatus` starts at "pending"
+ *   and a scan function immediately marks it "clean" (see
+ *   chat/attachments.ts). This is the named "integration point" the plan
+ *   asks for, not a real scanner.
+ * - Messages belong to EITHER a channel OR a private conversation, never
+ *   both — enforced in application code (see chat/messages-routes.ts),
+ *   not a DB constraint (Drizzle doesn't express XOR constraints
+ *   declaratively here).
+ * - Presence is a simple `users.lastSeenAt` heartbeat, not a real
+ *   connection-tracking presence system (which would need the WebSocket
+ *   layer above to exist first).
+ */
+
+export const channelTypeEnum = pgEnum("channel_type", ["public", "announcement"]);
+export const channelMemberRoleEnum = pgEnum("channel_member_role", ["owner", "moderator", "member"]);
+export const messageReportStatusEnum = pgEnum("message_report_status", ["open", "reviewed", "dismissed"]);
+export const malwareScanStatusEnum = pgEnum("malware_scan_status", ["pending", "clean", "flagged"]);
+
+export const communities = pgTable("communities", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull().unique(),
+  description: text("description"),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const channels = pgTable("channels", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  communityId: uuid("community_id").notNull().references(() => communities.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  type: channelTypeEnum("type").notNull().default("public"),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const channelMembers = pgTable(
+  "channel_members",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    channelId: uuid("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id),
+    role: channelMemberRoleEnum("role").notNull().default("member"),
+    mutedUntil: timestamp("muted_until", { withTimezone: true }),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ uniqChannelUser: unique("channel_members_channel_user_unique").on(t.channelId, t.userId) }),
+);
+
+export const channelBans = pgTable(
+  "channel_bans",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    channelId: uuid("channel_id").notNull().references(() => channels.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id),
+    bannedBy: uuid("banned_by").notNull().references(() => users.id),
+    reason: text("reason"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ uniqChannelUser: unique("channel_bans_channel_user_unique").on(t.channelId, t.userId) }),
+);
+
+export const privateConversations = pgTable("private_conversations", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const conversationParticipants = pgTable(
+  "conversation_participants",
+  {
+    conversationId: uuid("conversation_id").notNull().references(() => privateConversations.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.conversationId, t.userId] }) }),
+);
+
+export const messages = pgTable("messages", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  seqNumber: integer("seq_number").generatedAlwaysAsIdentity(), // global monotonic ordering — see module comment above
+  channelId: uuid("channel_id").references(() => channels.id, { onDelete: "cascade" }),
+  conversationId: uuid("conversation_id").references(() => privateConversations.id, { onDelete: "cascade" }),
+  authorId: uuid("author_id").notNull().references(() => users.id),
+  body: text("body").notNull(),
+  replyToMessageId: uuid("reply_to_message_id"),
+  editedAt: timestamp("edited_at", { withTimezone: true }),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  pinnedAt: timestamp("pinned_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Full edit/delete history — every prior version of a message's body, kept
+// even after an edit or delete so moderation can see what was actually said.
+export const messageRevisions = pgTable("message_revisions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  messageId: uuid("message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+  body: text("body").notNull(),
+  revisionType: text("revision_type", { enum: ["original", "edit", "delete"] }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const messageMentions = pgTable("message_mentions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  messageId: uuid("message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+  mentionedUserId: uuid("mentioned_user_id").notNull().references(() => users.id),
+});
+
+export const messageAttachments = pgTable("message_attachments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  messageId: uuid("message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+  fileName: text("file_name").notNull(),
+  fileUrl: text("file_url").notNull(), // placeholder — see earlier phases' note on deferred object storage
+  fileSizeBytes: integer("file_size_bytes").notNull(),
+  mimeType: text("mime_type").notNull(),
+  malwareScanStatus: malwareScanStatusEnum("malware_scan_status").notNull().default("pending"),
+  uploadedBy: uuid("uploaded_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const messageReports = pgTable("message_reports", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  messageId: uuid("message_id").notNull().references(() => messages.id, { onDelete: "cascade" }),
+  reportedBy: uuid("reported_by").notNull().references(() => users.id),
+  reason: text("reason").notNull(),
+  status: messageReportStatusEnum("status").notNull().default("open"),
+  reviewedBy: uuid("reviewed_by").references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Per-user, per-channel-or-conversation read pointer. Exactly one of
+// channelId/conversationId is set per row (app-enforced, same pattern as
+// messages above).
+export const readStates = pgTable("read_states", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  channelId: uuid("channel_id").references(() => channels.id, { onDelete: "cascade" }),
+  conversationId: uuid("conversation_id").references(() => privateConversations.id, { onDelete: "cascade" }),
+  lastReadSeq: integer("last_read_seq").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

@@ -165,3 +165,29 @@ Projects, tasks/subtasks, and growth metrics. Verified live against real local P
 - Manager/growth-metrics access is role-based, not team-scoped (any `manager` can view any user's growth metrics) — same deferred team-scoping limitation flagged in earlier phases
 - File attachments are metadata-only, no real object storage (consistent with every prior phase)
 - Recurrence has no scheduler — generation is a manual privileged call, not automatic
+## Phase 10 — what shipped
+
+Moderated communication: communities/channels/membership, private conversations, messages with replies/edit-delete history/pinning/mentions, reports, mute/ban, attachment validation with a malware-scan integration point, per-user rate limiting, and lightweight presence. Verified live end-to-end, including the plan's required security/abuse-prevention checks.
+
+**Scoping decision — real-time delivery is NOT implemented.** The plan asks for "permission-aware real-time delivery with reconnect handling." This stack has no WebSocket/SSE server, and adding one is a genuinely different runtime shape (persistent connections, a pub/sub layer) that couldn't be responsibly built and verified in this pass alongside everything else. What's built instead: every message gets a server-assigned monotonic `seqNumber` (a single global identity column, not reset per channel/conversation — confirmed correct ordering works across a channel and a DM sharing the same counter), so a client can poll `GET /messages?afterSeq=N` today, and a future WebSocket layer could push the exact same ordered rows without any data model change. This is the same kind of honest scoping call as the "no cron" limitation repeated through earlier phases, not a silent omission.
+
+**Verified live**:
+- Posting before joining a channel correctly 403s; joining then posting succeeds
+- Announcement-channel posting restricted to owner/moderator/privileged
+- Edit history preserves every version (original + edit rows, both retrievable)
+- Only the author can edit; only author-or-moderator can delete; deleting shows a `[message deleted]` tombstone in listings rather than actually erasing the row (so history/audit stays intact) — confirmed the reply that referenced the deleted message still points at it correctly
+- Re-deleting an already-deleted message correctly 400s
+- Pinning is moderator-only — a plain member correctly 403s
+- Message reporting + moderator review queue (open → resolved/dismissed) works, non-privileged users correctly 403 from the reports list
+- Attachment validation is real, not just a stub: oversized files and disallowed MIME types are both rejected with real checks before the malware-scan stub even runs
+- Mute is enforced at send-time (a muted member's post correctly 403s with the mute expiry shown); ban removes membership and blocks rejoining
+- DM isolation: a non-participant correctly 403s trying to read a private conversation; starting a DM with the same participant set twice returns the existing conversation rather than duplicating it
+- **Rate limiting is keyed per-user, not per-IP** — verified with a legitimate member hitting exactly 30 successful posts then 429s on the 31st; also verified the limiter still throttles a user making invalid (403-rejected) requests, since it runs before the handler logic
+- **Chat isolation from recruitment/payments verified by construction**, not just intention: grepped the entire `chat/` module for any reference to `applications`, `employees`, `offers`, or `opportunities` tables — zero matches. Chat only ever touches `users`.
+
+**Known limitations / explicitly deferred**:
+- No real-time delivery (see scoping decision above) — REST + poll only
+- Malware scanning is a stub that always returns "clean" — the real size/MIME-type checks are genuine, but actual file-content scanning isn't integrated
+- Presence is a simple `lastSeenAt` heartbeat (2-minute online window), not real connection tracking — would need the WebSocket layer above to exist first
+- Search across messages (permission-aware, retention-respecting) is not implemented in this pass — the ordered, paginated list endpoint exists but there's no full-text search yet
+- No retention/auto-purge policy implemented — messages persist indefinitely
