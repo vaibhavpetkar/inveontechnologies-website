@@ -144,3 +144,24 @@ Employee/intern onboarding and portal. Verified live end-to-end against real loc
 - No `authorized signatory` registry/validation — `signatoryName`/`signatoryTitle` are free text typed by whoever generates the letter, not checked against a list of people actually authorized to sign
 - Manager role has no read access to their direct reports' employee records in this phase (deliberately, per "protected") — a future phase could add a narrower manager view (e.g. name/department/status only, never documents/letters) if the business wants that
 - `employeeOnboardingTasks` is a separate table from the Phase 4 application-scoped `onboardingTasks` by design (see schema.ts) — the two are not merged
+## Phase 7 — what shipped
+
+Projects, tasks/subtasks, and growth metrics. Verified live against real local Postgres — and this phase's live testing caught two real bugs before they shipped, both fixed and re-verified:
+
+**Bug found and fixed — self-approval hole**: the task review-transition check originally used `canAccessProject` (true for any project member) to decide who could approve a task, which meant a plain team member — including the task's own assignee — could move their own task `in_review → done` themselves. Live testing caught this (Jack, a regular member, successfully self-approved). Fixed by switching to `canManageProject` (project lead/owner/privileged/task-creator only) for the reviewer check. Re-tested live: a plain member's self-approval now correctly 400s; only a lead/creator/privileged user can approve.
+
+**Bug found and fixed — route shadowing**: `GET /tasks/:id` was registered before the literal routes `GET /tasks/templates` and `GET /tasks/workload`, so Express matched those literal paths to `/:id` first and tried to query the DB with `id = "templates"`, failing a uuid cast (500 error). Caught live. Fixed by moving `/:id` and `/:id`-adjacent single-segment routes to register after every literal single-segment path — noted inline in the code as a reminder for any future routes added to this router.
+
+**What's implemented**:
+- Projects: status, ownership, membership (lead/member roles), milestones, risks, issues — access is member-or-owner-or-privileged (`canAccessProject`), management actions (edit, add milestones, resolve risks/issues) require lead-or-owner-or-privileged (`canManageProject`) — verified live that an unrelated user is correctly 403'd from a project they're not on
+- Tasks: full state machine (`todo → in_progress → in_review → done`, with `changes_requested` looping back, `cancelled` reachable from active states) — verified live through a complete review cycle including a change-request round-trip
+- Subtasks (self-referencing `parentTaskId`, validated to exist), task templates, and manually-triggered recurrence (no scheduler in this stack — same documented limitation as assessment/offer lazy expiry; `generate-next` is an explicit privileged call, gated correctly on `nextRunAt`, verified live both for the "due" and "not yet due" cases)
+- Comments, attachments (metadata-only, same placeholder pattern as every other file reference in this codebase), time entries (assignee-only, roll up into `task.actualHours` automatically)
+- Full activity timeline per task (create, status changes, comments, attachments all logged)
+- Personal dashboard (`/tasks/me/dashboard`), manager workload view (`/tasks/workload`), and a **growth metrics endpoint** that pulls together tasks, course enrollments, assessment results, and certificates across every earlier phase into one read — genuinely exercises the whole system's data, not just this phase's own tables
+
+**Known limitations / explicitly deferred**:
+- Due-date reminders/escalation are logged (`[NOTIFICATION STUB]`), not sent — no real outbox exists yet (Phase 9)
+- Manager/growth-metrics access is role-based, not team-scoped (any `manager` can view any user's growth metrics) — same deferred team-scoping limitation flagged in earlier phases
+- File attachments are metadata-only, no real object storage (consistent with every prior phase)
+- Recurrence has no scheduler — generation is a manual privileged call, not automatic

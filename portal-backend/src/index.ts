@@ -22,6 +22,8 @@ import { coursesRouter, lessonsRouter } from "./modules/courses/routes.js";
 import { certificateTemplatesRouter, certificatesRouter, courseCertificateIssueRouter } from "./modules/certificates/routes.js";
 import { employeesRouter } from "./modules/employees/routes.js";
 import { letterTemplatesRouter, employeeLettersRouter } from "./modules/employees/letters-routes.js";
+import { projectsRouter } from "./modules/projects/routes.js";
+import { tasksRouter } from "./modules/tasks/routes.js";
 import { verifyAccessToken } from "./modules/auth/tokens.js";
 
 const env = loadEnv();
@@ -88,6 +90,8 @@ app.use("/api/v1/certificates", certificatesRouter(db, env));
 app.use("/api/v1/employees", employeesRouter(db, env));
 app.use("/api/v1/letter-templates", letterTemplatesRouter(db, env));
 app.use("/api/v1", employeeLettersRouter(db, env));
+app.use("/api/v1/projects", projectsRouter(db, env));
+app.use("/api/v1/tasks", tasksRouter(db, env));
 
 // Future feature routes mount here:
 // app.use("/api/v1/employees", employeesRouter(db, env));
