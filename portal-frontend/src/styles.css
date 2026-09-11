@@ -1,0 +1,292 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+
+:root {
+  --ink: #0b1220;
+  --paper: #ffffff;
+  --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --line: #e2e8f0;
+  --muted: #64748b;
+  --surface: #f8fafc;
+  --danger: #dc2626;
+  --danger-surface: #fef2f2;
+  --font-display: 'Outfit', sans-serif;
+  --font-body: 'Plus Jakarta Sans', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+a {
+  color: inherit;
+}
+
+button {
+  font-family: inherit;
+}
+
+.page-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+/* --- Login --- */
+
+.login-screen {
+  display: grid;
+  grid-template-columns: 42% 58%;
+  min-height: 100vh;
+}
+
+@media (max-width: 860px) {
+  .login-screen {
+    grid-template-columns: 1fr;
+  }
+  .login-brand {
+    min-height: 220px;
+  }
+}
+
+.login-brand {
+  background: var(--ink);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 3rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.login-brand::before {
+  content: "";
+  position: absolute;
+  top: -20%;
+  right: -20%;
+  width: 60%;
+  height: 60%;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.35), transparent 70%);
+  pointer-events: none;
+}
+
+.login-wordmark {
+  font-family: var(--font-display);
+  font-size: 1.375rem;
+  font-weight: 700;
+}
+
+.login-brand-copy h1 {
+  font-size: 2rem;
+  font-weight: 600;
+  line-height: 1.25;
+  max-width: 20ch;
+}
+
+.login-brand-copy p {
+  margin-top: 0.875rem;
+  color: rgba(255, 255, 255, 0.65);
+  max-width: 38ch;
+  line-height: 1.6;
+}
+
+.login-audience {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+}
+
+.login-audience-item {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.9rem;
+}
+
+.login-audience-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  flex-shrink: 0;
+}
+
+.login-form-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.login-form {
+  width: 100%;
+  max-width: 360px;
+}
+
+.login-form h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.login-form-sub {
+  margin: 0.5rem 0 2rem;
+  color: var(--muted);
+  font-size: 0.925rem;
+}
+
+.field {
+  margin-bottom: 1.125rem;
+}
+
+.field label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-bottom: 0.375rem;
+}
+
+.field input {
+  width: 100%;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-family: inherit;
+  background: var(--paper);
+  color: var(--ink);
+  transition: border-color 0.15s ease;
+}
+
+.field input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.field input.has-error {
+  border-color: var(--danger);
+}
+
+.error-banner {
+  background: var(--danger-surface);
+  color: var(--danger);
+  border-radius: 8px;
+  padding: 0.7rem 0.9rem;
+  font-size: 0.875rem;
+  margin-bottom: 1.125rem;
+  line-height: 1.5;
+}
+
+.submit-button {
+  width: 100%;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.submit-button:hover:not(:disabled) {
+  background: var(--primary-dark);
+}
+
+.submit-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.login-footnote {
+  margin-top: 1.5rem;
+  font-size: 0.825rem;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* --- Dashboard shell --- */
+
+.dash-shell {
+  min-height: 100vh;
+  background: var(--surface);
+}
+
+.dash-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 2rem;
+  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+}
+
+.dash-topbar-brand {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.05rem;
+}
+
+.dash-user {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.dash-role-badge {
+  background: rgba(37, 99, 235, 0.1);
+  color: var(--primary-dark);
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.logout-link {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 0.875rem;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.dash-body {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 3rem 2rem;
+}
+
+.dash-body h1 {
+  font-size: 1.75rem;
+  font-weight: 600;
+}
+
+.dash-body p {
+  color: var(--muted);
+  margin-top: 0.6rem;
+  line-height: 1.6;
+}
