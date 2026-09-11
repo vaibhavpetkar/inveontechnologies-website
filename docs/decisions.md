@@ -228,3 +228,16 @@ Requested directly by you: "add admin login or other employee login option on th
 - Design: kept the marketing site's existing brand identity (Outfit + Plus Jakarta Sans, `#2563EB` primary blue) rather than a generic template, since this is the same product family — a deliberate consistency choice, not a default.
 
 **Known limitations**: only login + three landing dashboards are built — no registration, password-reset, or feature-specific UI (opportunities, assessments, courses, chat, etc.) exists in the frontend yet. Those all have working backend APIs from earlier phases but no UI on top of them yet.
+
+## Post-Phase-11 addition — 2-day payment grace period with automatic block
+
+Requested directly by you: "skip for now" needed an expiry — after 2 days, access should be blocked until payment is resolved. Added to the course payment gate:
+
+- `paymentDueAt` is set to `enrolledAt + 2 days` when a learner chooses "skip"
+- Lazy escalation (no cron in this stack, same pattern as assessment/offer expiry): a `pending` enrollment past its due date flips to `overdue` — and once `overdue`, **both** `GET /courses/:id/progress` and `POST /lessons/:id/complete` correctly 402 with a clear message, blocking further course progress
+- Admin's pending-payments list now surfaces both `pending` and `overdue` enrollments
+- `mark-paid` now resolves from either `pending` or `overdue`
+
+**Verified live end-to-end**: enrolled with skip → confirmed `paymentDueAt` set to exactly 2 days out → access worked immediately → forced the due date into the past via direct DB update → confirmed `GET /progress` now 402s and the DB row itself flipped to `overdue` → confirmed it appeared in admin's pending-payments list → admin marked it paid → access restored.
+
+**Separately flagged, not fixed in this pass**: there is a second, disconnected candidate/payment flow on the marketing site (`src/pages/careers/*`, `src/lib/candidateAuth.ts`) that is unrelated to this portal — it's a pre-existing `localStorage`-based mockup (plaintext passwords, browser-only accounts, never touches the real database) built before this engagement. The "Payment gateway is not configured yet" message and the login-credential-mismatch report both trace back to this separate system, not to the real portal. Flagged to you directly; not silently patched, since fixing it either means (a) wiring that old mockup to the real backend, or (b) migrating its pages to use the real portal outright — both are real architectural decisions you should make, not something to guess at.

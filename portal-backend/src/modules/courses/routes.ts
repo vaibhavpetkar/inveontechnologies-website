@@ -17,6 +17,25 @@ import type { Env } from "../shared/env.js";
 
 const PRIVILEGED_ROLES = ["hr", "admin", "super_admin"] as const;
 
+const PAYMENT_GRACE_PERIOD_DAYS = 2;
+const PAYMENT_GRACE_PERIOD_MS = PAYMENT_GRACE_PERIOD_DAYS * 24 * 60 * 60 * 1000;
+
+/**
+ * Lazy escalation — no cron in this stack (same documented pattern as
+ * assessment-attempt and offer expiry elsewhere in this codebase). A
+ * "pending" enrollment past its paymentDueAt is flipped to "overdue" the
+ * next time anything touches it (progress check, lesson complete, the
+ * admin pending-payments list, mark-paid). Once "overdue", course access
+ * is blocked until an admin resolves it.
+ */
+async function resolveEnrollmentPaymentStatus(db: Database, enrollment: typeof courseEnrollments.$inferSelect) {
+  if (enrollment.paymentStatus !== "pending" || !enrollment.paymentDueAt || enrollment.paymentDueAt > new Date()) {
+    return enrollment;
+  }
+  const [updated] = await db.update(courseEnrollments).set({ paymentStatus: "overdue" }).where(eq(courseEnrollments.id, enrollment.id)).returning();
+  return updated;
+}
+
 const createCourseSchema = z.object({
   title: z.string().min(3).max(200),
   description: z.string().min(10),
@@ -175,6 +194,7 @@ export function coursesRouter(db: Database, env: Env) {
 
     const isPaidCourse = course.priceAmount !== null && Number(course.priceAmount) > 0;
     let paymentStatus: "not_required" | "pending" | "paid" = "not_required";
+    let paymentDueAt: Date | undefined;
 
     if (isPaidCourse) {
       const paymentChoice = z.enum(["pay", "skip"]).parse((req.body ?? {}).paymentChoice);
@@ -188,11 +208,12 @@ export function coursesRouter(db: Database, env: Env) {
         );
       }
       paymentStatus = "pending";
+      paymentDueAt = new Date(Date.now() + PAYMENT_GRACE_PERIOD_MS);
     }
 
     let enrollment;
     try {
-      [enrollment] = await db.insert(courseEnrollments).values({ courseId: course.id, userId: req.user!.sub, paymentStatus }).returning();
+      [enrollment] = await db.insert(courseEnrollments).values({ courseId: course.id, userId: req.user!.sub, paymentStatus, paymentDueAt }).returning();
     } catch (err: unknown) {
       if (typeof err === "object" && err !== null && "code" in err && (err as { code?: string }).code === "23505") {
         throw new AppError("ALREADY_ENROLLED", "You are already enrolled in this course", 409);
@@ -206,26 +227,34 @@ export function coursesRouter(db: Database, env: Env) {
       action: "course.enroll",
       entityType: "course_enrollment",
       entityId: enrollment.id,
-      metadata: { paymentStatus, coursePriceAmount: course.priceAmount },
+      metadata: { paymentStatus, coursePriceAmount: course.priceAmount, paymentDueAt },
       ipAddress: req.ip,
     });
-    res.status(201).json({ enrollment, paymentSkipped: paymentStatus === "pending" });
+    res.status(201).json({
+      enrollment,
+      paymentSkipped: paymentStatus === "pending",
+      paymentDueAt,
+      ...(paymentStatus === "pending" ? { message: `Access granted now. Complete payment within ${PAYMENT_GRACE_PERIOD_DAYS} days or access will be paused until it's resolved.` } : {}),
+    });
   });
 
-  // Who owes payment for a course — visible to privileged roles so
-  // pending "skip for now" enrollments don't just disappear from view.
+  // Who owes payment for a course (pending AND overdue) — visible to
+  // privileged roles so "skip for now" enrollments don't just disappear.
   router.get("/:id/pending-payments", requireAuth(env), requireRole(...PRIVILEGED_ROLES), async (req, res) => {
-    const rows = await db.query.courseEnrollments.findMany({ where: and(eq(courseEnrollments.courseId, req.params.id), eq(courseEnrollments.paymentStatus, "pending")) });
-    res.json({ pendingPayments: rows });
+    const rows = await db.query.courseEnrollments.findMany({ where: eq(courseEnrollments.courseId, req.params.id) });
+    const resolved = await Promise.all(rows.map((r) => resolveEnrollmentPaymentStatus(db, r)));
+    res.json({ pendingPayments: resolved.filter((r) => r.paymentStatus === "pending" || r.paymentStatus === "overdue") });
   });
 
   // Manual reconciliation — offline payment (bank transfer, cash, etc.),
-  // not a real gateway confirmation. Audited like everything else.
+  // not a real gateway confirmation. Works from either "pending" or the
+  // escalated "overdue" state. Audited like everything else.
   router.post("/enrollments/:id/mark-paid", requireAuth(env), requireRole(...PRIVILEGED_ROLES), async (req, res) => {
-    const enrollment = await db.query.courseEnrollments.findFirst({ where: eq(courseEnrollments.id, req.params.id) });
-    if (!enrollment) throw new NotFoundError("Enrollment not found");
-    if (enrollment.paymentStatus !== "pending") {
-      throw new AppError("INVALID_STATE", `Cannot mark paid — payment status is "${enrollment.paymentStatus}", not "pending"`, 400);
+    const initial = await db.query.courseEnrollments.findFirst({ where: eq(courseEnrollments.id, req.params.id) });
+    if (!initial) throw new NotFoundError("Enrollment not found");
+    const enrollment = await resolveEnrollmentPaymentStatus(db, initial);
+    if (enrollment.paymentStatus !== "pending" && enrollment.paymentStatus !== "overdue") {
+      throw new AppError("INVALID_STATE", `Cannot mark paid — payment status is "${enrollment.paymentStatus}"`, 400);
     }
 
     const [updated] = await db
@@ -239,8 +268,17 @@ export function coursesRouter(db: Database, env: Env) {
   });
 
   router.get("/:id/progress", requireAuth(env), async (req, res) => {
-    const enrollment = await db.query.courseEnrollments.findFirst({ where: and(eq(courseEnrollments.courseId, req.params.id), eq(courseEnrollments.userId, req.user!.sub)) });
-    if (!enrollment) throw new NotFoundError("You are not enrolled in this course");
+    const initial = await db.query.courseEnrollments.findFirst({ where: and(eq(courseEnrollments.courseId, req.params.id), eq(courseEnrollments.userId, req.user!.sub)) });
+    if (!initial) throw new NotFoundError("You are not enrolled in this course");
+    const enrollment = await resolveEnrollmentPaymentStatus(db, initial);
+
+    if (enrollment.paymentStatus === "overdue") {
+      throw new AppError(
+        "PAYMENT_OVERDUE",
+        `Your ${PAYMENT_GRACE_PERIOD_DAYS}-day grace period for this course has ended. Contact an admin to complete payment and restore access.`,
+        402,
+      );
+    }
 
     const rows = await ensureProgressRows(db, enrollment.id, req.params.id);
     res.json({ enrollment, progress: rows });
@@ -279,6 +317,15 @@ export function lessonsRouter(db: Database, env: Env) {
 
     const enrollment = await db.query.courseEnrollments.findFirst({ where: and(eq(courseEnrollments.courseId, courseModule.courseId), eq(courseEnrollments.userId, req.user!.sub)) });
     if (!enrollment) throw new ForbiddenError("You are not enrolled in this course");
+
+    const resolvedEnrollment = await resolveEnrollmentPaymentStatus(db, enrollment);
+    if (resolvedEnrollment.paymentStatus === "overdue") {
+      throw new AppError(
+        "PAYMENT_OVERDUE",
+        `Your ${PAYMENT_GRACE_PERIOD_DAYS}-day grace period for this course has ended. Contact an admin to complete payment and restore access.`,
+        402,
+      );
+    }
 
     await db
       .insert(lessonProgress)

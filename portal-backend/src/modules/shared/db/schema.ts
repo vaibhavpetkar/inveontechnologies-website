@@ -454,7 +454,11 @@ export const courseLessons = pgTable("course_lessons", {
   orderIndex: integer("order_index").notNull().default(0),
 });
 
-export const coursePaymentStatusEnum = pgEnum("course_payment_status", ["not_required", "pending", "paid"]);
+// "overdue" added post-launch: a "skip for now" enrollment that isn't
+// resolved within the grace period (see paymentDueAt below) blocks
+// further course access until paid or manually marked paid — a real
+// escalation, not an indefinite free pass.
+export const coursePaymentStatusEnum = pgEnum("course_payment_status", ["not_required", "pending", "paid", "overdue"]);
 
 export const courseEnrollments = pgTable(
   "course_enrollments",
@@ -473,6 +477,11 @@ export const courseEnrollments = pgTable(
     // audited endpoint. This is a genuine temporary-skip-with-tracking
     // flow, not a permanent bypass and not a fake "paid" status.
     paymentStatus: coursePaymentStatusEnum("payment_status").notNull().default("not_required"),
+    // Set to enrolledAt + grace period when paymentStatus becomes
+    // "pending" (the "skip for now" choice). Checked lazily — same
+    // no-cron pattern as assessment/offer expiry elsewhere in this
+    // codebase — whenever the enrollment is next touched.
+    paymentDueAt: timestamp("payment_due_at", { withTimezone: true }),
     markedPaidBy: uuid("marked_paid_by").references(() => users.id),
     markedPaidAt: timestamp("marked_paid_at", { withTimezone: true }),
     enrolledAt: timestamp("enrolled_at", { withTimezone: true }).notNull().defaultNow(),
