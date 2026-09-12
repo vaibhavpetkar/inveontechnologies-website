@@ -1,4 +1,3 @@
-import { Link } from 'wouter';
 import { motion } from 'framer-motion';
 import { Helmet } from 'react-helmet-async';
 import {
@@ -6,7 +5,6 @@ import {
   Smartphone, Cloud, CheckCircle, ArrowRight, Gift, Award, BookOpen
 } from 'lucide-react';
 import { CAREER_ROLES, INTERNSHIP_BENEFITS, INTERNSHIP_PRICE } from '@/data/careerRoles';
-import { getCurrentCandidate } from '@/lib/candidateAuth';
 
 const fadeUp = {
   hidden: { opacity: 0, y: 32 },
@@ -23,7 +21,6 @@ const iconMap: Record<string, typeof Code2> = {
 };
 
 export default function Careers() {
-  const candidate = getCurrentCandidate();
   const engineeringRoles = CAREER_ROLES.filter((r) => r.category === 'Engineering');
   const infraRoles = CAREER_ROLES.filter((r) => r.category === 'Infrastructure & Quality');
   const totalPositions = CAREER_ROLES.reduce((sum, r) => sum + r.positions, 0);
@@ -62,15 +59,9 @@ export default function Careers() {
             Apply, take our role-specific aptitude test, and join our internship program.
           </motion.p>
           <motion.div variants={fadeUp} initial="hidden" animate="visible" custom={3} className="flex flex-wrap justify-center gap-4">
-            {candidate ? (
-              <Link href="/careers/profile" className="btn-primary inline-flex items-center gap-2">
-                My Profile <ArrowRight className="w-4 h-4" />
-              </Link>
-            ) : (
-              <Link href="/careers/login" className="btn-primary inline-flex items-center gap-2">
-                Candidate Login <ArrowRight className="w-4 h-4" />
-              </Link>
-            )}
+            <a href="https://portal.inveontechnologies.in/login" className="btn-primary inline-flex items-center gap-2">
+              Candidate Portal <ArrowRight className="w-4 h-4" />
+            </a>
             <a href="#open-positions" className="btn-secondary">View Positions</a>
           </motion.div>
         </div>
@@ -190,12 +181,12 @@ function RoleSection({ title, roles, startIndex }: { title: string; roles: typeo
                   </span>
                 ))}
               </div>
-              <Link
-                href={`/careers/apply/${role.id}`}
+              <a
+                href="https://portal.inveontechnologies.in/login"
                 className="btn-primary w-full inline-flex items-center justify-center gap-2"
               >
                 Apply Now <ArrowRight className="w-4 h-4" />
-              </Link>
+              </a>
             </motion.div>
           );
         })}

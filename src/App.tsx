@@ -13,11 +13,7 @@ import About from '@/pages/About';
 import Contact from '@/pages/Contact';
 import Careers from '@/pages/Careers';
 import Insights from '@/pages/Insights';
-import CandidateAuth from '@/pages/careers/CandidateAuth';
-import CandidateProfile from '@/pages/careers/CandidateProfile';
-import ApplyRole from '@/pages/careers/ApplyRole';
-import AptitudeTest from '@/pages/careers/AptitudeTest';
-import InternshipPayment from '@/pages/careers/InternshipPayment';
+import RedirectToPortal from '@/pages/careers/RedirectToPortal';
 import { Route, Switch, Router as WouterRouter } from 'wouter';
 import Navbar from '@/components/layout/Navbar';
 import Footer from '@/components/layout/Footer';
@@ -42,11 +38,15 @@ function Router() {
           <Route path="/about" component={About} />
           <Route path="/contact" component={Contact} />
           <Route path="/careers" component={Careers} />
-          <Route path="/careers/login" component={CandidateAuth} />
-          <Route path="/careers/profile" component={CandidateProfile} />
-          <Route path="/careers/apply/:roleId" component={ApplyRole} />
-          <Route path="/careers/test/:roleId" component={AptitudeTest} />
-          <Route path="/careers/payment/:roleId" component={InternshipPayment} />
+          {/* Retired: this flow was a localStorage-only mock (plaintext
+              passwords, no real backend). Real candidate accounts,
+              opportunities, applications, and assessments now live on
+              the real portal — see RedirectToPortal.tsx. */}
+          <Route path="/careers/login" component={RedirectToPortal} />
+          <Route path="/careers/profile" component={RedirectToPortal} />
+          <Route path="/careers/apply/:roleId" component={RedirectToPortal} />
+          <Route path="/careers/test/:roleId" component={RedirectToPortal} />
+          <Route path="/careers/payment/:roleId" component={RedirectToPortal} />
           <Route component={NotFound} />
         </Switch>
       </main>

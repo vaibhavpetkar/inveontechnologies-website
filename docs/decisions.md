@@ -241,3 +241,14 @@ Requested directly by you: "skip for now" needed an expiry — after 2 days, acc
 **Verified live end-to-end**: enrolled with skip → confirmed `paymentDueAt` set to exactly 2 days out → access worked immediately → forced the due date into the past via direct DB update → confirmed `GET /progress` now 402s and the DB row itself flipped to `overdue` → confirmed it appeared in admin's pending-payments list → admin marked it paid → access restored.
 
 **Separately flagged, not fixed in this pass**: there is a second, disconnected candidate/payment flow on the marketing site (`src/pages/careers/*`, `src/lib/candidateAuth.ts`) that is unrelated to this portal — it's a pre-existing `localStorage`-based mockup (plaintext passwords, browser-only accounts, never touches the real database) built before this engagement. The "Payment gateway is not configured yet" message and the login-credential-mismatch report both trace back to this separate system, not to the real portal. Flagged to you directly; not silently patched, since fixing it either means (a) wiring that old mockup to the real backend, or (b) migrating its pages to use the real portal outright — both are real architectural decisions you should make, not something to guess at.
+
+## Post-Phase-11 addition — retired the old careers/payment mockup flow
+
+Per your decision: the old localStorage-based candidate flow (`careers/login`, `/profile`, `/apply/:roleId`, `/test/:roleId`, `/payment/:roleId`) is retired and redirects to the real portal.
+
+- All five routes now render `RedirectToPortal.tsx`, which sends the browser to `https://portal.inveontechnologies.in/login` — a full redirect, since it's a different subdomain, not a client-side route change
+- `Careers.tsx`'s CTAs ("Candidate Portal", per-role "Apply Now") now link directly to the real portal instead of the retired internal routes; the conditional "My Profile vs Candidate Login" logic (which depended on the old localStorage session) was removed along with it
+- Deleted entirely rather than left as dead code: `CandidateAuth.tsx`, `CandidateProfile.tsx`, `ApplyRole.tsx`, `AptitudeTest.tsx`, `InternshipPayment.tsx`, `lib/candidateAuth.ts` (the plaintext-password localStorage store), `lib/cashfree.ts` (the non-functional payment stub), and the now-orphaned `data/aptitudeQuestions.ts`
+- Verified: `tsc --noEmit` clean, production build succeeds, and the real portal URL (`portal.inveontechnologies.in/login`) is confirmed present in the built JS bundle at all 4 expected call sites
+
+**Not done in this pass**: no attempt was made to migrate old localStorage candidate accounts into the real system — those accounts were never real (plaintext passwords, no verified email, no connection to any real opportunity), so there's nothing meaningful to migrate. Anyone with an old account simply registers fresh on the real portal.
