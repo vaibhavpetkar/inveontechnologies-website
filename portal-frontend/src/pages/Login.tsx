@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { useLocation } from "wouter";
+import { useLocation, Link } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import { ApiError } from "../lib/api";
 import { landingPathForRole } from "../lib/roles";
@@ -97,7 +97,12 @@ export default function Login() {
             {submitting ? "Signing in…" : "Sign in"}
           </button>
 
-          <p className="login-footnote">Don't have an account yet? Registration opens from a job opportunity page.</p>
+          <p className="login-footnote">
+            Don't have an account yet?{" "}
+            <Link href="/register" style={{ color: "var(--primary)", fontWeight: 600 }}>
+              Create one
+            </Link>
+          </p>
         </form>
       </div>
     </div>

@@ -3,6 +3,7 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { landingPathForRole } from "./lib/roles";
 import Login from "./pages/Login";
+import Register from "./pages/Register";
 import CandidateDashboard from "./pages/CandidateDashboard";
 import EmployeeDashboard from "./pages/EmployeeDashboard";
 import AdminDashboard from "./pages/AdminDashboard";
@@ -20,6 +21,7 @@ function AppRoutes() {
     <Switch>
       <Route path="/" component={Home} />
       <Route path="/login" component={Login} />
+      <Route path="/register" component={Register} />
       <Route path="/candidate">
         <ProtectedRoute>
           <CandidateDashboard />

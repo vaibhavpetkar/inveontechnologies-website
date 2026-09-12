@@ -252,3 +252,13 @@ Per your decision: the old localStorage-based candidate flow (`careers/login`, `
 - Verified: `tsc --noEmit` clean, production build succeeds, and the real portal URL (`portal.inveontechnologies.in/login`) is confirmed present in the built JS bundle at all 4 expected call sites
 
 **Not done in this pass**: no attempt was made to migrate old localStorage candidate accounts into the real system — those accounts were never real (plaintext passwords, no verified email, no connection to any real opportunity), so there's nothing meaningful to migrate. Anyone with an old account simply registers fresh on the real portal.
+
+## Post-Phase-11 addition — candidate self-registration page
+
+You noticed `portal.inveontechnologies.in/login` had no way to actually create an account — correct, the registration API existed since Phase 1 but the frontend never had a page for it (the login page even said "registration opens from a job opportunity page," which was never built).
+
+- New `/register` page: email + password + confirm, calls the existing `POST /api/v1/auth/register`, always creates a `candidate` role account
+- **Verified live**: register → immediately log in (no verification step blocks it — confirmed `emailVerified: false` on the account is informational only, per Phase 1's original design) → duplicate registration with the same email correctly gives no signal either way (enumeration-safe, same response for new vs. existing email)
+- Login page's footnote now links to `/register` instead of the old dead-end text
+
+**Known limitation, called out plainly**: since Phase 9 (real email) was never built, the verification link is only ever logged server-side, never actually emailed. A candidate can use the portal fully without ever verifying — that's fine for now since nothing currently gates on `emailVerified`, but it means there's no real "prove you own this email address" step in production yet. Building that properly needs Phase 9.
