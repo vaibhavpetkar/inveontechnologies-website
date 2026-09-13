@@ -262,3 +262,18 @@ You noticed `portal.inveontechnologies.in/login` had no way to actually create a
 - Login page's footnote now links to `/register` instead of the old dead-end text
 
 **Known limitation, called out plainly**: since Phase 9 (real email) was never built, the verification link is only ever logged server-side, never actually emailed. A candidate can use the portal fully without ever verifying — that's fine for now since nothing currently gates on `emailVerified`, but it means there's no real "prove you own this email address" step in production yet. Building that properly needs Phase 9.
+
+## Post-Phase-11 fix — db:migrate and db:seed never actually worked in production
+
+Found while debugging your login issue: **this was a real, previously undiscovered deployment bug**, not something caused by your `.env` fix. `npm run db:migrate` ran `tsx src/modules/shared/migrate.ts` — but the production Docker image (`Dockerfile`'s final stage) only ever copies the compiled `dist/` output, never the `src/` TypeScript source. That command could never have succeeded in a deployed container; it would always throw `ERR_MODULE_NOT_FOUND`. The same was true of `db:seed`.
+
+There was a second, compounding bug underneath: even after switching to the compiled JS, `migrate.ts` hardcoded `migrationsFolder: "./src/migrations"` — a path that only exists in the dev source tree, never in the production image, since `.sql` migration files aren't TypeScript and `tsc` never copies them to `dist/`.
+
+**Fixed**:
+- `migrate.ts` now resolves the migrations folder relative to its own file location (`import.meta.url`), not `process.cwd()` — this makes it correct whether it's run from source (`src/modules/shared/migrate.ts`, migrations at `../../migrations` = `src/migrations`) or from compiled output (`dist/modules/shared/migrate.js`, migrations at `../../migrations` = `dist/migrations`)
+- `package.json`'s `build` script now also copies `src/migrations` into `dist/migrations`, so the `.sql` files actually ship with the production image
+- `db:migrate` and `db:seed` now run the **compiled** `dist/*.js` files via plain `node`, not `tsx` on source that was never copied into the image
+
+**Verified with a full first-deploy simulation** — not just typechecked: created a completely fresh, empty Postgres database, ran `npm run db:migrate` (the real npm script, not a `tsx` workaround) — all 11 migrations applied and all tables created — then `npm run db:seed` with real env vars, then booted the real server and confirmed `/health/ready` shows `database: up` and the seeded admin account can actually log in. This is the exact sequence your production server needs to run.
+
+This means **anyone who deployed this portal before now and tried to run migrations/seed would have hit the same `ERR_MODULE_NOT_FOUND` you did** — it wasn't specific to your `.env` password issue, it was a latent bug in every deployment since Phase 1.
