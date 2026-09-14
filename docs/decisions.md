@@ -277,3 +277,28 @@ There was a second, compounding bug underneath: even after switching to the comp
 **Verified with a full first-deploy simulation** — not just typechecked: created a completely fresh, empty Postgres database, ran `npm run db:migrate` (the real npm script, not a `tsx` workaround) — all 11 migrations applied and all tables created — then `npm run db:seed` with real env vars, then booted the real server and confirmed `/health/ready` shows `database: up` and the seeded admin account can actually log in. This is the exact sequence your production server needs to run.
 
 This means **anyone who deployed this portal before now and tried to run migrations/seed would have hit the same `ERR_MODULE_NOT_FOUND` you did** — it wasn't specific to your `.env` password issue, it was a latent bug in every deployment since Phase 1.
+
+## Post-Phase-11 addition — integrated the Events app (events.inveontechnologies.in)
+
+You added a separate app, Events (`/var/www/Events`, its own git repo — a Node/Express API + Postgres + a static React frontend, images pulled from `ghcr.io/inveon-technologies/events-*`). Its own `docker-compose.yml` couldn't be run as-is: it defines its own `nginx` service bound to host ports 80/443, which collide directly with this repo's existing `web` service, already confirmed running on those exact ports (`docker ps` showed `inveontechnologies-web` with `0.0.0.0:80->80`, `0.0.0.0:443->443`).
+
+**Integration approach** (Events' own `nginx`/`certbot` services are NOT run — this repo's existing ones already cover every subdomain, events included):
+- `events-postgres`: isolated on a new `events_internal` network, no host ports, same shape as `portal-postgres`
+- `events-api`: joins both `crm_network` (so the shared nginx can reach it by container name) and `events_internal` (to reach its DB) — no host ports either. `env_file` points at the real absolute path `/var/www/Events/apps/api/.env`, since Events is a separate repo, not nested inside this one
+- `events-web`: kept as the one-shot "build and exit" container exactly as Events' own compose defined it, writing into a new shared volume `events-web-static`
+- That same volume is now also mounted **read-only** into the existing `web` (nginx) container at `/usr/share/nginx/events`, and the new `events.inveontechnologies.in` server block in `nginx/inveontechnologies.in.conf` serves it directly (`try_files ... /index.html`, SPA-friendly) while proxying `/api/` to `events_api:3000`
+
+**Two assumptions flagged, not verified against the real image** (I don't have credentials to pull `ghcr.io/inveon-technologies/*` in this sandbox):
+1. `events-api` listens on port 3000 internally — inferred from its own healthcheck (`http://localhost:3000/health`) in the compose file you pasted; confirm this before relying on it
+2. `events-web`'s one-shot container writes its build output to `/usr/share/nginx/html` inside itself (matching where the volume is mounted) — this was stated in Events' own compose file comment, not independently confirmed
+
+**Verified, not just eyeballed**:
+- `docker-compose.yml`: parsed with Python's `yaml` library — confirmed valid YAML, and that all 8 services / 5 volumes / 3 networks show up as expected
+- `nginx/inveontechnologies.in.conf`: actually ran `nginx -t` against the real file (installed nginx locally in the sandbox for this), using self-signed dummy certs standing in for the real Let's Encrypt ones — full syntax check passed clean (`configuration file test is successful`). Two sandbox-only limitations were worked around to get a clean run (this sandbox's nginx package lacks the HTTP/2 module that the real `nginx:1.27-alpine` image has built in, and this sandbox has no IPv6 support) — neither affects the real server.
+- **Not verified**: actual behavior once the real private images are pulled and running — that needs to happen on your server, since I can't pull them here
+
+**What you still need to do on the server**:
+1. Set `EVENTS_POSTGRES_PASSWORD` (a new value, not reused from anything else) in the root `.env`
+2. Confirm `/var/www/Events/apps/api/.env` has the right DB connection string pointing at `events_postgres` (check the exact env var name against that repo's own `.env.example` — I don't have that file)
+3. `docker compose up -d --build web events-postgres events-api events-web`
+4. Issue the cert: `docker compose run --rm certbot certonly --webroot -w /var/www/certbot -d events.inveontechnologies.in`, then reload nginx

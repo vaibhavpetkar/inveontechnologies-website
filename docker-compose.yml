@@ -11,6 +11,10 @@ services:
     volumes:
       - certbot-conf:/etc/letsencrypt
       - certbot-www:/var/www/certbot
+      # Events' static frontend build lands here (written by the
+      # one-shot events-web container below) and is served directly by
+      # this nginx — see the events.inveontechnologies.in server block.
+      - events-web-static:/usr/share/nginx/events:ro
     depends_on:
       - certbot
     networks:
@@ -70,14 +74,79 @@ services:
     # on the server (see portal-backend/.env.example); it is git-ignored.
     # PORTAL_DATABASE_URL in that file should point at
     # postgres://portal:<same password as above>@portal_postgres:5432/portal
+
+  # --- Events app (github.com/inveon-technologies/events, deployed from
+  #     /var/www/Events) --- integrated here rather than run as its own
+  #     standalone compose stack, because its own docker-compose.yml
+  #     defines its own nginx bound to host ports 80/443, which collide
+  #     with the "web" service above that already owns those ports. Only
+  #     events-postgres, events-api, and events-web (the one-shot static
+  #     build step) are used from that stack; its nginx/certbot services
+  #     are NOT run here — this repo's existing "web"/"certbot" already
+  #     cover that for every subdomain, events included.
+  events-postgres:
+    image: postgres:15-alpine
+    container_name: events_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: events
+      POSTGRES_USER: events
+      POSTGRES_PASSWORD: ${EVENTS_POSTGRES_PASSWORD:?Set EVENTS_POSTGRES_PASSWORD in your server .env}
+    volumes:
+      - events-postgres-data:/var/lib/postgresql/data
+    networks:
+      - events_internal
+    # No published ports — only events-api (same network) can reach it.
+
+  events-api:
+    image: ghcr.io/inveon-technologies/events-api:${EVENTS_IMAGE_TAG:-latest}
+    container_name: events_api
+    restart: unless-stopped
+    env_file:
+      # Absolute path to the actual Events checkout on the server — this
+      # repo and Events are separate git repos, not nested.
+      - /var/www/Events/apps/api/.env
+    environment:
+      NODE_ENV: production
+    depends_on:
+      - events-postgres
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - crm_network
+      - events_internal
+    # Reached only via the shared nginx reverse proxy (crm_network) for
+    # HTTP, and reaches events-postgres over events_internal — no ports
+    # published to the host on either side. /var/www/Events/apps/api/.env
+    # must set the DB connection to point at
+    # postgres://events:<EVENTS_POSTGRES_PASSWORD>@events_postgres:5432/events
+    # — confirm the exact env var name events-api expects (DATABASE_URL or
+    # similar) against apps/api/.env.example in that repo.
+
+  # One-shot: copies the built frontend into events-web-static, then
+  # exits (restart: "no" is intentional here, not an oversight).
+  events-web:
+    image: ghcr.io/inveon-technologies/events-web:${EVENTS_IMAGE_TAG:-latest}
+    container_name: events_web_build
+    volumes:
+      - events-web-static:/usr/share/nginx/html
+    restart: "no"
+
 volumes:
   certbot-conf:
   certbot-www:
   portal-postgres-data:
+  events-postgres-data:
+  events-web-static:
 
 networks:
   crm_network:
     external: true
     name: crm_crm_network
   portal_internal:
+    driver: bridge
+  events_internal:
     driver: bridge
