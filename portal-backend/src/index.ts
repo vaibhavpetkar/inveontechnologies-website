@@ -35,6 +35,12 @@ import { verifyAccessToken } from "./modules/auth/tokens.js";
 const env = loadEnv();
 const { db, pool } = createDb(env);
 const app = express();
+// Behind nginx (and Cloudflare in front of that) — trust exactly one hop
+// so req.ip and X-Forwarded-For-based rate limiting resolve to the real
+// client IP instead of nginx's. Without this, express-rate-limit refuses
+// to trust X-Forwarded-For at all and throws
+// ERR_ERL_UNEXPECTED_X_FORWARDED_FOR (seen in production logs).
+app.set("trust proxy", 1);
 
 app.use(
   pinoHttp({

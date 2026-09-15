@@ -302,3 +302,11 @@ You added a separate app, Events (`/var/www/Events`, its own git repo — a Node
 2. Confirm `/var/www/Events/apps/api/.env` has the right DB connection string pointing at `events_postgres` (check the exact env var name against that repo's own `.env.example` — I don't have that file)
 3. `docker compose up -d --build web events-postgres events-api events-web`
 4. Issue the cert: `docker compose run --rm certbot certonly --webroot -w /var/www/certbot -d events.inveontechnologies.in`, then reload nginx
+
+## Post-Phase-11 fix — trust proxy setting (found in production logs)
+
+Found while reviewing your production logs during the login debugging: `express-rate-limit` was throwing `ERR_ERL_UNEXPECTED_X_FORWARDED_FOR` on every request, because the app runs behind nginx (and Cloudflare in front of that) but Express's `trust proxy` setting was never configured. Without it, Express doesn't know to trust the `X-Forwarded-For` header nginx adds, so anything relying on `req.ip` (the rate limiters, and audit log IP addresses) couldn't resolve the real client IP correctly.
+
+Fixed with `app.set("trust proxy", 1)` — trusts exactly one hop (nginx), which is correct for this deployment shape; doesn't blindly trust arbitrary forwarded headers from further upstream.
+
+**Verified live**: sent a request with a real `X-Forwarded-For` header (matching what nginx actually sends) against a locally rebuilt server — confirmed zero `ERR_ERL_UNEXPECTED_X_FORWARDED_FOR` occurrences in the logs, and that register/login work correctly end to end with the header present.
