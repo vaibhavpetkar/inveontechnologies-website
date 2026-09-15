@@ -7,6 +7,13 @@ import Register from "./pages/Register";
 import CandidateDashboard from "./pages/CandidateDashboard";
 import EmployeeDashboard from "./pages/EmployeeDashboard";
 import AdminDashboard from "./pages/AdminDashboard";
+import Opportunities from "./pages/Opportunities";
+import OpportunityDetail from "./pages/OpportunityDetail";
+import Profile from "./pages/Profile";
+import Assessments from "./pages/Assessments";
+import TakeAssessment from "./pages/TakeAssessment";
+import Courses from "./pages/Courses";
+import CourseDetail from "./pages/CourseDetail";
 import "./styles.css";
 
 function Home() {
@@ -16,30 +23,32 @@ function Home() {
   return <Redirect to={landingPathForRole(user.role)} />;
 }
 
+function Protected({ children }: { children: React.ReactNode }) {
+  return <ProtectedRoute>{children}</ProtectedRoute>;
+}
+
 function AppRoutes() {
   return (
     <Switch>
       <Route path="/" component={Home} />
       <Route path="/login" component={Login} />
       <Route path="/register" component={Register} />
-      <Route path="/candidate">
-        <ProtectedRoute>
-          <CandidateDashboard />
-        </ProtectedRoute>
-      </Route>
-      <Route path="/employee">
-        <ProtectedRoute>
-          <EmployeeDashboard />
-        </ProtectedRoute>
-      </Route>
-      <Route path="/admin">
-        <ProtectedRoute>
-          <AdminDashboard />
-        </ProtectedRoute>
-      </Route>
-      <Route>
-        <div className="page-loading">Page not found.</div>
-      </Route>
+
+      {/* Candidate journey */}
+      <Route path="/opportunities"><Protected><Opportunities /></Protected></Route>
+      <Route path="/opportunities/:id"><Protected><OpportunityDetail /></Protected></Route>
+      <Route path="/candidate"><Protected><CandidateDashboard /></Protected></Route>
+      <Route path="/profile"><Protected><Profile /></Protected></Route>
+      <Route path="/assessments"><Protected><Assessments /></Protected></Route>
+      <Route path="/assessments/:applicationId"><Protected><TakeAssessment /></Protected></Route>
+      <Route path="/courses"><Protected><Courses /></Protected></Route>
+      <Route path="/courses/:id"><Protected><CourseDetail /></Protected></Route>
+
+      {/* Employee / staff */}
+      <Route path="/employee"><Protected><EmployeeDashboard /></Protected></Route>
+      <Route path="/admin"><Protected><AdminDashboard /></Protected></Route>
+
+      <Route><div className="page-loading">Page not found.</div></Route>
     </Switch>
   );
 }

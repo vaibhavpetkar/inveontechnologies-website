@@ -310,3 +310,19 @@ Found while reviewing your production logs during the login debugging: `express-
 Fixed with `app.set("trust proxy", 1)` — trusts exactly one hop (nginx), which is correct for this deployment shape; doesn't blindly trust arbitrary forwarded headers from further upstream.
 
 **Verified live**: sent a request with a real `X-Forwarded-For` header (matching what nginx actually sends) against a locally rebuilt server — confirmed zero `ERR_ERL_UNEXPECTED_X_FORWARDED_FOR` occurrences in the logs, and that register/login work correctly end to end with the header present.
+
+## Post-Phase-11 addition — complete candidate journey UI
+
+You reported the candidate flow felt like "missing logic." It wasn't — every API existed and was tested, but only login/register had frontend pages, so none of it was reachable in a browser. Built the full journey:
+
+- **Opportunities** browse + search, and detail/apply (catches `PROFILE_INCOMPLETE` and links to the profile page; surfaces eligibility mismatches as an honest warning rather than hiding them)
+- **Profile** — name/phone (required to apply) plus degree/graduation year/CGPA/skills
+- **Applications dashboard** — status badges, expandable history timeline, withdraw, and a prompt when an assessment invite arrives
+- **Assessments** — list, plus a real exam runner with a live countdown, answered-progress bar, and **auto-submit when the timer hits zero** so answers aren't lost (the server remains the authority on expiry — the timer just mirrors it)
+- **Courses** — list, detail, enroll, lesson progress, and the full payment flow: "Pay now" shows the honest not-implemented message, "Skip for now" grants access with the 2-day deadline shown, and an expired grace period shows the blocked-access notice
+
+**Backend gap found and fixed while building this**: there was **no way for a candidate to discover their own assessment attempt ID**. Every attempt route is keyed by attempt id, but that id was only ever surfaced in the invite email — which is stubbed and never actually sent (Phase 9 doesn't exist). The assessment flow was literally unreachable through any UI. Added `GET /api/v1/assessment-attempts/by-application/:applicationId`, ownership-checked, registered before `/:id` to avoid the route-shadowing trap hit twice before in this codebase.
+
+**Verified live, all 16 steps against a fresh database**: register → browse → apply-blocked-by-incomplete-profile → complete profile → apply → admin invites to assessment → candidate finds attempt via the new endpoint → start exam → submit → scored 100% → application auto-transitions to `assessment_completed` → an unrelated user correctly gets 403 on that attempt → "Pay now" correctly 501s → "Skip for now" grants access with a 2-day deadline → lesson completes during grace → force-expire the deadline → access correctly blocked with `PAYMENT_OVERDUE` → admin marks paid → access restored.
+
+**Known limitations**: reloading the page mid-exam loses the in-memory questions (the start endpoint only returns them once) — the UI shows a clear message rather than silently breaking, but resuming a reloaded attempt needs a backend change. No employee/admin UI beyond the existing summary dashboards.

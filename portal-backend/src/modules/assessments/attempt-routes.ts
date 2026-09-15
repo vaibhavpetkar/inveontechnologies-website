@@ -94,6 +94,27 @@ export function attemptRouter(db: Database, env: Env) {
     return { attempt, application, isOwner, isPrivileged };
   }
 
+  /**
+   * Look up the attempt belonging to an application. Without this a
+   * candidate has no way to reach their own assessment: every other
+   * attempt route is keyed by attempt id, and that id was previously
+   * only ever surfaced in the invite email — which is stubbed and never
+   * actually sent (Phase 9 doesn't exist). Registered BEFORE "/:id" so
+   * the literal "by-application" segment isn't captured as an id.
+   */
+  router.get("/by-application/:applicationId", requireAuth(env), async (req, res) => {
+    const application = await db.query.applications.findFirst({ where: eq(applications.id, req.params.applicationId) });
+    if (!application) throw new NotFoundError("Application not found");
+
+    const isPrivileged = PIPELINE_ROLES.includes(req.user!.role as (typeof PIPELINE_ROLES)[number]);
+    if (application.userId !== req.user!.sub && !isPrivileged) throw new ForbiddenError();
+
+    const attempt = await db.query.assessmentAttempts.findFirst({ where: eq(assessmentAttempts.applicationId, application.id) });
+    if (!attempt) throw new NotFoundError("No assessment attempt exists for this application");
+
+    res.json({ attempt });
+  });
+
   router.post("/:id/start", requireAuth(env), async (req, res) => {
     const { attempt } = await getOwnedAttempt(req, true);
 

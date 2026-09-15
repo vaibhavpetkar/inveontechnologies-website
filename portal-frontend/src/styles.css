@@ -290,3 +290,174 @@ button {
   margin-top: 0.6rem;
   line-height: 1.6;
 }
+
+/* --- Candidate journey shared UI --- */
+
+.stack {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1.1rem 1.25rem;
+}
+
+.card-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+
+.card-meta {
+  color: var(--muted);
+  font-size: 0.875rem;
+  margin-top: 0.3rem;
+}
+
+.card-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  background: rgba(100, 116, 139, 0.12);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.badge-active { background: rgba(37, 99, 235, 0.12); color: var(--primary-dark); }
+.badge-good   { background: rgba(22, 163, 74, 0.12); color: #15803d; }
+.badge-warn   { background: rgba(217, 119, 6, 0.14); color: #b45309; }
+.badge-bad    { background: var(--danger-surface); color: var(--danger); }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 0.55rem 0.95rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s ease;
+}
+
+.btn:hover:not(:disabled) { background: var(--primary-dark); }
+.btn:disabled { opacity: 0.55; cursor: default; }
+
+.btn-secondary {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+.btn-secondary:hover:not(:disabled) { background: var(--surface); }
+
+.btn-danger {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+
+.btn-danger:hover:not(:disabled) { background: var(--danger-surface); }
+
+.notice {
+  border-radius: 8px;
+  padding: 0.8rem 1rem;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  margin-top: 1rem;
+}
+
+.notice-info { background: rgba(37, 99, 235, 0.08); color: var(--primary-dark); }
+.notice-warn { background: rgba(217, 119, 6, 0.1); color: #b45309; }
+
+.dash-nav {
+  display: flex;
+  gap: 1.25rem;
+  padding: 0 2rem;
+  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+}
+
+.dash-nav a {
+  padding: 0.85rem 0;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+}
+
+.dash-nav a:hover { color: var(--ink); }
+.dash-nav a.active { color: var(--primary-dark); border-bottom-color: var(--primary); }
+
+.empty {
+  color: var(--muted);
+  padding: 2.5rem 0;
+  text-align: center;
+}
+
+.timeline-item {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.9rem;
+}
+
+.timeline-date { color: var(--muted); white-space: nowrap; font-size: 0.825rem; }
+
+.question-block { padding: 1.25rem 0; border-bottom: 1px solid var(--line); }
+.question-text { font-weight: 600; margin-bottom: 0.75rem; }
+
+.option-label {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 0.5rem;
+  cursor: pointer;
+  font-size: 0.925rem;
+}
+
+.option-label:hover { background: var(--surface); }
+.option-label.selected { border-color: var(--primary); background: rgba(37, 99, 235, 0.06); }
+
+.exam-timer {
+  position: sticky;
+  top: 0;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.7rem 1rem;
+  font-weight: 600;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  z-index: 10;
+}
+
+.exam-timer.urgent { border-color: var(--danger); color: var(--danger); }
+
+.progress-bar { height: 6px; background: var(--line); border-radius: 999px; overflow: hidden; margin-top: 0.6rem; }
+.progress-fill { height: 100%; background: var(--primary); transition: width 0.3s ease; }

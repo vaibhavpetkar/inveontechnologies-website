@@ -12,7 +12,7 @@ const ROLE_LABELS: Record<string, string> = {
   super_admin: "Super Admin",
 };
 
-export function DashboardShell({ children }: { children: ReactNode }) {
+export function DashboardShell({ children, nav }: { children: ReactNode; nav?: ReactNode }) {
   const { user, logout } = useAuth();
   const [, navigate] = useLocation();
 
@@ -33,6 +33,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
           </button>
         </div>
       </header>
+      {nav}
       <main className="dash-body">{children}</main>
     </div>
   );
