@@ -14,6 +14,10 @@ import Assessments from "./pages/Assessments";
 import TakeAssessment from "./pages/TakeAssessment";
 import Courses from "./pages/Courses";
 import CourseDetail from "./pages/CourseDetail";
+import VerifyEmail from "./pages/VerifyEmail";
+import ForgotPassword from "./pages/ForgotPassword";
+import ResetPassword from "./pages/ResetPassword";
+import CertificateVerify from "./pages/CertificateVerify";
 import "./styles.css";
 
 function Home() {
@@ -33,6 +37,11 @@ function AppRoutes() {
       <Route path="/" component={Home} />
       <Route path="/login" component={Login} />
       <Route path="/register" component={Register} />
+      {/* Public: reached from links in emails */}
+      <Route path="/verify-email" component={VerifyEmail} />
+      <Route path="/forgot-password" component={ForgotPassword} />
+      <Route path="/reset-password" component={ResetPassword} />
+      <Route path="/verify/:code" component={CertificateVerify} />
 
       {/* Candidate journey */}
       <Route path="/opportunities"><Protected><Opportunities /></Protected></Route>

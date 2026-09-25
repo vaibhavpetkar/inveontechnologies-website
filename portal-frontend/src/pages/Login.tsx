@@ -101,6 +101,10 @@ export default function Login() {
             {submitting ? "Signing in…" : "Sign in"}
           </button>
 
+          <p className="login-footnote" style={{ marginTop: "0.75rem" }}>
+            <Link href="/forgot-password" style={{ color: "var(--primary)" }}>Forgot your password?</Link>
+          </p>
+
           <p className="login-footnote">
             Don't have an account yet?{" "}
             <Link href="/register" style={{ color: "var(--primary)", fontWeight: 600 }}>

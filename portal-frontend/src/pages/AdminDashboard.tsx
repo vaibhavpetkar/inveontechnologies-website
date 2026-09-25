@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { DashboardShell } from "../components/DashboardShell";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/api";
+import { TeamAccounts } from "../components/TeamAccounts";
 
 export default function AdminDashboard() {
   const { user, accessToken } = useAuth();
@@ -40,6 +41,8 @@ export default function AdminDashboard() {
           ))}
         </div>
       )}
+
+      {user?.role === "super_admin" && <TeamAccounts />}
     </DashboardShell>
   );
 }

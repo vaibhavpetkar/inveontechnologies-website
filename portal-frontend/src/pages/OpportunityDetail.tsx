@@ -25,6 +25,8 @@ export default function OpportunityDetail() {
   const [applyError, setApplyError] = useState<string | null>(null);
   const [profileIncomplete, setProfileIncomplete] = useState(false);
   const [warnings, setWarnings] = useState<string[] | null>(null);
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [resendState, setResendState] = useState<"idle" | "sending" | "sent" | "failed">("idle");
 
   useEffect(() => {
     if (!params?.id) return;
@@ -38,6 +40,7 @@ export default function OpportunityDetail() {
     setApplying(true);
     setApplyError(null);
     setProfileIncomplete(false);
+    setNeedsVerification(false);
     try {
       const res = await apiFetch<{ eligibilityWarning: string[] | null }>(
         `/api/v1/applications/opportunities/${params.id}/apply`,
@@ -53,6 +56,7 @@ export default function OpportunityDetail() {
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.code === "PROFILE_INCOMPLETE") setProfileIncomplete(true);
+        else if (err.code === "EMAIL_NOT_VERIFIED") setNeedsVerification(true);
         else if (err.code === "DUPLICATE_APPLICATION") setApplyError("You've already applied to this opportunity.");
         else setApplyError(err.message);
       } else {
@@ -60,6 +64,16 @@ export default function OpportunityDetail() {
       }
     } finally {
       setApplying(false);
+    }
+  }
+
+  async function resendVerification() {
+    setResendState("sending");
+    try {
+      await apiFetch("/api/v1/auth/resend-verification", { method: "POST", accessToken });
+      setResendState("sent");
+    } catch {
+      setResendState("failed");
     }
   }
 
@@ -117,6 +131,19 @@ export default function OpportunityDetail() {
         <div className="notice notice-warn">
           Add your name and phone number before applying.{" "}
           <Link href="/profile" style={{ fontWeight: 600 }}>Complete your profile →</Link>
+        </div>
+      )}
+
+      {needsVerification && (
+        <div className="notice notice-warn">
+          Verify your email address before applying — open the link we emailed you.{" "}
+          {resendState === "sent" ? (
+            <strong>New link sent.</strong>
+          ) : (
+            <button className="btn btn-secondary" onClick={resendVerification} disabled={resendState === "sending"} style={{ marginLeft: "0.5rem" }}>
+              {resendState === "sending" ? "Sending…" : resendState === "failed" ? "Try again" : "Resend link"}
+            </button>
+          )}
         </div>
       )}
 
