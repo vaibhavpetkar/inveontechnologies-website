@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, lt } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
 import { applications, applicationEvents, candidateProfiles, opportunities } from "../shared/db/schema.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
@@ -27,7 +27,9 @@ const listMineQuerySchema = z.object({
 
 const pipelineQuerySchema = z.object({
   opportunityId: z.string().uuid(),
-  status: z.enum(["submitted", "under_review", "shortlisted", "selected", "rejected", "withdrawn"]).optional(),
+  status: z
+    .enum(["submitted", "under_review", "assessment_invited", "assessment_completed", "shortlisted", "selected", "rejected", "withdrawn"])
+    .optional(),
   cursor: z.coerce.number().int().optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
@@ -103,6 +105,7 @@ export function applicationsRouter(db: Database, env: Env) {
   router.get("/me", requireAuth(env), async (req, res) => {
     const query = listMineQuerySchema.parse(req.query);
     const conditions = [eq(applications.userId, req.user!.sub)];
+    if (query.cursor) conditions.push(lt(applications.seqNumber, query.cursor));
 
     const rows = await db.query.applications.findMany({
       where: and(...conditions),
@@ -111,7 +114,7 @@ export function applicationsRouter(db: Database, env: Env) {
       with: { opportunity: true },
     });
 
-    res.json({ applications: rows });
+    res.json({ applications: rows, nextCursor: rows.length === query.limit ? rows[rows.length - 1].seqNumber : null });
   });
 
   // --- Candidate: withdraw own application ---
@@ -169,7 +172,8 @@ export function applicationsRouter(db: Database, env: Env) {
     const query = pipelineQuerySchema.parse(req.query);
     const conditions = [eq(applications.opportunityId, query.opportunityId)];
     if (query.status) conditions.push(eq(applications.status, query.status));
-    if (query.cursor) conditions.push(eq(applications.seqNumber, query.cursor)); // simple cursor placeholder — refined when pagination needs grow
+    // Keyset pagination: rows are ordered by seqNumber desc, so the next page is everything below the cursor.
+    if (query.cursor) conditions.push(lt(applications.seqNumber, query.cursor));
 
     const rows = await db.query.applications.findMany({
       where: and(...conditions),
@@ -177,7 +181,7 @@ export function applicationsRouter(db: Database, env: Env) {
       limit: query.limit,
     });
 
-    res.json({ applications: rows });
+    res.json({ applications: rows, nextCursor: rows.length === query.limit ? rows[rows.length - 1].seqNumber : null });
   });
 
   // --- Admin pipeline: move an application through the state machine ---

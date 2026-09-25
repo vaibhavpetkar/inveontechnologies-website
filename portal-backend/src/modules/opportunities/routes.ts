@@ -7,6 +7,7 @@ import { optionalAuth, requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import { slugify } from "../shared/slugify.js";
+import { resolveSkillIds } from "../shared/skills.js";
 import { formatBusinessId } from "../shared/business-id.js";
 import type { Env } from "../shared/env.js";
 
@@ -35,23 +36,6 @@ const listQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
 
-async function resolveSkillIds(db: Database, names: string[]): Promise<string[]> {
-  if (names.length === 0) return [];
-  const ids: string[] = [];
-  for (const rawName of names) {
-    const name = rawName.trim();
-    if (!name) continue;
-    const slug = slugify(name);
-    const existing = await db.query.skills.findFirst({ where: eq(skills.slug, slug) });
-    if (existing) {
-      ids.push(existing.id);
-    } else {
-      const [created] = await db.insert(skills).values({ name, slug }).returning();
-      ids.push(created.id);
-    }
-  }
-  return ids;
-}
 
 export function opportunitiesRouter(db: Database, env: Env) {
   const router = Router();

@@ -4,8 +4,13 @@ export function toCsv(rows: Record<string, unknown>[]): string {
   const columns = Object.keys(rows[0]);
   const escape = (value: unknown): string => {
     if (value === null || value === undefined) return "";
-    const str = value instanceof Date ? value.toISOString() : String(value);
-    if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
+    let str = value instanceof Date ? value.toISOString() : String(value);
+    // Spreadsheet formula injection: user-controlled text (task titles, etc.)
+    // starting with = + - @ would be executed as a formula when the export is
+    // opened in Excel/Sheets. Prefixing a quote makes it plain text. Numbers
+    // (e.g. a negative value) are left alone.
+    if (typeof value === "string" && /^[=+\-@\t\r]/.test(str)) str = `'${str}`;
+    if (/[",\r\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`;
     return str;
   };
   const header = columns.join(",");

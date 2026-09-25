@@ -36,6 +36,12 @@ export class ForbiddenError extends AppError {
   }
 }
 
+const PG_CLIENT_ERRORS: Record<string, { status: number; code: string; message: string }> = {
+  "22P02": { status: 400, code: "INVALID_INPUT", message: "Invalid identifier or value in request" },
+  "23503": { status: 400, code: "INVALID_REFERENCE", message: "A referenced record does not exist" },
+  "23505": { status: 409, code: "CONFLICT", message: "This record already exists" },
+};
+
 // Consistent response shape for every error, per docs/architecture.md API conventions.
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   const requestId = (req as Request & { id?: string }).id ?? randomUUID();
@@ -51,6 +57,16 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     res.status(err.status).json({
       error: { code: err.code, message: err.message, requestId },
     });
+    return;
+  }
+
+  // Postgres errors caused by client input (a malformed uuid in a path
+  // param, a reference to a row that doesn't exist, a unique clash no
+  // route-specific handler caught) are the caller's fault, not a 500.
+  const pgCode = typeof err === "object" && err !== null && "code" in err ? (err as { code?: unknown }).code : undefined;
+  const pgError = typeof pgCode === "string" ? PG_CLIENT_ERRORS[pgCode] : undefined;
+  if (pgError) {
+    res.status(pgError.status).json({ error: { code: pgError.code, message: pgError.message, requestId } });
     return;
   }
 
