@@ -98,6 +98,19 @@ services:
       - events_internal
     # No published ports — only events-api (same network) can reach it.
 
+  events-redis:
+    image: redis:7-alpine
+    container_name: events_redis
+    restart: unless-stopped
+    networks:
+      - events_internal
+    # No published ports — only events-api (same network) can reach it.
+    # Dedicated to Events, not shared with crm_redis — same reasoning as
+    # events-postgres being its own service rather than sharing
+    # portal-postgres or a CRM database: separate failure domain, no
+    # key-namespace collisions, no unrelated app's traffic affecting this
+    # one's cache/OTP storage.
+
   events-api:
     image: ghcr.io/inveon-technologies/events-api:${EVENTS_IMAGE_TAG:-latest}
     container_name: events_api
@@ -108,8 +121,16 @@ services:
       - /var/www/Events/apps/api/.env
     environment:
       NODE_ENV: production
+    volumes:
+      # Uploaded logos, banners, gallery photos and ticket/certificate
+      # artwork (served by the API at /api/uploads/...). Without this they
+      # live in the container and are lost every time it is recreated.
+      # With S3_BUCKET set in the API's .env, uploads go to S3 instead and
+      # this stays empty.
+      - events-uploads:/app/uploads
     depends_on:
       - events-postgres
+      - events-redis
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
       interval: 15s
@@ -141,6 +162,7 @@ volumes:
   portal-postgres-data:
   events-postgres-data:
   events-web-static:
+  events-uploads:
 
 networks:
   crm_network:
