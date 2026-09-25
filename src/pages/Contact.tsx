@@ -1,12 +1,20 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Helmet } from 'react-helmet-async';
+import { SOCIAL_LINKS } from '@/data/site';
 import { Mail, MapPin, Clock, Send, CheckCircle, Linkedin, Twitter, Github, ArrowRight } from 'lucide-react';
 
 const fadeUp = {
   hidden: { opacity: 0, y: 32 },
   visible: (i = 0) => ({ opacity: 1, y: 0, transition: { duration: 0.6, delay: i * 0.1, ease: 'easeOut' } }),
 };
+
+// Social icons appear only for profiles configured in data/site.ts.
+const socialProfiles = [
+  { href: SOCIAL_LINKS.linkedin, label: 'LinkedIn', Icon: Linkedin },
+  { href: SOCIAL_LINKS.twitter, label: 'Twitter', Icon: Twitter },
+  { href: SOCIAL_LINKS.github, label: 'GitHub', Icon: Github },
+].filter((p) => p.href);
 
 const services = [
   'AI Development & Integration',
@@ -223,20 +231,18 @@ export default function Contact() {
                     <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
                       <Clock className="w-4 h-4 text-primary" />
                     </div>
-                    Mon–Fri, 9AM–6PM (Your Timezone)
+                    Mon–Fri, 9AM–6PM IST
                   </div>
                 </div>
-                <div className="flex items-center gap-3 mt-5 pt-5 border-t border-border">
-                  <a href="https://linkedin.com" target="_blank" rel="noopener noreferrer" className="w-9 h-9 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-primary hover:border-primary/40 transition-all">
-                    <Linkedin className="w-4 h-4" />
-                  </a>
-                  <a href="https://twitter.com" target="_blank" rel="noopener noreferrer" className="w-9 h-9 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-primary hover:border-primary/40 transition-all">
-                    <Twitter className="w-4 h-4" />
-                  </a>
-                  <a href="https://github.com" target="_blank" rel="noopener noreferrer" className="w-9 h-9 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-primary hover:border-primary/40 transition-all">
-                    <Github className="w-4 h-4" />
-                  </a>
-                </div>
+                {socialProfiles.length > 0 && (
+                  <div className="flex items-center gap-3 mt-5 pt-5 border-t border-border">
+                    {socialProfiles.map(({ href, label, Icon }) => (
+                      <a key={label} href={href} target="_blank" rel="noopener noreferrer" aria-label={label} className="w-9 h-9 rounded-lg border border-border flex items-center justify-center text-muted-foreground hover:text-primary hover:border-primary/40 transition-all">
+                        <Icon className="w-4 h-4" />
+                      </a>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Offices */}

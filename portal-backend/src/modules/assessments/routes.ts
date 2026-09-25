@@ -7,11 +7,11 @@ import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import { isAdminTransitionAllowed, type ApplicationStatus } from "../applications/state-machine.js";
-import { sendVerificationEmailStub } from "../auth/email-stub.js"; // reused generic stub-link sender pattern
+import { sendAssessmentInviteEmail } from "../shared/emails.js";
 import type { Env } from "../shared/env.js";
+import { PIPELINE_ROLES, assertCanManageApplication } from "../applications/access.js";
 
 const PRIVILEGED_ROLES = ["hr", "admin", "super_admin"] as const;
-const PIPELINE_ROLES = ["manager", "hr", "admin", "super_admin"] as const;
 
 const questionSchema = z.object({
   questionText: z.string().min(3),
@@ -105,6 +105,7 @@ export function assessmentsRouter(db: Database, env: Env) {
 
     const application = await db.query.applications.findFirst({ where: eq(applications.id, req.params.applicationId) });
     if (!application) throw new NotFoundError("Application not found");
+    await assertCanManageApplication(db, req, application);
 
     const from = application.status as ApplicationStatus;
     if (!isAdminTransitionAllowed(from, "assessment_invited")) {
@@ -146,8 +147,14 @@ export function assessmentsRouter(db: Database, env: Env) {
 
     const candidate = await db.query.users.findFirst({ where: eq(users.id, application.userId) });
     if (candidate) {
-      // The portal's exam page is keyed by application id (/assessments/:applicationId).
-      sendVerificationEmailStub(candidate.email, `${env.PORTAL_APP_URL}/assessments/${application.id}`);
+      const opportunity = await db.query.opportunities.findFirst({ where: eq(opportunities.id, application.opportunityId) });
+      sendAssessmentInviteEmail(candidate.email, {
+        assessmentTitle: assessment.title,
+        opportunityTitle: opportunity?.title ?? "your application",
+        durationMinutes: assessment.durationMinutes,
+        // The portal's exam page is keyed by application id (/assessments/:applicationId).
+        link: `${env.PORTAL_APP_URL}/assessments/${application.id}`,
+      });
     }
 
     await writeAuditLog(db, {

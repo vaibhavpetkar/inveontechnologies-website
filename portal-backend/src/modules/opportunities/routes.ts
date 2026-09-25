@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
-import { opportunities, opportunitySkills, skills } from "../shared/db/schema.js";
+import { opportunities, opportunitySkills, skills, users } from "../shared/db/schema.js";
 import { optionalAuth, requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
@@ -24,7 +24,17 @@ const createOpportunitySchema = z.object({
     })
     .default({}),
   skillNames: z.array(z.string().min(1)).default([]),
+  // Manager whose team is hiring — scopes that manager's pipeline access. null clears it.
+  hiringManagerId: z.string().uuid().nullable().optional(),
 });
+
+async function assertHiringManager(db: Database, userId: string | null | undefined) {
+  if (!userId) return;
+  const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
+  if (!user || user.role !== "manager") {
+    throw new AppError("INVALID_HIRING_MANAGER", "hiringManagerId must be the id of a user with the manager role", 400);
+  }
+}
 
 const updateOpportunitySchema = createOpportunitySchema.partial();
 
@@ -123,6 +133,7 @@ export function opportunitiesRouter(db: Database, env: Env) {
   // --- Privileged: create/edit/publish/archive ---
   router.post("/", requireAuth(env), requireRole(...PRIVILEGED_ROLES), async (req, res) => {
     const body = createOpportunitySchema.parse(req.body);
+    await assertHiringManager(db, body.hiringManagerId);
     const skillIds = await resolveSkillIds(db, body.skillNames);
 
     const result = await db.transaction(async (tx) => {
@@ -133,6 +144,7 @@ export function opportunitiesRouter(db: Database, env: Env) {
           slug: slugify(body.title) + "-" + Math.random().toString(36).slice(2, 7),
           description: body.description,
           eligibility: body.eligibility,
+          hiringManagerId: body.hiringManagerId ?? null,
           createdBy: req.user!.sub,
         })
         .returning();
@@ -163,6 +175,7 @@ export function opportunitiesRouter(db: Database, env: Env) {
 
   router.put("/:id", requireAuth(env), requireRole(...PRIVILEGED_ROLES), async (req, res) => {
     const body = updateOpportunitySchema.parse(req.body);
+    await assertHiringManager(db, body.hiringManagerId);
     const existing = await db.query.opportunities.findFirst({ where: eq(opportunities.id, req.params.id) });
     if (!existing) throw new NotFoundError("Opportunity not found");
     if (existing.status === "archived") {
@@ -175,6 +188,7 @@ export function opportunitiesRouter(db: Database, env: Env) {
         ...(body.title ? { title: body.title } : {}),
         ...(body.description ? { description: body.description } : {}),
         ...(body.eligibility ? { eligibility: body.eligibility } : {}),
+        ...(body.hiringManagerId !== undefined ? { hiringManagerId: body.hiringManagerId } : {}),
         updatedAt: new Date(),
       })
       .where(eq(opportunities.id, req.params.id))

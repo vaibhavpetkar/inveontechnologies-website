@@ -7,6 +7,7 @@ import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import type { Env } from "../shared/env.js";
+import { canStaffAccessApplication } from "../applications/access.js";
 
 // Drafting an offer (HR) and sending it (Admin/Super Admin only) are
 // deliberately different privilege levels — a lightweight version of the
@@ -60,8 +61,9 @@ export function offersRouter(db: Database, env: Env) {
   router.get("/applications/:applicationId/offers", requireAuth(env), async (req, res) => {
     const application = await db.query.applications.findFirst({ where: eq(applications.id, req.params.applicationId) });
     if (!application) throw new NotFoundError("Application not found");
-    const isPrivileged = DRAFT_ROLES.includes(req.user!.role as (typeof DRAFT_ROLES)[number]) || req.user!.role === "manager";
-    if (application.userId !== req.user!.sub && !isPrivileged) throw new ForbiddenError();
+    const isOwner = application.userId === req.user!.sub;
+    const isPrivileged = !isOwner && (await canStaffAccessApplication(db, req.user!, application, "view"));
+    if (!isOwner && !isPrivileged) throw new ForbiddenError();
 
     const rows = await db.query.offers.findMany({ where: eq(offers.applicationId, application.id), orderBy: desc(offers.version) });
     const resolved = [];

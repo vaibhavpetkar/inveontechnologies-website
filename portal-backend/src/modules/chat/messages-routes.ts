@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { and, eq, gt } from "drizzle-orm";
+import { and, desc, eq, gt, lt } from "drizzle-orm";
 import rateLimit from "express-rate-limit";
 import type { Database } from "../shared/db/client.js";
 import {
@@ -33,7 +33,7 @@ const sendMessageSchema = z.object({
 const editSchema = z.object({ body: z.string().min(1).max(10000) });
 const reportSchema = z.object({ reason: z.string().min(3).max(1000) });
 const attachSchema = z.object({ fileName: z.string().min(1).max(300), fileUrl: z.string().min(1).max(2000), fileSizeBytes: z.number().int().min(1), mimeType: z.string().min(1) });
-const listQuerySchema = z.object({ channelId: z.string().uuid().optional(), conversationId: z.string().uuid().optional(), afterSeq: z.coerce.number().int().optional(), limit: z.coerce.number().int().min(1).max(100).default(50) });
+const listQuerySchema = z.object({ channelId: z.string().uuid().optional(), conversationId: z.string().uuid().optional(), afterSeq: z.coerce.number().int().optional(), beforeSeq: z.coerce.number().int().optional(), limit: z.coerce.number().int().min(1).max(100).default(50) });
 const markReadSchema = z.object({ channelId: z.string().uuid().optional(), conversationId: z.string().uuid().optional(), lastReadSeq: z.number().int() });
 
 // Keyed per-user (not per-IP) so one abusive account can't hide behind a
@@ -115,9 +115,17 @@ export function messagesRouter(db: Database, env: Env) {
 
     const targetCondition = query.channelId ? eq(messages.channelId, query.channelId) : eq(messages.conversationId, query.conversationId!);
     const conditions = [targetCondition];
-    if (query.afterSeq) conditions.push(gt(messages.seqNumber, query.afterSeq));
-
-    const rows = await db.query.messages.findMany({ where: and(...conditions), orderBy: (m, { asc }) => [asc(m.seqNumber)], limit: query.limit });
+    let rows: (typeof messages.$inferSelect)[];
+    if (query.afterSeq !== undefined) {
+      // Polling for new messages: everything after the client's last seen seq, oldest first.
+      conditions.push(gt(messages.seqNumber, query.afterSeq));
+      rows = await db.query.messages.findMany({ where: and(...conditions), orderBy: (m, { asc }) => [asc(m.seqNumber)], limit: query.limit });
+    } else {
+      // Opening a chat (or scrolling back with beforeSeq): the most recent
+      // page, returned oldest-first so it renders top-to-bottom.
+      if (query.beforeSeq !== undefined) conditions.push(lt(messages.seqNumber, query.beforeSeq));
+      rows = (await db.query.messages.findMany({ where: and(...conditions), orderBy: desc(messages.seqNumber), limit: query.limit })).reverse();
+    }
     const shaped = rows.map((m) => (m.deletedAt ? { ...m, body: "[message deleted]" } : m));
     res.json({ messages: shaped });
   });

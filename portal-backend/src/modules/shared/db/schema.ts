@@ -123,6 +123,10 @@ export const opportunities = pgTable("opportunities", {
   // check can't see. Hard-blocking is a documented option to switch on later.
   eligibility: jsonb("eligibility").notNull().default({}),
   createdBy: uuid("created_by").notNull().references(() => users.id),
+  // The manager whose team is hiring. Managers see and act on the pipeline
+  // only for opportunities they're the hiring manager of (plus applications
+  // they're interviewing) — the "own team" rule in docs/permissions.md.
+  hiringManagerId: uuid("hiring_manager_id").references(() => users.id),
   publishedAt: timestamp("published_at", { withTimezone: true }),
   archivedAt: timestamp("archived_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

@@ -1,4 +1,5 @@
 import { Link } from 'wouter';
+import { CONTACT_EMAIL, PORTAL_URL, SOCIAL_LINKS } from '@/data/site';
 import { Zap, Mail, Linkedin, Twitter, Github, ArrowRight, Globe, Shield, Zap as ZapIcon } from 'lucide-react';
 
 const links = {
@@ -24,20 +25,24 @@ const links = {
     { label: 'Inveon ERP', href: '/products/erp' },
     { label: 'ERPNext Platform', href: '/products/erpnext' },
   ],
+  // Only pages that exist — the template's Documentation / API Reference /
+  // Community / Status / Cookie Policy / Security links all led to 404s.
   resources: [
-    { label: 'Documentation', href: '/docs' },
-    { label: 'API Reference', href: '/api-docs' },
-    { label: 'Community', href: '/community' },
     { label: 'Blog', href: '/insights' },
-    { label: 'Status', href: '/status' },
+    { label: 'Candidate Portal', href: PORTAL_URL, external: true },
+    { label: 'Contact', href: '/contact' },
   ],
   legal: [
     { label: 'Privacy Policy', href: '/privacy' },
     { label: 'Terms of Service', href: '/terms' },
-    { label: 'Cookie Policy', href: '/cookies' },
-    { label: 'Security', href: '/security' },
   ],
 };
+
+const socialProfiles = [
+  { href: SOCIAL_LINKS.linkedin, label: 'LinkedIn', Icon: Linkedin },
+  { href: SOCIAL_LINKS.twitter, label: 'Twitter', Icon: Twitter },
+  { href: SOCIAL_LINKS.github, label: 'GitHub', Icon: Github },
+].filter((p) => p.href);
 
 const features = [
   { icon: Shield, title: 'Security-Focused', desc: 'Security-conscious engineering on every engagement' },
@@ -76,18 +81,14 @@ export default function Footer() {
               ))}
             </div>
 
-            {/* Social Links */}
+            {/* Social Links — only profiles configured in data/site.ts are shown */}
             <div className="flex items-center gap-3">
-              <a href="https://linkedin.com" target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center text-muted-foreground hover:bg-primary/10 hover:text-primary transition-all duration-200" aria-label="LinkedIn">
-                <Linkedin className="w-5 h-5" />
-              </a>
-              <a href="https://twitter.com" target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center text-muted-foreground hover:bg-primary/10 hover:text-primary transition-all duration-200" aria-label="Twitter">
-                <Twitter className="w-5 h-5" />
-              </a>
-              <a href="https://github.com" target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center text-muted-foreground hover:bg-primary/10 hover:text-primary transition-all duration-200" aria-label="GitHub">
-                <Github className="w-5 h-5" />
-              </a>
-              <a href="mailto:inveontechnologies@gmail.com" className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center text-muted-foreground hover:bg-primary/10 hover:text-primary transition-all duration-200" aria-label="Email">
+              {socialProfiles.map(({ href, label, Icon }) => (
+                <a key={label} href={href} target="_blank" rel="noopener noreferrer" className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center text-muted-foreground hover:bg-primary/10 hover:text-primary transition-all duration-200" aria-label={label}>
+                  <Icon className="w-5 h-5" />
+                </a>
+              ))}
+              <a href={`mailto:${CONTACT_EMAIL}`} className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center text-muted-foreground hover:bg-primary/10 hover:text-primary transition-all duration-200" aria-label="Email">
                 <Mail className="w-5 h-5" />
               </a>
             </div>
@@ -144,10 +145,17 @@ export default function Footer() {
             <ul className="flex flex-col gap-3">
               {links.resources.map((l) => (
                 <li key={l.label}>
-                  <Link href={l.href} className="text-sm text-muted-foreground hover:text-primary transition-colors flex items-center gap-2 group">
-                    {l.label}
-                    <ArrowRight className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
-                  </Link>
+                  {'external' in l ? (
+                    <a href={l.href} className="text-sm text-muted-foreground hover:text-primary transition-colors flex items-center gap-2 group">
+                      {l.label}
+                      <ArrowRight className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </a>
+                  ) : (
+                    <Link href={l.href} className="text-sm text-muted-foreground hover:text-primary transition-colors flex items-center gap-2 group">
+                      {l.label}
+                      <ArrowRight className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </Link>
+                  )}
                 </li>
               ))}
             </ul>
@@ -215,9 +223,9 @@ export default function Footer() {
             </p>
             <div className="flex items-center gap-6 text-sm text-muted-foreground">
               {links.legal.map((l) => (
-                <a key={l.label} href={l.href} className="hover:text-foreground transition-colors">
+                <Link key={l.label} href={l.href} className="hover:text-foreground transition-colors">
                   {l.label}
-                </a>
+                </Link>
               ))}
             </div>
             <div className="flex items-center gap-3 text-sm text-muted-foreground">

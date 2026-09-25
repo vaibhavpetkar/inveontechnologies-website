@@ -2,13 +2,13 @@ import { Router } from "express";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
-import { interviewRounds, applications, users } from "../shared/db/schema.js";
+import { interviewRounds, users } from "../shared/db/schema.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import type { Env } from "../shared/env.js";
+import { PIPELINE_ROLES, assertCanManageApplication, canStaffAccessApplication, getApplicationOr404 } from "../applications/access.js";
 
-const PIPELINE_ROLES = ["manager", "hr", "admin", "super_admin"] as const;
 const TERMINAL_APPLICATION_STATUSES = ["rejected", "withdrawn"] as const;
 
 const scheduleSchema = z.object({
@@ -37,8 +37,8 @@ export function interviewsRouter(db: Database, env: Env) {
 
   router.post("/applications/:applicationId/interviews", requireAuth(env), requireRole(...PIPELINE_ROLES), async (req, res) => {
     const body = scheduleSchema.parse(req.body);
-    const application = await db.query.applications.findFirst({ where: eq(applications.id, req.params.applicationId) });
-    if (!application) throw new NotFoundError("Application not found");
+    const application = await getApplicationOr404(db, req.params.applicationId);
+    await assertCanManageApplication(db, req, application);
     if (TERMINAL_APPLICATION_STATUSES.includes(application.status as (typeof TERMINAL_APPLICATION_STATUSES)[number])) {
       throw new AppError("INVALID_STATE", `Cannot schedule an interview for an application in status "${application.status}"`, 400);
     }
@@ -64,10 +64,10 @@ export function interviewsRouter(db: Database, env: Env) {
   });
 
   router.get("/applications/:applicationId/interviews", requireAuth(env), async (req, res) => {
-    const application = await db.query.applications.findFirst({ where: eq(applications.id, req.params.applicationId) });
-    if (!application) throw new NotFoundError("Application not found");
-    const isPrivileged = PIPELINE_ROLES.includes(req.user!.role as (typeof PIPELINE_ROLES)[number]);
-    if (application.userId !== req.user!.sub && !isPrivileged) throw new ForbiddenError();
+    const application = await getApplicationOr404(db, req.params.applicationId);
+    const isOwner = application.userId === req.user!.sub;
+    const isPrivileged = !isOwner && (await canStaffAccessApplication(db, req.user!, application, "view"));
+    if (!isOwner && !isPrivileged) throw new ForbiddenError();
 
     const rows = await db.query.interviewRounds.findMany({
       where: eq(interviewRounds.applicationId, application.id),
@@ -86,6 +86,7 @@ export function interviewsRouter(db: Database, env: Env) {
     const body = rescheduleSchema.parse(req.body);
     const interview = await db.query.interviewRounds.findFirst({ where: eq(interviewRounds.id, req.params.id) });
     if (!interview) throw new NotFoundError("Interview not found");
+    await assertCanManageApplication(db, req, await getApplicationOr404(db, interview.applicationId));
     if (!["scheduled", "no_show", "rescheduled"].includes(interview.status)) {
       throw new AppError("INVALID_STATE", `Cannot reschedule an interview in status "${interview.status}"`, 400);
     }
@@ -109,6 +110,7 @@ export function interviewsRouter(db: Database, env: Env) {
   router.post("/interviews/:id/no-show", requireAuth(env), requireRole(...PIPELINE_ROLES), async (req, res) => {
     const interview = await db.query.interviewRounds.findFirst({ where: eq(interviewRounds.id, req.params.id) });
     if (!interview) throw new NotFoundError("Interview not found");
+    await assertCanManageApplication(db, req, await getApplicationOr404(db, interview.applicationId));
     if (interview.status !== "scheduled") {
       throw new AppError("INVALID_STATE", `Cannot mark no-show on an interview in status "${interview.status}"`, 400);
     }
@@ -126,6 +128,7 @@ export function interviewsRouter(db: Database, env: Env) {
   router.post("/interviews/:id/cancel", requireAuth(env), requireRole(...PIPELINE_ROLES), async (req, res) => {
     const interview = await db.query.interviewRounds.findFirst({ where: eq(interviewRounds.id, req.params.id) });
     if (!interview) throw new NotFoundError("Interview not found");
+    await assertCanManageApplication(db, req, await getApplicationOr404(db, interview.applicationId));
     if (interview.status === "completed" || interview.status === "cancelled") {
       throw new AppError("INVALID_STATE", `Cannot cancel an interview in status "${interview.status}"`, 400);
     }
@@ -144,6 +147,10 @@ export function interviewsRouter(db: Database, env: Env) {
     const body = feedbackSchema.parse(req.body);
     const interview = await db.query.interviewRounds.findFirst({ where: eq(interviewRounds.id, req.params.id) });
     if (!interview) throw new NotFoundError("Interview not found");
+    // The assigned interviewer records feedback; so can anyone who manages this application.
+    if (interview.interviewerId !== req.user!.sub) {
+      await assertCanManageApplication(db, req, await getApplicationOr404(db, interview.applicationId));
+    }
     if (interview.status !== "scheduled") {
       throw new AppError("INVALID_STATE", `Cannot record feedback on an interview in status "${interview.status}"`, 400);
     }

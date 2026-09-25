@@ -54,8 +54,8 @@ export default function Register() {
           <div className="login-form">
             <h2>Account created</h2>
             <p className="login-form-sub">
-              You can sign in right away with the email and password you just set. We'll also send a verification link to your email in a
-              future update — for now, signing in works without it.
+              You can sign in right away with the email and password you just set. We've also sent a verification link to your
+              email — open it to confirm your address (check spam if it doesn't arrive).
             </p>
             <button className="submit-button" onClick={() => navigate("/login")}>
               Go to sign in
