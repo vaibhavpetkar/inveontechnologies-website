@@ -20,7 +20,9 @@ export type ReportKey = (typeof REPORT_KEYS)[number];
 export async function getReportRows(db: Database, key: ReportKey, range: DateRange): Promise<Record<string, unknown>[]> {
   switch (key) {
     case "candidates": {
-      const rows = await db.query.users.findMany({ where: (u, { and }) => and(...dateRangeConditions(u.createdAt, range)) });
+      // Candidates only — this report is visible to HR, and must not list
+      // staff/admin accounts (and their emails) under a "candidates" label.
+      const rows = await db.query.users.findMany({ where: (u, { and, eq }) => and(eq(u.role, "candidate"), ...dateRangeConditions(u.createdAt, range)) });
       const profiles = await db.query.candidateProfiles.findMany();
       const byUser = new Map(profiles.map((p) => [p.userId, p]));
       return rows.map((u) => ({ id: u.id, email: u.email, role: u.role, profileCompleted: byUser.get(u.id)?.profileCompleted ?? false, createdAt: u.createdAt }));

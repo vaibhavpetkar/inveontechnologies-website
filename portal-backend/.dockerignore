@@ -1,0 +1,9 @@
+# Host node_modules must never overwrite the image's own install: argon2 is
+# a native module, and a glibc build from the host breaks on node:alpine.
+node_modules
+dist
+# Secrets are supplied at runtime via docker-compose env_file — keep them
+# out of the image layers.
+.env
+.env.*
+!.env.example

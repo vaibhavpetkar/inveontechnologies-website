@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
 import { candidateProfiles, candidateSkills, skills } from "../shared/db/schema.js";
 import { requireAuth } from "../auth/middleware.js";
-import { slugify } from "../shared/slugify.js";
+import { resolveSkillIds } from "../shared/skills.js";
 import type { Env } from "../shared/env.js";
 
 const updateProfileSchema = z.object({
@@ -17,21 +17,6 @@ const updateProfileSchema = z.object({
   skillNames: z.array(z.string().min(1)).optional(),
 });
 
-async function resolveSkillIds(db: Database, names: string[]): Promise<string[]> {
-  const ids: string[] = [];
-  for (const rawName of names) {
-    const name = rawName.trim();
-    if (!name) continue;
-    const slug = slugify(name);
-    const existing = await db.query.skills.findFirst({ where: eq(skills.slug, slug) });
-    if (existing) ids.push(existing.id);
-    else {
-      const [created] = await db.insert(skills).values({ name, slug }).returning();
-      ids.push(created.id);
-    }
-  }
-  return ids;
-}
 
 export function profileRouter(db: Database, env: Env) {
   const router = Router();

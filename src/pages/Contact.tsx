@@ -103,7 +103,7 @@ export default function Contact() {
                     </div>
                     <h3 className="text-2xl font-bold" style={{ fontFamily: 'Outfit, sans-serif' }}>Message Received!</h3>
                     <p className="text-muted-foreground max-w-sm">
-                      Thank you, <strong className="text-foreground">{form.name}</strong>. Our team will review your inquiry and reach out within 24 hours.
+                      Thank you, <strong className="text-foreground">{form.name}</strong>. Our team will review your inquiry and get back to you soon.
                     </p>
                     <button
                       onClick={() => { setSubmitted(false); setForm({ name: '', company: '', email: '', phone: '', service: '', message: '' }); }}

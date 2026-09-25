@@ -1,9 +1,9 @@
 import { Router } from "express";
 import { z } from "zod";
 import { randomBytes } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
-import { certificateTemplates, certificates, courses, courseEnrollments, users, auditLogs } from "../shared/db/schema.js";
+import { certificateTemplates, certificates, courses, courseEnrollments, users, auditLogs, candidateProfiles } from "../shared/db/schema.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
@@ -29,10 +29,20 @@ function generateVerificationCode(): string {
 
 async function issueCertificateRow(
   db: Database,
-  params: { userId: string; courseId: string; templateId: string; issuedBy: string; supersedesCertificateId?: string },
+  params: {
+    userId: string;
+    courseId: string;
+    templateId: string;
+    issuedBy: string;
+    // Reissue: this certificate is revoked in the SAME transaction as the
+    // new one is issued, so a failed reissue never leaves the recipient
+    // with no active certificate at all.
+    supersedes?: { certificateId: string; reason: string };
+  },
 ) {
-  const [user, course, template] = await Promise.all([
+  const [user, profile, course, template] = await Promise.all([
     db.query.users.findFirst({ where: eq(users.id, params.userId) }),
+    db.query.candidateProfiles.findFirst({ where: eq(candidateProfiles.userId, params.userId) }),
     db.query.courses.findFirst({ where: eq(courses.id, params.courseId) }),
     db.query.certificateTemplates.findFirst({ where: eq(certificateTemplates.id, params.templateId) }),
   ]);
@@ -47,13 +57,20 @@ async function issueCertificateRow(
   }
 
   // "Duplicate issue prevention" — the required check the plan's test list asks for.
-  const existingActive = await db.query.certificates.findFirst({ where: and(eq(certificates.userId, params.userId), eq(certificates.courseId, params.courseId), eq(certificates.status, "issued")) });
+  const existingActive = await db.query.certificates.findFirst({
+    where: and(
+      eq(certificates.userId, params.userId),
+      eq(certificates.courseId, params.courseId),
+      eq(certificates.status, "issued"),
+      ...(params.supersedes ? [ne(certificates.id, params.supersedes.certificateId)] : []),
+    ),
+  });
   if (existingActive) {
     throw new AppError("CERTIFICATE_ALREADY_ISSUED", "An active certificate already exists for this user and course — revoke it first to reissue", 409);
   }
 
   const snapshotContent = renderTemplate(template.bodyTemplate, {
-    recipientName: user.email, // candidateProfiles.fullName would be better; falling back to email keeps this working even if a profile was never filled in
+    recipientName: profile?.fullName ?? user.email, // email fallback keeps this working if a profile was never filled in
     courseTitle: course.title,
     issuedDate: new Date().toISOString().slice(0, 10),
   });
@@ -63,6 +80,23 @@ async function issueCertificateRow(
   // Transaction-safe issue: insert + businessId assignment + audit log all
   // commit together or not at all.
   const certificate = await db.transaction(async (tx) => {
+    const revoked = params.supersedes
+      ? await tx
+          .update(certificates)
+          .set({ status: "revoked", revokedBy: params.issuedBy, revokedAt: new Date(), revokeReason: params.supersedes.reason })
+          .where(and(eq(certificates.id, params.supersedes.certificateId), eq(certificates.status, "issued")))
+          .returning({ id: certificates.id })
+      : [];
+    if (params.supersedes && revoked.length > 0) {
+      await tx.insert(auditLogs).values({
+        actorUserId: params.issuedBy,
+        action: "certificate.revoke",
+        entityType: "certificate",
+        entityId: params.supersedes.certificateId,
+        metadata: { reason: params.supersedes.reason },
+      });
+    }
+
     const [created] = await tx
       .insert(certificates)
       .values({
@@ -72,7 +106,7 @@ async function issueCertificateRow(
         snapshotContent,
         verificationCode,
         issuedBy: params.issuedBy,
-        supersedesCertificateId: params.supersedesCertificateId,
+        supersedesCertificateId: params.supersedes?.certificateId,
       })
       .returning();
 
@@ -182,20 +216,12 @@ export function certificatesRouter(db: Database, env: Env) {
     const original = await db.query.certificates.findFirst({ where: eq(certificates.id, req.params.id) });
     if (!original) throw new NotFoundError("Certificate not found");
 
-    if (original.status === "issued") {
-      await db
-        .update(certificates)
-        .set({ status: "revoked", revokedBy: req.user!.sub, revokedAt: new Date(), revokeReason: `Superseded by reissue: ${body.reason}` })
-        .where(eq(certificates.id, original.id));
-      await writeAuditLog(db, { actorUserId: req.user!.sub, action: "certificate.revoke", entityType: "certificate", entityId: original.id, metadata: { reason: `Superseded by reissue: ${body.reason}` }, ipAddress: req.ip });
-    }
-
     const newCertificate = await issueCertificateRow(db, {
       userId: original.userId,
       courseId: original.courseId,
       templateId: body.templateId ?? original.templateId,
       issuedBy: req.user!.sub,
-      supersedesCertificateId: original.id,
+      supersedes: { certificateId: original.id, reason: `Superseded by reissue: ${body.reason}` },
     });
 
     await writeAuditLog(db, {
@@ -218,8 +244,8 @@ export function certificatesRouter(db: Database, env: Env) {
       return;
     }
 
-    const [user, course] = await Promise.all([
-      db.query.users.findFirst({ where: eq(users.id, certificate.userId) }),
+    const [profile, course] = await Promise.all([
+      db.query.candidateProfiles.findFirst({ where: eq(candidateProfiles.userId, certificate.userId) }),
       db.query.courses.findFirst({ where: eq(courses.id, certificate.courseId) }),
     ]);
 
@@ -227,7 +253,8 @@ export function certificatesRouter(db: Database, env: Env) {
       valid: certificate.status === "issued",
       status: certificate.status,
       businessId: certificate.businessId,
-      recipientName: user?.email ?? "Unknown", // see issueCertificateRow note on recipientName source
+      // Name only — this endpoint is public, so never fall back to the email.
+      recipientName: profile?.fullName ?? null,
       courseTitle: course?.title ?? "Unknown",
       issuedAt: certificate.issuedAt,
       revokedAt: certificate.revokedAt,

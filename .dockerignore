@@ -1,0 +1,8 @@
+# Build context for the marketing-site image (root Dockerfile). The portal
+# apps have their own Dockerfiles/contexts and aren't needed here.
+.git
+node_modules
+**/node_modules
+dist
+portal-backend
+portal-frontend

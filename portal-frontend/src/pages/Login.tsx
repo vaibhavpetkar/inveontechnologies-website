@@ -1,12 +1,11 @@
 import { useState, type FormEvent } from "react";
-import { useLocation, Link } from "wouter";
+import { Link, Redirect } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import { ApiError } from "../lib/api";
 import { landingPathForRole } from "../lib/roles";
 
 export default function Login() {
-  const { login } = useAuth();
-  const [, navigate] = useLocation();
+  const { user, login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -17,8 +16,11 @@ export default function Login() {
     setError(null);
     setSubmitting(true);
     try {
-      const user = await login(email, password);
-      navigate(landingPathForRole(user.role), { replace: true });
+      // No navigate() here: navigating in the same tick as login() rendered
+      // the protected page before the new user state landed, so
+      // ProtectedRoute bounced straight back to /login. The redirect below
+      // runs once the signed-in user is actually in state.
+      await login(email, password);
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.code === "ACCOUNT_LOCKED") {
@@ -35,6 +37,8 @@ export default function Login() {
       setSubmitting(false);
     }
   }
+
+  if (user) return <Redirect to={landingPathForRole(user.role)} replace />;
 
   return (
     <div className="login-screen">

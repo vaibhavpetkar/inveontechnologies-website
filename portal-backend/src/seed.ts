@@ -1,12 +1,12 @@
 import "dotenv/config";
-import { eq } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { createDb } from "./modules/shared/db/client.js";
 import { loadEnv } from "./modules/shared/env.js";
 import { logger } from "./modules/shared/logger.js";
 import { hashPassword } from "./modules/auth/password.js";
 import { users } from "./modules/shared/db/schema.js";
 
-const SEED_SUPER_ADMIN_EMAIL = process.env.SEED_SUPER_ADMIN_EMAIL;
+const SEED_SUPER_ADMIN_EMAIL = process.env.SEED_SUPER_ADMIN_EMAIL?.trim().toLowerCase(); // auth compares emails lowercased
 const SEED_SUPER_ADMIN_PASSWORD = process.env.SEED_SUPER_ADMIN_PASSWORD;
 
 async function main() {
@@ -24,7 +24,7 @@ async function main() {
   const env = loadEnv();
   const { db, pool } = createDb(env);
 
-  const existing = await db.query.users.findFirst({ where: eq(users.email, SEED_SUPER_ADMIN_EMAIL) });
+  const existing = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${SEED_SUPER_ADMIN_EMAIL}` });
   if (existing) {
     logger.info({ email: SEED_SUPER_ADMIN_EMAIL }, "Super admin already exists, skipping.");
   } else {

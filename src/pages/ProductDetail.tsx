@@ -5,6 +5,7 @@ import {
   Users, BarChart3, MessageSquare, TrendingUp,
   Package, DollarSign, Truck, UserCheck,
   Cpu, FileText, RefreshCw, Globe,
+  Brain, LineChart, ShieldCheck, Layers,
   CheckCircle, ArrowRight,
 } from 'lucide-react';
 import NotFound from '@/pages/not-found';
@@ -62,6 +63,23 @@ const products = [
       { icon: Globe, label: 'Third-Party Integrations', desc: 'Stripe, Shopify, WooCommerce, and more connectors available.' },
     ],
     metrics: ['Full source-code ownership', 'Custom module development', 'Cross-version upgrade support'],
+  },
+  {
+    // Listed on /products (which links here) — was missing, so its "Learn more" link 404'd.
+    id: 'ai-suite',
+    name: 'AI Analytics Suite',
+    badge: 'New',
+    badgeColor: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20',
+    tagline: 'From Raw Data to Strategic Clarity',
+    description: 'An AI-powered analytics layer that sits on top of your existing data — ERP, CRM, databases, or data warehouse — delivering executive dashboards, anomaly detection, and natural language querying.',
+    accentColor: 'text-emerald-500',
+    features: [
+      { icon: Brain, label: 'Natural Language Queries', desc: 'Ask questions in plain English, get instant answers from your data.' },
+      { icon: LineChart, label: 'Predictive Dashboards', desc: 'AI forecasts revenue, churn, demand, and supply gaps.' },
+      { icon: ShieldCheck, label: 'Anomaly Detection', desc: 'Automatic alerts for outliers, fraud signals, and data quality issues.' },
+      { icon: Layers, label: 'Multi-Source Ingestion', desc: 'Connect SQL, CSV, APIs, ERP, and CRM in minutes.' },
+    ],
+    metrics: ['Natural language querying', 'Automated anomaly alerts', 'No data scientist required'],
   },
 ];
 

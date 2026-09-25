@@ -146,7 +146,8 @@ export function assessmentsRouter(db: Database, env: Env) {
 
     const candidate = await db.query.users.findFirst({ where: eq(users.id, application.userId) });
     if (candidate) {
-      sendVerificationEmailStub(candidate.email, `${env.PORTAL_APP_URL}/assessments/${attempt.id}`);
+      // The portal's exam page is keyed by application id (/assessments/:applicationId).
+      sendVerificationEmailStub(candidate.email, `${env.PORTAL_APP_URL}/assessments/${application.id}`);
     }
 
     await writeAuditLog(db, {

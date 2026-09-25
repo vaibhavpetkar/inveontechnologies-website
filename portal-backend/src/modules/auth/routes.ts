@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { eq, and, isNull } from "drizzle-orm";
+import { eq, and, isNull, sql } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
 import { users, refreshTokens, verificationTokens } from "../shared/db/schema.js";
 import { hashPassword, verifyPassword } from "./password.js";
@@ -20,18 +20,24 @@ const REFRESH_COOKIE = "portal_refresh_token";
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_MINUTES = 15;
 
+// Emails are compared case-insensitively: "Asha@x.com" and "asha@x.com" are
+// the same inbox, so they must be the same account (not two), and logging
+// in must not depend on how the address was capitalised at sign-up.
+const emailSchema = z.string().trim().email().transform((e) => e.toLowerCase());
+const emailEquals = (email: string) => sql`lower(${users.email}) = ${email}`;
+
 const registerSchema = z.object({
-  email: z.string().email(),
+  email: emailSchema,
   password: z.string().min(10, "Password must be at least 10 characters"),
 });
 
 const loginSchema = z.object({
-  email: z.string().email(),
+  email: emailSchema,
   password: z.string().min(1),
 });
 
 const verifyEmailSchema = z.object({ token: z.string().min(1) });
-const forgotPasswordSchema = z.object({ email: z.string().email() });
+const forgotPasswordSchema = z.object({ email: emailSchema });
 const resetPasswordSchema = z.object({
   token: z.string().min(1),
   newPassword: z.string().min(10, "Password must be at least 10 characters"),
@@ -53,7 +59,7 @@ export function authRouter(db: Database, env: Env) {
   router.post("/register", authRateLimiter, async (req, res) => {
     const body = registerSchema.parse(req.body);
 
-    const existing = await db.query.users.findFirst({ where: eq(users.email, body.email) });
+    const existing = await db.query.users.findFirst({ where: emailEquals(body.email) });
     if (existing) {
       // Same response shape as success to avoid confirming which emails are
       // registered (user-enumeration prevention).
@@ -100,7 +106,7 @@ export function authRouter(db: Database, env: Env) {
     const body = loginSchema.parse(req.body);
     const genericError = () => new AppError("INVALID_CREDENTIALS", "Invalid email or password", 401);
 
-    const user = await db.query.users.findFirst({ where: eq(users.email, body.email) });
+    const user = await db.query.users.findFirst({ where: emailEquals(body.email) });
     if (!user) throw genericError();
 
     if (user.lockedUntil && user.lockedUntil > new Date()) {
@@ -212,7 +218,7 @@ export function authRouter(db: Database, env: Env) {
 
   router.post("/forgot-password", authRateLimiter, async (req, res) => {
     const { email } = forgotPasswordSchema.parse(req.body);
-    const user = await db.query.users.findFirst({ where: eq(users.email, email) });
+    const user = await db.query.users.findFirst({ where: emailEquals(email) });
 
     // Always respond the same way regardless of whether the account exists.
     if (user) {

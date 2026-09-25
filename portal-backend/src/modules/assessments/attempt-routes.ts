@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
 import {
   assessmentAttempts,
@@ -24,14 +24,28 @@ const submitSchema = z.object({
 });
 
 /**
- * Lazy expiry: if the attempt is in_progress and past its expiresAt, finalize
- * it now (score whatever was never submitted as unanswered) instead of
- * waiting for a background job that doesn't exist in this stack yet (see
- * schema.ts comment). Called from both GET and submit so an expired attempt
- * is caught whichever way it's next touched.
+ * A submission that arrives shortly after expiresAt is still accepted. The
+ * candidate's page auto-submits when its countdown reaches zero, so that
+ * request always lands a little after the deadline (network latency, clock
+ * skew); without a grace window every auto-submit was discarded and the
+ * attempt scored as fully unanswered.
+ */
+const SUBMIT_GRACE_MS = 30 * 1000;
+
+function isPastGrace(attempt: typeof assessmentAttempts.$inferSelect): boolean {
+  return !!attempt.expiresAt && attempt.expiresAt.getTime() + SUBMIT_GRACE_MS < Date.now();
+}
+
+/**
+ * Lazy expiry: if the attempt is in_progress and past its expiresAt (plus
+ * the submit grace window), finalize it now (score whatever was never
+ * submitted as unanswered) instead of waiting for a background job that
+ * doesn't exist in this stack yet (see schema.ts comment). Called from both
+ * GET and submit so an expired attempt is caught whichever way it's next
+ * touched.
  */
 async function resolveExpiryIfNeeded(db: Database, attempt: typeof assessmentAttempts.$inferSelect) {
-  if (attempt.status !== "in_progress" || !attempt.expiresAt || attempt.expiresAt > new Date()) {
+  if (attempt.status !== "in_progress" || !isPastGrace(attempt)) {
     return attempt;
   }
 
@@ -40,6 +54,17 @@ async function resolveExpiryIfNeeded(db: Database, attempt: typeof assessmentAtt
   const result = scoreAttempt(questions, [], assessment?.passingScorePercent ?? 60);
 
   const [updated] = await db.transaction(async (tx) => {
+    // Conditional on still being in_progress, so a concurrent submit/expiry
+    // can't both finalize the attempt (and collide on the answers' unique key).
+    const [row] = await tx
+      .update(assessmentAttempts)
+      .set({ status: "expired", scorePercent: result.scorePercent, passed: result.passed })
+      .where(and(eq(assessmentAttempts.id, attempt.id), eq(assessmentAttempts.status, "in_progress")))
+      .returning();
+    if (!row) {
+      return [(await tx.query.assessmentAttempts.findFirst({ where: eq(assessmentAttempts.id, attempt.id) })) ?? attempt];
+    }
+
     await tx.insert(assessmentAttemptAnswers).values(
       result.answers.map((a) => ({
         attemptId: attempt.id,
@@ -49,11 +74,6 @@ async function resolveExpiryIfNeeded(db: Database, attempt: typeof assessmentAtt
         pointsAwarded: a.pointsAwarded,
       })),
     );
-    const [row] = await tx
-      .update(assessmentAttempts)
-      .set({ status: "expired", scorePercent: result.scorePercent, passed: result.passed })
-      .where(eq(assessmentAttempts.id, attempt.id))
-      .returning();
 
     const application = await tx.query.applications.findFirst({ where: eq(applications.id, attempt.applicationId) });
     if (application && isSystemTransitionAllowed(application.status as ApplicationStatus, "assessment_completed")) {
@@ -177,6 +197,15 @@ export function attemptRouter(db: Database, env: Env) {
     const result = scoreAttempt(questions, body.answers, assessment?.passingScorePercent ?? 60);
 
     const updated = await db.transaction(async (tx) => {
+      // Conditional on still being in_progress so a double-click / retried
+      // submit is rejected cleanly instead of colliding on the answers' unique key.
+      const [row] = await tx
+        .update(assessmentAttempts)
+        .set({ status: "scored", submittedAt: new Date(), scorePercent: result.scorePercent, passed: result.passed })
+        .where(and(eq(assessmentAttempts.id, attempt.id), eq(assessmentAttempts.status, "in_progress")))
+        .returning();
+      if (!row) throw new AppError("INVALID_ATTEMPT_STATE", "This attempt has already been submitted", 400);
+
       await tx.insert(assessmentAttemptAnswers).values(
         result.answers.map((a) => ({
           attemptId: attempt.id,
@@ -186,11 +215,6 @@ export function attemptRouter(db: Database, env: Env) {
           pointsAwarded: a.pointsAwarded,
         })),
       );
-      const [row] = await tx
-        .update(assessmentAttempts)
-        .set({ status: "scored", submittedAt: new Date(), scorePercent: result.scorePercent, passed: result.passed })
-        .where(eq(assessmentAttempts.id, attempt.id))
-        .returning();
       return row;
     });
 

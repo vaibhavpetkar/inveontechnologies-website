@@ -34,8 +34,12 @@ export function conversationsRouter(db: Database, env: Env) {
       }
     }
 
-    const [conversation] = await db.insert(privateConversations).values({}).returning();
-    await db.insert(conversationParticipants).values(allParticipantIds.map((userId) => ({ conversationId: conversation.id, userId })));
+    // One transaction, so an unknown participant id can't leave an empty orphan conversation behind.
+    const conversation = await db.transaction(async (tx) => {
+      const [created] = await tx.insert(privateConversations).values({}).returning();
+      await tx.insert(conversationParticipants).values(allParticipantIds.map((userId) => ({ conversationId: created.id, userId })));
+      return created;
+    });
     res.status(201).json({ conversation, existing: false });
   });
 

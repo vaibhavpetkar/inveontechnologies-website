@@ -20,10 +20,25 @@ export default function Opportunities() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Debounced, and stale responses are dropped — otherwise a slow reply
+    // for "rea" can land after the one for "react" and overwrite it.
+    let stale = false;
     const query = search.trim() ? `?search=${encodeURIComponent(search.trim())}` : "";
-    apiFetch<{ opportunities: Opportunity[] }>(`/api/v1/opportunities${query}`, { accessToken })
-      .then((r) => setItems(r.opportunities))
-      .catch(() => setError("Couldn't load opportunities right now."));
+    const timer = setTimeout(() => {
+      apiFetch<{ opportunities: Opportunity[] }>(`/api/v1/opportunities${query}`, { accessToken })
+        .then((r) => {
+          if (stale) return;
+          setItems(r.opportunities);
+          setError(null);
+        })
+        .catch(() => {
+          if (!stale) setError("Couldn't load opportunities right now.");
+        });
+    }, 250);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
   }, [accessToken, search]);
 
   return (

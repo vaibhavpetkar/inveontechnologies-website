@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 
 const ROLE_LABELS: Record<string, string> = {
@@ -14,11 +13,11 @@ const ROLE_LABELS: Record<string, string> = {
 
 export function DashboardShell({ children, nav }: { children: ReactNode; nav?: ReactNode }) {
   const { user, logout } = useAuth();
-  const [, navigate] = useLocation();
 
+  // Clearing the user is enough: every page using this shell sits behind
+  // ProtectedRoute, which redirects to /login once the user is gone.
   async function handleLogout() {
     await logout();
-    navigate("/login", { replace: true });
   }
 
   return (

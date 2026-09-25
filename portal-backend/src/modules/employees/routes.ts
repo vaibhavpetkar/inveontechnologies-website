@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
 import {
   departments,
@@ -85,9 +85,10 @@ export function employeesRouter(db: Database, env: Env) {
       throw new AppError("INVALID_STATE", `Application must be "selected" to onboard, not "${application.status}"`, 400);
     }
 
-    const acceptedOffer = await db.query.offers.findFirst({ where: eq(offers.applicationId, application.id) });
-    const hasAcceptedOffer = acceptedOffer?.status === "accepted";
-    if (!hasAcceptedOffer) {
+    // An application can have several offer versions (a reissue is a new
+    // row) — look for the accepted one, not whichever row comes back first.
+    const acceptedOffer = await db.query.offers.findFirst({ where: and(eq(offers.applicationId, application.id), eq(offers.status, "accepted")) });
+    if (!acceptedOffer) {
       throw new AppError("OFFER_NOT_ACCEPTED", "Cannot onboard without an accepted offer for this application", 400);
     }
 
