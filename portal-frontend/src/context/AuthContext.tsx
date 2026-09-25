@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-import { apiFetch, ApiError } from "../lib/api";
+import { apiFetch, ApiError, getSessionGeneration, onSessionChange, refreshSession, startNewSession } from "../lib/api";
 
 export type UserRole = "candidate" | "intern" | "employee" | "manager" | "hr" | "admin" | "super_admin";
 
@@ -30,13 +30,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Keep React state in step with silent refreshes done by apiFetch. A
+  // failed refresh (null) means the session is gone — sign out locally so
+  // ProtectedRoute sends the person back to the login page.
+  useEffect(() => {
+    onSessionChange((token) => {
+      setAccessToken(token);
+      if (!token) setUser(null);
+    });
+    return () => onSessionChange(null);
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
-        const refreshed = await apiFetch<{ accessToken: string }>("/api/v1/auth/refresh", { method: "POST" });
-        const me = await apiFetch<AuthUser>("/api/v1/auth/me", { accessToken: refreshed.accessToken });
-        setAccessToken(refreshed.accessToken);
-        setUser(me);
+        // refreshSession() de-duplicates concurrent calls, so StrictMode's
+        // double-invoked effect doesn't fire two racing refreshes.
+        const generation = getSessionGeneration();
+        const token = await refreshSession();
+        if (!token) return;
+        const me = await apiFetch<AuthUser>("/api/v1/auth/me", { accessToken: token });
+        // Ignore if the person signed in/out while this was in flight.
+        if (generation === getSessionGeneration()) setUser(me);
       } catch {
         // No valid session — that's fine, the person just sees the login page.
       } finally {
@@ -50,6 +65,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       method: "POST",
       body: { email, password },
     });
+    startNewSession();
     setAccessToken(result.accessToken);
     setUser(result.user);
     return result.user;
@@ -62,6 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Even if the network call fails, clear local state so the UI
       // reflects "logged out" immediately.
     }
+    startNewSession();
     setAccessToken(null);
     setUser(null);
   }, []);

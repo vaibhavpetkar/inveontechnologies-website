@@ -8,6 +8,25 @@ import { apiFetch, ApiError } from "../lib/api";
 interface Question { id: string; questionText: string; options: { id: string; text: string }[]; points: number }
 interface Attempt { id: string; status: string; expiresAt: string | null; scorePercent: number | null; passed: boolean | null }
 
+// Answers are mirrored to sessionStorage so a reload mid-attempt doesn't wipe
+// them. Storage can be unavailable (private mode, blocked site data), so
+// every access is best-effort.
+const answersKey = (attemptId: string) => `assessment-answers:${attemptId}`;
+function loadSavedAnswers(attemptId: string): Record<string, string> {
+  try {
+    return JSON.parse(sessionStorage.getItem(answersKey(attemptId)) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+function saveAnswers(attemptId: string, answers: Record<string, string>) {
+  try {
+    sessionStorage.setItem(answersKey(attemptId), JSON.stringify(answers));
+  } catch {
+    // Non-critical — answers still live in component state.
+  }
+}
+
 function formatRemaining(ms: number) {
   if (ms <= 0) return "00:00";
   const total = Math.floor(ms / 1000);
@@ -28,13 +47,43 @@ export default function TakeAssessment() {
   const [submitting, setSubmitting] = useState(false);
   const submittedRef = useRef(false);
 
-  // Load the attempt for this application.
+  // Load the attempt for this application. If it's already in progress
+  // (the page was reloaded mid-attempt), fetch its questions too — the
+  // backend serves them without answer keys while the attempt is open.
+  const applicationId = params?.applicationId;
+  const hasToken = !!accessToken;
   useEffect(() => {
-    if (!params?.applicationId || !accessToken) return;
-    apiFetch<{ attempt: Attempt }>(`/api/v1/assessment-attempts/by-application/${params.applicationId}`, { accessToken })
-      .then((r) => setAttempt(r.attempt))
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Couldn't load your assessment."));
-  }, [params?.applicationId, accessToken]);
+    if (!applicationId || !hasToken) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await apiFetch<{ attempt: Attempt }>(`/api/v1/assessment-attempts/by-application/${applicationId}`, { accessToken });
+        if (r.attempt.status !== "in_progress") {
+          if (!cancelled) setAttempt(r.attempt);
+          return;
+        }
+        const full = await apiFetch<{ attempt: Attempt; questions: Question[] }>(`/api/v1/assessment-attempts/${r.attempt.id}`, { accessToken });
+        if (cancelled) return;
+        setAttempt(full.attempt);
+        if (full.attempt.status === "in_progress") {
+          setQuestions(full.questions);
+          setAnswers(loadSavedAnswers(full.attempt.id));
+        }
+      } catch (err) {
+        if (!cancelled) setError(err instanceof ApiError ? err.message : "Couldn't load your assessment.");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Load once per application — a silent token refresh changes
+    // accessToken but must not reload the attempt mid-exam.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applicationId, hasToken]);
+
+  useEffect(() => {
+    if (attempt?.status === "in_progress") saveAnswers(attempt.id, answers);
+  }, [attempt?.id, attempt?.status, answers]);
 
   const handleSubmit = useCallback(async (auto = false) => {
     if (!attempt || submittedRef.current) return;
@@ -48,8 +97,21 @@ export default function TakeAssessment() {
       );
       setAttempt({ ...attempt, status: "scored", scorePercent: r.scorePercent, passed: r.passed });
       setQuestions(null);
+      try {
+        sessionStorage.removeItem(answersKey(attempt.id));
+      } catch {
+        // ignore
+      }
     } catch (err) {
-      submittedRef.current = false;
+      if (err instanceof ApiError && err.code === "INVALID_ATTEMPT_STATE") {
+        // Already submitted or expired server-side — show the final result
+        // rather than letting the countdown retry every second.
+        apiFetch<{ attempt: Attempt }>(`/api/v1/assessment-attempts/${attempt.id}`, { accessToken })
+          .then((r) => { setAttempt(r.attempt); setQuestions(null); })
+          .catch(() => {});
+      } else {
+        submittedRef.current = false;
+      }
       setError(err instanceof ApiError ? err.message : (auto ? "Time ran out, but submitting failed." : "Couldn't submit."));
     } finally {
       setSubmitting(false);
@@ -64,12 +126,12 @@ export default function TakeAssessment() {
     const tick = () => {
       const left = new Date(attempt.expiresAt!).getTime() - Date.now();
       setRemaining(left);
-      if (left <= 0) handleSubmit(true);
+      if (left <= 0 && questions) handleSubmit(true);
     };
     tick();
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
-  }, [attempt, handleSubmit]);
+  }, [attempt, questions, handleSubmit]);
 
   async function handleStart() {
     if (!attempt) return;
@@ -169,12 +231,7 @@ export default function TakeAssessment() {
         </>
       )}
 
-      {attempt.status === "in_progress" && !questions && (
-        <div className="notice notice-warn">
-          This assessment is already in progress but the questions aren't loaded in this session.{" "}
-          Reload isn't supported mid-attempt — contact an administrator if you're stuck.
-        </div>
-      )}
+      {attempt.status === "in_progress" && !questions && !submitting && <p className="empty">Loading questions…</p>}
     </DashboardShell>
   );
 }

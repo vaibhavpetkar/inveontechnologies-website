@@ -52,7 +52,8 @@ export default function Profile() {
         phone: form.phone || undefined,
         bio: form.bio || undefined,
         degree: form.degree || undefined,
-        skillNames: form.skillNames ? form.skillNames.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
+        // Always sent (possibly empty) so clearing the field actually removes skills.
+        skillNames: form.skillNames.split(",").map((s) => s.trim()).filter(Boolean),
       };
       if (form.graduationYear) body.graduationYear = Number(form.graduationYear);
       if (form.cgpa) body.cgpa = Number(form.cgpa);
