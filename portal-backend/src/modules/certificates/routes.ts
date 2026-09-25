@@ -8,7 +8,7 @@ import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import { formatBusinessId } from "../shared/business-id.js";
-import { logger } from "../shared/logger.js";
+import { sendCertificateIssuedEmail } from "../shared/emails.js";
 import type { Env } from "../shared/env.js";
 
 const PRIVILEGED_ROLES = ["hr", "admin", "super_admin"] as const;
@@ -34,6 +34,7 @@ async function issueCertificateRow(
     courseId: string;
     templateId: string;
     issuedBy: string;
+    appUrl: string; // for the public verification link in the notification email
     // Reissue: this certificate is revoked in the SAME transaction as the
     // new one is issued, so a failed reissue never leaves the recipient
     // with no active certificate at all.
@@ -124,10 +125,11 @@ async function issueCertificateRow(
     return updated;
   });
 
-  // Notification / email outbox event: Phase 9 (real transactional outbox)
-  // doesn't exist yet, so this is the interim equivalent — same stubbed-log
-  // pattern used everywhere else in this codebase for "would send an email".
-  logger.info({ toEmail: user.email, certificateId: certificate.businessId }, "[EMAIL STUB] Certificate issued notification would be sent");
+  sendCertificateIssuedEmail(user.email, {
+    courseTitle: course.title,
+    businessId: certificate.businessId ?? "",
+    verifyLink: `${params.appUrl}/verify/${certificate.verificationCode}`,
+  });
 
   return certificate;
 }
@@ -165,7 +167,7 @@ export function courseCertificateIssueRouter(db: Database, env: Env) {
 
   router.post("/:courseId/certificates/issue", requireAuth(env), requireRole(...PRIVILEGED_ROLES), async (req, res) => {
     const body = issueSchema.parse(req.body);
-    const certificate = await issueCertificateRow(db, { userId: body.userId, courseId: req.params.courseId, templateId: body.templateId, issuedBy: req.user!.sub });
+    const certificate = await issueCertificateRow(db, { userId: body.userId, courseId: req.params.courseId, templateId: body.templateId, issuedBy: req.user!.sub, appUrl: env.PORTAL_APP_URL });
     res.status(201).json({ certificate });
   });
 
@@ -221,6 +223,7 @@ export function certificatesRouter(db: Database, env: Env) {
       courseId: original.courseId,
       templateId: body.templateId ?? original.templateId,
       issuedBy: req.user!.sub,
+      appUrl: env.PORTAL_APP_URL,
       supersedes: { certificateId: original.id, reason: `Superseded by reissue: ${body.reason}` },
     });
 

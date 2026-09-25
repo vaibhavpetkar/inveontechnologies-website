@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { and, eq, or } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
 import {
   tasks,
@@ -11,6 +11,9 @@ import {
   taskTimeEntries,
   taskEvents,
   courseEnrollments,
+  employees,
+  projects,
+  projectMembers,
   assessmentAttempts,
   applications,
   certificates,
@@ -71,6 +74,38 @@ function addInterval(date: Date, frequency: "daily" | "weekly" | "monthly"): Dat
   return d;
 }
 
+// Candidates are applicants, not staff — they have no business creating or
+// assigning work items.
+const TASK_ROLES = ["intern", "employee", ...MANAGER_LIKE_ROLES] as const;
+
+/** Creator, a privileged role, or someone who can manage the task's project. */
+async function canEditTask(db: Database, userId: string, role: string, task: typeof tasks.$inferSelect): Promise<boolean> {
+  if (PRIVILEGED_ROLES.includes(role as (typeof PRIVILEGED_ROLES)[number])) return true;
+  if (task.createdBy === userId) return true;
+  return task.projectId ? canManageProject(db, userId, role, task.projectId) : false;
+}
+
+/**
+ * Assigning work to someone else needs authority over it: within a project,
+ * the project's owner/lead (and the assignee must be on the project);
+ * outside a project, a manager-like role. Anyone may assign to themselves.
+ */
+async function assertCanAssign(db: Database, user: { sub: string; role: string }, assigneeId: string | undefined | null, projectId: string | undefined | null) {
+  if (!assigneeId || assigneeId === user.sub) return;
+  if (projectId) {
+    if (!(await canManageProject(db, user.sub, user.role, projectId))) {
+      throw new ForbiddenError("Only the project owner or a lead can assign project tasks to other people");
+    }
+    const project = await db.query.projects.findFirst({ where: eq(projects.id, projectId) });
+    const member = await db.query.projectMembers.findFirst({ where: and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, assigneeId)) });
+    if (project?.ownerId !== assigneeId && !member) throw new AppError("ASSIGNEE_NOT_ON_PROJECT", "The assignee must be a member of this project", 400);
+    return;
+  }
+  if (!MANAGER_LIKE_ROLES.includes(user.role as (typeof MANAGER_LIKE_ROLES)[number])) {
+    throw new ForbiddenError("Only managers, HR and admins can assign personal tasks to other people");
+  }
+}
+
 async function canAccessTask(db: Database, userId: string, role: string, task: typeof tasks.$inferSelect): Promise<boolean> {
   if (PRIVILEGED_ROLES.includes(role as (typeof PRIVILEGED_ROLES)[number])) return true;
   if (task.assigneeId === userId || task.createdBy === userId) return true;
@@ -81,9 +116,10 @@ async function canAccessTask(db: Database, userId: string, role: string, task: t
 export function tasksRouter(db: Database, env: Env) {
   const router = Router();
 
-  router.post("/", requireAuth(env), async (req, res) => {
+  router.post("/", requireAuth(env), requireRole(...TASK_ROLES), async (req, res) => {
     const body = createTaskSchema.parse(req.body);
     if (body.projectId && !(await canAccessProject(db, req.user!.sub, req.user!.role, body.projectId))) throw new ForbiddenError();
+    await assertCanAssign(db, req.user!, body.assigneeId, body.projectId);
 
     if (body.parentTaskId) {
       const parent = await db.query.tasks.findFirst({ where: eq(tasks.id, body.parentTaskId) });
@@ -225,6 +261,8 @@ export function tasksRouter(db: Database, env: Env) {
 
   router.post("/from-template", requireAuth(env), requireRole(...MANAGER_LIKE_ROLES), async (req, res) => {
     const body = fromTemplateSchema.parse(req.body);
+    if (body.projectId && !(await canAccessProject(db, req.user!.sub, req.user!.role, body.projectId))) throw new ForbiddenError();
+    await assertCanAssign(db, req.user!, body.assigneeId, body.projectId);
     const template = await db.query.taskTemplates.findFirst({ where: eq(taskTemplates.id, body.templateId) });
     if (!template) throw new NotFoundError("Task template not found");
 
@@ -248,6 +286,7 @@ export function tasksRouter(db: Database, env: Env) {
   router.post("/:id/recurrence", requireAuth(env), requireRole(...MANAGER_LIKE_ROLES), async (req, res) => {
     const task = await db.query.tasks.findFirst({ where: eq(tasks.id, req.params.id) });
     if (!task) throw new NotFoundError("Task not found");
+    if (!(await canEditTask(db, req.user!.sub, req.user!.role, task))) throw new ForbiddenError();
     const body = recurrenceSchema.parse(req.body);
     const [recurrence] = await db.insert(taskRecurrences).values({ templateTaskId: task.id, frequency: body.frequency, nextRunAt: new Date(body.nextRunAt) }).returning();
     res.status(201).json({ recurrence });
@@ -263,6 +302,7 @@ export function tasksRouter(db: Database, env: Env) {
 
     const templateTask = await db.query.tasks.findFirst({ where: eq(tasks.id, recurrence.templateTaskId) });
     if (!templateTask) throw new NotFoundError("Template task not found");
+    if (!(await canEditTask(db, req.user!.sub, req.user!.role, templateTask))) throw new ForbiddenError();
 
     const [newTask] = await db
       .insert(tasks)
@@ -295,7 +335,18 @@ export function tasksRouter(db: Database, env: Env) {
     const projectId = typeof req.query.projectId === "string" ? req.query.projectId : undefined;
     if (projectId && !(await canAccessProject(db, req.user!.sub, req.user!.role, projectId))) throw new ForbiddenError();
 
-    const rows = await db.query.tasks.findMany({ where: projectId ? eq(tasks.projectId, projectId) : undefined });
+    let rows: (typeof tasks.$inferSelect)[];
+    if (projectId) {
+      rows = await db.query.tasks.findMany({ where: eq(tasks.projectId, projectId) });
+    } else if (PRIVILEGED_ROLES.includes(req.user!.role as (typeof PRIVILEGED_ROLES)[number])) {
+      rows = await db.query.tasks.findMany();
+    } else {
+      // A manager's team = projects they own or lead.
+      const owned = await db.query.projects.findMany({ where: eq(projects.ownerId, req.user!.sub) });
+      const led = await db.query.projectMembers.findMany({ where: and(eq(projectMembers.userId, req.user!.sub), eq(projectMembers.roleOnProject, "lead")) });
+      const projectIds = [...new Set([...owned.map((p) => p.id), ...led.map((m) => m.projectId)])];
+      rows = projectIds.length ? await db.query.tasks.findMany({ where: inArray(tasks.projectId, projectIds) }) : [];
+    }
     const byAssignee: Record<string, { total: number; active: number; overdue: number }> = {};
     for (const t of rows) {
       if (!t.assigneeId) continue;
@@ -310,8 +361,11 @@ export function tasksRouter(db: Database, env: Env) {
   router.get("/growth/:userId", requireAuth(env), async (req, res) => {
     const targetUserId = req.params.userId;
     const isPrivileged = PRIVILEGED_ROLES.includes(req.user!.role as (typeof PRIVILEGED_ROLES)[number]);
-    const isManager = req.user!.role === "manager"; // MVP: any manager can view; team-scoping deferred (same limitation as earlier phases' manager role)
-    if (targetUserId !== req.user!.sub && !isPrivileged && !isManager) throw new ForbiddenError();
+    if (targetUserId !== req.user!.sub && !isPrivileged) {
+      // Managers see growth for their own direct reports only.
+      const report = req.user!.role === "manager" ? await db.query.employees.findFirst({ where: and(eq(employees.userId, targetUserId), eq(employees.managerId, req.user!.sub)) }) : undefined;
+      if (!report) throw new ForbiddenError();
+    }
 
     const [myTasks, enrollments, applicationsForUser, skills] = await Promise.all([
       db.query.tasks.findMany({ where: eq(tasks.assigneeId, targetUserId) }),
@@ -351,8 +405,15 @@ export function tasksRouter(db: Database, env: Env) {
   router.put("/:id", requireAuth(env), async (req, res) => {
     const task = await db.query.tasks.findFirst({ where: eq(tasks.id, req.params.id) });
     if (!task) throw new NotFoundError("Task not found");
-    if (!(await canAccessTask(db, req.user!.sub, req.user!.role, task))) throw new ForbiddenError();
     const body = updateTaskSchema.parse(req.body);
+    // The assignee may edit their task's details; changing who it's
+    // assigned to (or editing someone else's task) needs edit rights.
+    const isEditor = await canEditTask(db, req.user!.sub, req.user!.role, task);
+    if (!isEditor && task.assigneeId !== req.user!.sub) throw new ForbiddenError();
+    if (body.assigneeId !== undefined && body.assigneeId !== task.assigneeId) {
+      if (!isEditor) throw new ForbiddenError("Only the task's creator or a project lead can reassign it");
+      await assertCanAssign(db, req.user!, body.assigneeId, task.projectId);
+    }
 
     const [updated] = await db
       .update(tasks)

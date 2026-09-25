@@ -66,11 +66,17 @@ export function requireRole(...allowed: string[]) {
 }
 
 // Brute-force protection on the sensitive auth endpoints. Deliberately
-// stricter than a general API rate limit.
-export const authRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: { code: "RATE_LIMITED", message: "Too many attempts, try again later" } },
-});
+// stricter than a general API rate limit. Each endpoint gets its OWN counter
+// — with one shared limiter, signing up and then logging in (plus a
+// verification click) ate into the same 10-attempt budget.
+// Keyed by req.ip: correct only if nginx resolves the real client IP when
+// Cloudflare is in front (see the real_ip block in nginx/inveontechnologies.in.conf).
+export function createAuthRateLimiter(limit = 10, windowMinutes = 15) {
+  return rateLimit({
+    windowMs: windowMinutes * 60 * 1000,
+    limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: { code: "RATE_LIMITED", message: "Too many attempts, try again later" } },
+  });
+}

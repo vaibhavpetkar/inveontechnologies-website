@@ -16,8 +16,8 @@ import { scoreAttempt } from "./scoring.js";
 import { isSystemTransitionAllowed, type ApplicationStatus } from "../applications/state-machine.js";
 import { applyApplicationTransition } from "../applications/transition-helper.js";
 import type { Env } from "../shared/env.js";
+import { canStaffAccessApplication } from "../applications/access.js";
 
-const PIPELINE_ROLES = ["manager", "hr", "admin", "super_admin"] as const;
 
 const submitSchema = z.object({
   answers: z.array(z.object({ questionId: z.string().uuid(), selectedOptionId: z.string().nullable() })),
@@ -106,8 +106,8 @@ export function attemptRouter(db: Database, env: Env) {
     const application = await db.query.applications.findFirst({ where: eq(applications.id, attempt.applicationId) });
     if (!application) throw new NotFoundError("Application not found");
 
-    const isPrivileged = PIPELINE_ROLES.includes(req.user!.role as (typeof PIPELINE_ROLES)[number]);
     const isOwner = application.userId === req.user!.sub;
+    const isPrivileged = !isOwner && (await canStaffAccessApplication(db, req.user!, application, "view"));
     if (requireOwner && !isOwner) throw new ForbiddenError();
     if (!requireOwner && !isOwner && !isPrivileged) throw new ForbiddenError();
 
@@ -126,8 +126,9 @@ export function attemptRouter(db: Database, env: Env) {
     const application = await db.query.applications.findFirst({ where: eq(applications.id, req.params.applicationId) });
     if (!application) throw new NotFoundError("Application not found");
 
-    const isPrivileged = PIPELINE_ROLES.includes(req.user!.role as (typeof PIPELINE_ROLES)[number]);
-    if (application.userId !== req.user!.sub && !isPrivileged) throw new ForbiddenError();
+    if (application.userId !== req.user!.sub && !(await canStaffAccessApplication(db, req.user!, application, "view"))) {
+      throw new ForbiddenError();
+    }
 
     const attempt = await db.query.assessmentAttempts.findFirst({ where: eq(assessmentAttempts.applicationId, application.id) });
     if (!attempt) throw new NotFoundError("No assessment attempt exists for this application");

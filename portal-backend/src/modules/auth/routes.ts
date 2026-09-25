@@ -10,8 +10,8 @@ import {
   hashRefreshToken,
   generateOneTimeToken,
 } from "./tokens.js";
-import { sendVerificationEmailStub, sendPasswordResetEmailStub } from "./email-stub.js";
-import { requireAuth, authRateLimiter } from "./middleware.js";
+import { sendVerificationEmail, sendPasswordResetEmail } from "../shared/emails.js";
+import { requireAuth, createAuthRateLimiter } from "./middleware.js";
 import { writeAuditLog } from "../shared/audit.js";
 import { AppError, UnauthorizedError } from "../shared/errors.js";
 import type { Env } from "../shared/env.js";
@@ -55,8 +55,16 @@ function refreshCookieOptions(env: Env) {
 
 export function authRouter(db: Database, env: Env) {
   const router = Router();
+  const limits = {
+    register: createAuthRateLimiter(5, 60),
+    verifyEmail: createAuthRateLimiter(),
+    resendVerification: createAuthRateLimiter(3, 60),
+    login: createAuthRateLimiter(),
+    forgotPassword: createAuthRateLimiter(5, 60),
+    resetPassword: createAuthRateLimiter(),
+  };
 
-  router.post("/register", authRateLimiter, async (req, res) => {
+  router.post("/register", limits.register, async (req, res) => {
     const body = registerSchema.parse(req.body);
 
     const existing = await db.query.users.findFirst({ where: emailEquals(body.email) });
@@ -78,13 +86,13 @@ export function authRouter(db: Database, env: Env) {
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     });
 
-    sendVerificationEmailStub(user.email, `${env.PORTAL_APP_URL}/verify-email?token=${plaintext}`);
+    sendVerificationEmail(user.email, `${env.PORTAL_APP_URL}/verify-email?token=${plaintext}`);
     await writeAuditLog(db, { actorUserId: user.id, action: "user.register", entityType: "user", entityId: user.id, ipAddress: req.ip });
 
     res.status(201).json({ message: "If registration succeeded, check your email to verify your account." });
   });
 
-  router.post("/verify-email", authRateLimiter, async (req, res) => {
+  router.post("/verify-email", limits.verifyEmail, async (req, res) => {
     const { token } = verifyEmailSchema.parse(req.body);
     const hash = hashRefreshToken(token);
 
@@ -102,7 +110,26 @@ export function authRouter(db: Database, env: Env) {
     res.json({ message: "Email verified." });
   });
 
-  router.post("/login", authRateLimiter, async (req, res) => {
+  // For a signed-in user whose verification link expired or never arrived.
+  router.post("/resend-verification", requireAuth(env), limits.resendVerification, async (req, res) => {
+    const user = await db.query.users.findFirst({ where: eq(users.id, req.user!.sub) });
+    if (!user) throw new UnauthorizedError();
+    if (user.emailVerified) {
+      res.json({ message: "Your email is already verified." });
+      return;
+    }
+    const { plaintext, hash } = generateOneTimeToken();
+    await db.insert(verificationTokens).values({
+      userId: user.id,
+      tokenHash: hash,
+      purpose: "email_verify",
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    });
+    sendVerificationEmail(user.email, `${env.PORTAL_APP_URL}/verify-email?token=${plaintext}`);
+    res.json({ message: "Verification email sent." });
+  });
+
+  router.post("/login", limits.login, async (req, res) => {
     const body = loginSchema.parse(req.body);
     const genericError = () => new AppError("INVALID_CREDENTIALS", "Invalid email or password", 401);
 
@@ -216,7 +243,7 @@ export function authRouter(db: Database, env: Env) {
     res.json({ message: "Logged out." });
   });
 
-  router.post("/forgot-password", authRateLimiter, async (req, res) => {
+  router.post("/forgot-password", limits.forgotPassword, async (req, res) => {
     const { email } = forgotPasswordSchema.parse(req.body);
     const user = await db.query.users.findFirst({ where: emailEquals(email) });
 
@@ -229,14 +256,14 @@ export function authRouter(db: Database, env: Env) {
         purpose: "password_reset",
         expiresAt: new Date(Date.now() + 60 * 60 * 1000),
       });
-      sendPasswordResetEmailStub(user.email, `${env.PORTAL_APP_URL}/reset-password?token=${plaintext}`);
+      sendPasswordResetEmail(user.email, `${env.PORTAL_APP_URL}/reset-password?token=${plaintext}`);
       await writeAuditLog(db, { actorUserId: user.id, action: "user.password_reset_requested", entityType: "user", entityId: user.id, ipAddress: req.ip });
     }
 
     res.json({ message: "If that email is registered, a reset link has been sent." });
   });
 
-  router.post("/reset-password", authRateLimiter, async (req, res) => {
+  router.post("/reset-password", limits.resetPassword, async (req, res) => {
     const { token, newPassword } = resetPasswordSchema.parse(req.body);
     const hash = hashRefreshToken(token);
 

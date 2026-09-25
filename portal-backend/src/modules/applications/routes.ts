@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
-import { applications, applicationEvents, candidateProfiles, opportunities } from "../shared/db/schema.js";
+import { applications, applicationEvents, candidateProfiles, opportunities, users } from "../shared/db/schema.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
@@ -10,8 +10,7 @@ import { formatBusinessId } from "../shared/business-id.js";
 import { checkEligibility, type EligibilityCriteria } from "./eligibility.js";
 import { isAdminTransitionAllowed, isCandidateTransitionAllowed, type ApplicationStatus } from "./state-machine.js";
 import type { Env } from "../shared/env.js";
-
-const PIPELINE_ROLES = ["manager", "hr", "admin", "super_admin"] as const;
+import { PIPELINE_ROLES, assertCanManageApplication, canViewApplication, isRecruitmentAdmin } from "./access.js";
 
 const applySchema = z.object({}).optional(); // no body fields needed yet — reserved for a future cover-note field
 
@@ -45,6 +44,13 @@ export function applicationsRouter(db: Database, env: Env) {
     const opportunity = await db.query.opportunities.findFirst({ where: eq(opportunities.id, opportunityId) });
     if (!opportunity || opportunity.status !== "published") {
       throw new NotFoundError("Opportunity not found or not accepting applications");
+    }
+
+    if (env.PORTAL_REQUIRE_EMAIL_VERIFICATION) {
+      const user = await db.query.users.findFirst({ where: eq(users.id, req.user!.sub) });
+      if (!user?.emailVerified) {
+        throw new AppError("EMAIL_NOT_VERIFIED", "Verify your email address before applying — check your inbox for the link", 403);
+      }
     }
 
     const profile = await db.query.candidateProfiles.findFirst({ where: eq(candidateProfiles.userId, req.user!.sub) });
@@ -146,8 +152,7 @@ export function applicationsRouter(db: Database, env: Env) {
     const application = await db.query.applications.findFirst({ where: eq(applications.id, req.params.id), with: { opportunity: true } });
     if (!application) throw new NotFoundError("Application not found");
 
-    const isPrivileged = PIPELINE_ROLES.includes(req.user!.role as (typeof PIPELINE_ROLES)[number]);
-    if (application.userId !== req.user!.sub && !isPrivileged) throw new ForbiddenError();
+    if (!(await canViewApplication(db, req, application))) throw new ForbiddenError();
 
     res.json({ application });
   });
@@ -157,8 +162,7 @@ export function applicationsRouter(db: Database, env: Env) {
     const application = await db.query.applications.findFirst({ where: eq(applications.id, req.params.id) });
     if (!application) throw new NotFoundError("Application not found");
 
-    const isPrivileged = PIPELINE_ROLES.includes(req.user!.role as (typeof PIPELINE_ROLES)[number]);
-    if (application.userId !== req.user!.sub && !isPrivileged) throw new ForbiddenError();
+    if (!(await canViewApplication(db, req, application))) throw new ForbiddenError();
 
     const events = await db.query.applicationEvents.findMany({
       where: eq(applicationEvents.applicationId, application.id),
@@ -170,6 +174,13 @@ export function applicationsRouter(db: Database, env: Env) {
   // --- Admin pipeline: list applications for an opportunity ---
   router.get("/", requireAuth(env), requireRole(...PIPELINE_ROLES), async (req, res) => {
     const query = pipelineQuerySchema.parse(req.query);
+    if (!isRecruitmentAdmin(req.user!.role)) {
+      const opportunity = await db.query.opportunities.findFirst({ where: eq(opportunities.id, query.opportunityId) });
+      if (!opportunity) throw new NotFoundError("Opportunity not found");
+      if (opportunity.hiringManagerId !== req.user!.sub) {
+        throw new ForbiddenError("You can only view the pipeline for opportunities where you are the hiring manager");
+      }
+    }
     const conditions = [eq(applications.opportunityId, query.opportunityId)];
     if (query.status) conditions.push(eq(applications.status, query.status));
     // Keyset pagination: rows are ordered by seqNumber desc, so the next page is everything below the cursor.
@@ -189,6 +200,7 @@ export function applicationsRouter(db: Database, env: Env) {
     const body = transitionSchema.parse(req.body);
     const application = await db.query.applications.findFirst({ where: eq(applications.id, req.params.id) });
     if (!application) throw new NotFoundError("Application not found");
+    await assertCanManageApplication(db, req, application);
 
     const from = application.status as ApplicationStatus;
     if (!isAdminTransitionAllowed(from, body.toStatus)) {

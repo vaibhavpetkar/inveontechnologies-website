@@ -30,10 +30,12 @@ import { messagesRouter } from "./modules/chat/messages-routes.js";
 import { presenceRouter } from "./modules/chat/presence-routes.js";
 import { reportsRouter } from "./modules/reports/routes.js";
 import { featureFlagsRouter, notificationPreferencesRouter, bulkActionsRouter } from "./modules/admin/routes.js";
-import { verifyAccessToken } from "./modules/auth/tokens.js";
+import { usersRouter } from "./modules/admin/users-routes.js";
+import { configureMailer } from "./modules/shared/mailer.js";
 
 const env = loadEnv();
 const { db, pool } = createDb(env);
+configureMailer(env);
 const app = express();
 // Behind nginx (and Cloudflare in front of that) — trust exactly one hop
 // so req.ip and X-Forwarded-For-based rate limiting resolve to the real
@@ -112,6 +114,7 @@ app.use("/api/v1/reports", reportsRouter(db, env));
 app.use("/api/v1/feature-flags", featureFlagsRouter(db, env));
 app.use("/api/v1/notification-preferences", notificationPreferencesRouter(db, env));
 app.use("/api/v1/bulk", bulkActionsRouter(db, env));
+app.use("/api/v1/users", usersRouter(db, env));
 
 // Future feature routes mount here:
 // app.use("/api/v1/employees", employeesRouter(db, env));
