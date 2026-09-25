@@ -26,6 +26,7 @@ Recorded per the project plan's instruction: the AI must not silently invent the
 2. **Where does Postgres run?** ~~New container vs existing server~~ → **Decided: new `portal-postgres` container**, dedicated `portal` DB/user, on an internal-only `portal_internal` Docker network (not exposed to host or to `crm_crm_network`) — only `portal-backend` can reach it.
 3. **Roles**: ~~confirm/trim~~ → **Decided: kept the full list** (Candidate, Intern, Employee, Manager, HR, Admin, Super Admin) as a Postgres enum. Trimming later is a migration, not a rewrite, so this is low-cost to revisit.
 4. **Email/OTP**: ~~stub or real~~ → **Decided: stubbed.** Verification and password-reset links are logged (`[EMAIL STUB]` in server logs) instead of emailed, until Phase 9 (Mailcow). The call sites (`auth/routes.ts`) already isolate this behind `auth/email-stub.ts` so swapping in real Mailcow sending later doesn't touch route logic.
+   **Update:** real sending is now implemented (`shared/mailer.ts` + `shared/emails.ts`, nodemailer over SMTP). It is enabled by setting `PORTAL_SMTP_*` — see `docs/domain-and-deployment.md`; without it, emails are still only logged.
 
 ## Phase 1 — what shipped
 
