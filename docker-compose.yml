@@ -128,6 +128,11 @@ services:
       # With S3_BUCKET set in the API's .env, uploads go to S3 instead and
       # this stays empty.
       - events-uploads:/app/uploads
+      # Super admin portal (Events docs/ops/SUPER_ADMIN.md): its .zip
+      # backups, and the server helper's folder (status, logs, actions),
+      # created by /var/www/Events/scripts/server/install-admin-agent.sh.
+      - events-backups:/app/backups
+      - /var/lib/inveon-ops:/app/ops
     depends_on:
       - events-postgres
       - events-redis
@@ -163,6 +168,7 @@ volumes:
   events-postgres-data:
   events-web-static:
   events-uploads:
+  events-backups:
 
 networks:
   crm_network:
