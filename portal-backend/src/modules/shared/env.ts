@@ -26,6 +26,19 @@ const envSchema = z.object({
   PORTAL_SMTP_USER: z.string().optional(),
   PORTAL_SMTP_PASSWORD: z.string().optional(),
   PORTAL_MAIL_FROM: z.string().default("Inveon Portal <no-reply@inveontechnologies.in>"),
+  // Google Meet links for calendar events: an OAuth client plus the refresh
+  // token of the account that owns the meetings. Leave unset to hide the
+  // Google Meet option. See docs/calendar-integrations.md.
+  PORTAL_GOOGLE_CLIENT_ID: z.string().optional(),
+  PORTAL_GOOGLE_CLIENT_SECRET: z.string().optional(),
+  PORTAL_GOOGLE_REFRESH_TOKEN: z.string().optional(),
+  PORTAL_GOOGLE_CALENDAR_ID: z.string().default("primary"),
+  // Zoom links: a Server-to-Server OAuth app. Leave unset to hide Zoom.
+  PORTAL_ZOOM_ACCOUNT_ID: z.string().optional(),
+  PORTAL_ZOOM_CLIENT_ID: z.string().optional(),
+  PORTAL_ZOOM_CLIENT_SECRET: z.string().optional(),
+  // The Zoom user that hosts the meetings ("me" = the app's owner).
+  PORTAL_ZOOM_USER: z.string().default("me"),
   // Require candidates to verify their email before applying. Off by
   // default so accounts created before email sending was configured aren't
   // locked out; switch on once SMTP is working.

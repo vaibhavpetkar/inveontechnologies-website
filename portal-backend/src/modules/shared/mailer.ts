@@ -40,6 +40,9 @@ export interface OutgoingEmail {
   to: string;
   subject: string;
   text: string;
+  // A calendar invite (RFC 5545 text). Sent as a text/calendar part so mail
+  // apps show it as an invitation with Yes/No/Maybe buttons.
+  icalEvent?: { method: "REQUEST" | "CANCEL"; content: string };
 }
 
 /**
@@ -68,6 +71,12 @@ export async function deliverEmail(email: OutgoingEmail): Promise<void> {
     logger.info({ toEmail: email.to, subject: email.subject, text: email.text }, "[EMAIL NOT SENT — SMTP not configured]");
     return;
   }
-  await transporter.sendMail({ from: fromAddress, to: email.to, subject: email.subject, text: email.text });
+  await transporter.sendMail({
+    from: fromAddress,
+    to: email.to,
+    subject: email.subject,
+    text: email.text,
+    icalEvent: email.icalEvent ? { method: email.icalEvent.method, filename: "invite.ics", content: email.icalEvent.content } : undefined,
+  });
   logger.info({ toEmail: email.to, subject: email.subject }, "Email sent");
 }
