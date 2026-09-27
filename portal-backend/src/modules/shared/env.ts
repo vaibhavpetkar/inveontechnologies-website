@@ -56,6 +56,8 @@ const envSchema = z.object({
   GITHUB_DEFAULT_REPO: z.string().regex(/^[\w.-]+\/[\w.-]+$/).optional(),
   // Test-only override of the GitHub API base URL.
   GITHUB_API_BASE: z.string().optional(),
+  // Day of the month (India time) from which the payroll job drafts that month's payslips for HR to review.
+  PAYROLL_DRAFT_DAY: z.coerce.number().int().min(1).max(28).default(25),
   // Require candidates to verify their email before applying. Off by
   // default so accounts created before email sending was configured aren't
   // locked out; switch on once SMTP is working.

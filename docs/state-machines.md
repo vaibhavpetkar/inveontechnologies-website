@@ -79,3 +79,13 @@ stateDiagram-v2
 ```
 
 Implemented in `payments/`. During a trial the opening's courses are enrolled with `payment_status = pending` and `payment_due_at = trial_ends_at`, so the LMS's existing overdue check pauses them when the trial ends; paying or waiving clears it. A payment is confirmed either by Cashfree's webhook (signature checked over the raw body) or by the return page calling `/program/enrollments/:id/verify`, which reads the order from Cashfree; both are idempotent. The joining form is open once the candidate is on trial, paid or waived.
+
+## Payslip
+
+```
+(none) --draft (HR, or the monthly job from PAYROLL_DRAFT_DAY)--> draft
+draft  --loss-of-pay change or refresh--> draft (recalculated)
+draft  --publish (HR)--> published   (final: emailed to the employee, never edited)
+```
+
+Pay for a month = each earning × payable days / days in month, where payable days start at the joining date (if they joined that month) less loss-of-pay days. Deductions are fixed and never exceed what was earned.

@@ -1,4 +1,4 @@
-import { BookOpen, CalendarDays, Briefcase, ClipboardCheck, FileText, KanbanSquare, LayoutDashboard, MessagesSquare, UserRound, Users, type LucideIcon } from "lucide-react";
+import { BookOpen, CalendarDays, Briefcase, ClipboardCheck, FileText, IndianRupee, KanbanSquare, LayoutDashboard, MessagesSquare, ReceiptIndianRupee, UserRound, Users, type LucideIcon } from "lucide-react";
 import type { UserRole } from "../context/AuthContext";
 
 export interface NavItem {
@@ -28,6 +28,7 @@ export function navForRole(role: UserRole): NavItem[] {
       { href: "/people", label: role === "manager" ? "My team" : "People", icon: Users },
       { href: "/tasks", label: "Tasks", icon: KanbanSquare },
       ...(role === "manager" ? [] : [{ href: "/opportunities", label: "Openings", icon: Briefcase }]),
+      ...(role === "manager" ? [] : [{ href: "/payroll", label: "Payroll", icon: IndianRupee }]),
       { href: "/calendar", label: "Calendar", icon: CalendarDays },
       { href: "/courses", label: "Courses", icon: BookOpen },
       { href: "/chat", label: "Chat", icon: MessagesSquare },
@@ -36,6 +37,7 @@ export function navForRole(role: UserRole): NavItem[] {
   return [
     { href: "/employee", label: "Workspace", icon: LayoutDashboard },
     { href: "/tasks", label: "My tasks", icon: KanbanSquare },
+    { href: "/payslips", label: "Pay", icon: ReceiptIndianRupee },
     { href: "/calendar", label: "Calendar", icon: CalendarDays },
     { href: "/courses", label: "Courses", icon: BookOpen },
     { href: "/chat", label: "Chat", icon: MessagesSquare },

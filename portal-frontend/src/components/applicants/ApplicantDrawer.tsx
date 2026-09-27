@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { CalendarPlus, Check, ClipboardCheck, CreditCard, FileText, Mail, MessagesSquare, Phone, Video, X } from "lucide-react";
+import { BadgeCheck, CalendarPlus, Check, ClipboardCheck, CreditCard, FileText, Mail, MessagesSquare, Phone, UserPlus, Video, X } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../Toast";
 import { apiFetch, ApiError } from "../../lib/api";
@@ -20,8 +20,9 @@ const CLOSED = ["rejected", "withdrawn", "selected"];
 
 /** Staff view of one applicant: exam, HR round, payment, joining form and sessions, with the next action on each. */
 export function ApplicantDrawer({ applicationId, opportunityTitle, onClose, onChanged }: Props) {
-  const { accessToken } = useAuth();
+  const { user, accessToken } = useAuth();
   const toast = useToast();
+  const isHr = !!user && ["hr", "admin", "super_admin"].includes(user.role);
   const [data, setData] = useState<Journey | null>(null);
   const [people, setPeople] = useState<Colleague[]>([]);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
@@ -207,9 +208,24 @@ export function ApplicantDrawer({ applicationId, opportunityTitle, onClose, onCh
               </section>
             )}
 
+            {e && ["paid", "waived"].includes(e.status) && (data.employee || isHr) && (
+              <section>
+                <h3><UserPlus size={16} /> Hire</h3>
+                {data.employee ? (
+                  <p className="hired-line"><BadgeCheck size={16} /> Hired as {data.employee.businessId}, starting {new Date(data.employee.joiningDate).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}.</p>
+                ) : (
+                  <HireForm
+                    busy={busy === "hire"}
+                    defaultStart={e.joiningDetails?.preferredStartDate?.slice(0, 10)}
+                    onSubmit={(body) => run("hire", () => apiFetch(`/api/v1/program/enrollments/${e.id}/hire`, { method: "POST", body, accessToken }), `${name} is hired`)}
+                  />
+                )}
+              </section>
+            )}
+
             {!CLOSED.includes(status) && (
               <div className="drawer-actions applicant-stage">
-                {status === "shortlisted" && e && ["paid", "waived"].includes(e.status) && (
+                {status === "shortlisted" && e && ["paid", "waived"].includes(e.status) && !isHr && (
                   <button className="btn" disabled={!!busy} onClick={() => run("select", () => apiFetch(`/api/v1/applications/${applicationId}/transition`, { method: "POST", body: { toStatus: "selected" }, accessToken }), `${name} is selected`)}><Check size={16} /> Mark selected</button>
                 )}
                 {status === "submitted" && (
@@ -283,5 +299,39 @@ function FeedbackForm({ busy, onSubmit, onCancel }: { busy: boolean; onSubmit: (
       {decision === "pass" && <p className="muted-small">Passing shortlists them and asks them to pay the program fee or start the free trial.</p>}
       <div className="mini-actions"><button className="btn btn-sm" disabled={busy}>{busy ? "Saving…" : "Save result"}</button><button type="button" className="btn btn-sm btn-secondary" onClick={onCancel}>Cancel</button></div>
     </motion.form>
+  );
+}
+
+type HireBody = { employeeType: "intern" | "full_time" | "contract"; joiningDate: string; durationMonths?: number; designationTitle?: string; monthlyPay?: number };
+
+function HireForm({ busy, defaultStart, onSubmit }: { busy: boolean; defaultStart?: string; onSubmit: (body: HireBody) => void }) {
+  const [type, setType] = useState<HireBody["employeeType"]>("intern");
+  const [start, setStart] = useState(defaultStart ?? new Date().toISOString().slice(0, 10));
+  const [months, setMonths] = useState("3");
+  const [title, setTitle] = useState("Software Intern");
+  const [pay, setPay] = useState("");
+  const submit = (ev: FormEvent) => {
+    ev.preventDefault();
+    onSubmit({
+      employeeType: type,
+      joiningDate: start,
+      durationMonths: type === "full_time" || !months ? undefined : Number(months),
+      designationTitle: title.trim() || undefined,
+      monthlyPay: pay ? Number(pay) : undefined,
+    });
+  };
+  return (
+    <form className="inline-form hire-form" onSubmit={submit}>
+      <div className="field"><label htmlFor="hire-type">Joins as</label>
+        <select id="hire-type" value={type} onChange={(ev) => { const t = ev.target.value as HireBody["employeeType"]; setType(t); if (t !== "intern" && title === "Software Intern") setTitle(""); }}>
+          <option value="intern">Intern</option><option value="full_time">Full-time employee</option><option value="contract">Contract</option>
+        </select>
+      </div>
+      <div className="field"><label htmlFor="hire-start">Joining date</label><input id="hire-start" type="date" required value={start} onChange={(ev) => setStart(ev.target.value)} /></div>
+      {type !== "full_time" && <div className="field"><label htmlFor="hire-months">Months</label><input id="hire-months" type="number" min={1} max={60} value={months} onChange={(ev) => setMonths(ev.target.value)} /></div>}
+      <div className="field"><label htmlFor="hire-title">Designation</label><input id="hire-title" value={title} onChange={(ev) => setTitle(ev.target.value)} placeholder="e.g. Frontend Developer" /></div>
+      <div className="field"><label htmlFor="hire-pay">{type === "intern" ? "Monthly stipend (₹)" : "Monthly salary (₹)"}</label><input id="hire-pay" type="number" min={0} value={pay} onChange={(ev) => setPay(ev.target.value)} placeholder="Optional, can be set later" /></div>
+      <button className="btn" disabled={busy}><UserPlus size={16} /> {busy ? "Hiring…" : "Hire"}</button>
+    </form>
   );
 }

@@ -141,6 +141,13 @@
       "when": 1790545681764,
       "tag": "0019_great_cargill",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790546294800,
+      "tag": "0020_true_black_bolt",
+      "breakpoints": true
     }
   ]
 }

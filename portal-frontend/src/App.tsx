@@ -26,6 +26,8 @@ import Tasks from "./pages/Tasks";
 import People from "./pages/People";
 import Calendar from "./pages/Calendar";
 import Chat from "./pages/Chat";
+import Payroll from "./pages/Payroll";
+import Payslips from "./pages/Payslips";
 import { MotionConfig } from "framer-motion";
 import { ToastProvider } from "./components/Toast";
 import { NotificationsProvider } from "./context/NotificationsContext";
@@ -76,6 +78,8 @@ function AppRoutes() {
       <Route path="/tasks/:id?"><Protected><Tasks /></Protected></Route>
       <Route path="/people/:id?"><Protected><People /></Protected></Route>
       <Route path="/chat/:kind?/:id?"><Protected><Chat /></Protected></Route>
+      <Route path="/payroll"><Protected><Payroll /></Protected></Route>
+      <Route path="/payslips"><Protected><Payslips /></Protected></Route>
       <Route path="/calendar"><Protected><Calendar /></Protected></Route>
 
       <Route><div className="page-loading">Page not found.</div></Route>

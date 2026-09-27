@@ -48,3 +48,13 @@ Refunds, employee termination, salary/stipend changes, and certificate revocatio
 | Unlink an issue | The task's creator, project leads, managers, HR and admins |
 | Import a repo's open issues as tasks | Managers, HR and admins; project owners and leads into their project |
 | Sync | Automatic: closing the issue finishes the task, reopening puts it back in progress, and approving or cancelling the task closes the issue |
+
+## Hiring, payroll and certificates
+
+| Action | Who |
+| --- | --- |
+| Hire someone from a program (paid or waived) | HR, admin, super admin |
+| Set pay, draft, adjust loss of pay, publish payslips | HR, admin, super admin |
+| See a payslip | HR, admin, super admin; the employee once it's published |
+| Issue or revoke a completion or experience certificate | HR, admin, super admin. Also automatic: interns when their internship ends, anyone when they're offboarded |
+| Verify a certificate | Anyone with the link (name, role, dates and ID only) |

@@ -8,6 +8,7 @@ import { formatDate, onboardingStage, STATUS_META, TYPE_LABELS, type ChecklistIt
 import { useDirectory } from "../../lib/useDirectory";
 import { Avatar } from "../Avatar";
 import { useToast } from "../Toast";
+import { PersonPayCard } from "../payroll/PersonPayCard";
 
 interface Props {
   personId: string;
@@ -207,6 +208,7 @@ export function PersonDrawer({ personId, canManage, onClose, onChanged }: Props)
                 </form>
               )}
             </div>
+            {canManage && <PersonPayCard employeeId={person.id} />}
           </div>
         )}
       </motion.aside>
