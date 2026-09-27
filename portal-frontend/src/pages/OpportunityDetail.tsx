@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useRoute, useLocation, Link } from "wouter";
 import { DashboardShell } from "../components/DashboardShell";
-import { CandidateNav } from "../components/CandidateNav";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/api";
 
@@ -79,7 +78,7 @@ export default function OpportunityDetail() {
 
   if (error) {
     return (
-      <DashboardShell nav={<CandidateNav />}>
+      <DashboardShell>
         <div className="error-banner">{error}</div>
       </DashboardShell>
     );
@@ -87,7 +86,7 @@ export default function OpportunityDetail() {
 
   if (!data) {
     return (
-      <DashboardShell nav={<CandidateNav />}>
+      <DashboardShell>
         <p className="empty">Loading…</p>
       </DashboardShell>
     );
@@ -96,7 +95,7 @@ export default function OpportunityDetail() {
   const { opportunity, skills } = data;
 
   return (
-    <DashboardShell nav={<CandidateNav />}>
+    <DashboardShell>
       <h1>{opportunity.title}</h1>
       <p>{opportunity.businessId}</p>
 

@@ -1,6 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { DashboardShell } from "../components/DashboardShell";
-import { CandidateNav } from "../components/CandidateNav";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch } from "../lib/api";
 
@@ -69,7 +68,7 @@ export default function Profile() {
   }
 
   return (
-    <DashboardShell nav={<CandidateNav />}>
+    <DashboardShell>
       <h1>Your profile</h1>
       <p>Name and phone are required before you can apply to an opportunity.</p>
 

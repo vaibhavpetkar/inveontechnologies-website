@@ -18,6 +18,9 @@ import VerifyEmail from "./pages/VerifyEmail";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import CertificateVerify from "./pages/CertificateVerify";
+import Tasks from "./pages/Tasks";
+import { MotionConfig } from "framer-motion";
+import { ToastProvider } from "./components/Toast";
 import "./styles.css";
 
 function Home() {
@@ -56,6 +59,8 @@ function AppRoutes() {
       {/* Employee / staff */}
       <Route path="/employee"><Protected><EmployeeDashboard /></Protected></Route>
       <Route path="/admin"><Protected><AdminDashboard /></Protected></Route>
+      {/* One route for the board and an open task, so the board stays mounted under the drawer */}
+      <Route path="/tasks/:id?"><Protected><Tasks /></Protected></Route>
 
       <Route><div className="page-loading">Page not found.</div></Route>
     </Switch>
@@ -64,8 +69,13 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <AppRoutes />
-    </AuthProvider>
+    // reducedMotion="user" turns animations off for people who ask their OS for less motion.
+    <MotionConfig reducedMotion="user">
+      <AuthProvider>
+        <ToastProvider>
+          <AppRoutes />
+        </ToastProvider>
+      </AuthProvider>
+    </MotionConfig>
   );
 }

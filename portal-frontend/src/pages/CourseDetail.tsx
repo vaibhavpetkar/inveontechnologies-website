@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { useRoute } from "wouter";
 import { DashboardShell } from "../components/DashboardShell";
-import { CandidateNav } from "../components/CandidateNav";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/api";
 
@@ -72,14 +71,14 @@ export default function CourseDetail() {
     }
   }
 
-  if (error && !course) return <DashboardShell nav={<CandidateNav />}><div className="error-banner">{error}</div></DashboardShell>;
-  if (!course) return <DashboardShell nav={<CandidateNav />}><p className="empty">Loading…</p></DashboardShell>;
+  if (error && !course) return <DashboardShell><div className="error-banner">{error}</div></DashboardShell>;
+  if (!course) return <DashboardShell><p className="empty">Loading…</p></DashboardShell>;
 
   const price = course.priceAmount && Number(course.priceAmount) > 0 ? Number(course.priceAmount) : null;
   const progressByLesson = new Map(progress.map((p) => [p.lessonId, p]));
 
   return (
-    <DashboardShell nav={<CandidateNav />}>
+    <DashboardShell>
       <h1>{course.title}</h1>
       <p>{price ? `₹${price.toLocaleString("en-IN")}` : "Free"}</p>
 

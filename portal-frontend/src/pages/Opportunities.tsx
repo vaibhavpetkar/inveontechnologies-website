@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { DashboardShell } from "../components/DashboardShell";
-import { CandidateNav } from "../components/CandidateNav";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch } from "../lib/api";
 
@@ -42,7 +41,7 @@ export default function Opportunities() {
   }, [accessToken, search]);
 
   return (
-    <DashboardShell nav={<CandidateNav />}>
+    <DashboardShell>
       <h1>Open opportunities</h1>
       <p>Roles currently accepting applications.</p>
 

@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { DashboardShell } from "../components/DashboardShell";
-import { CandidateNav } from "../components/CandidateNav";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch } from "../lib/api";
 
@@ -19,7 +18,7 @@ export default function Courses() {
   }, [accessToken]);
 
   return (
-    <DashboardShell nav={<CandidateNav />}>
+    <DashboardShell>
       <h1>Courses</h1>
       <p>Programs you can enroll in.</p>
 

@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "wouter";
 import { DashboardShell } from "../components/DashboardShell";
-import { CandidateNav } from "../components/CandidateNav";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/api";
 
@@ -60,7 +59,7 @@ export default function CandidateDashboard() {
   }
 
   return (
-    <DashboardShell nav={<CandidateNav />}>
+    <DashboardShell>
       <h1>Your applications</h1>
       <p>Track where each application stands.</p>
 
