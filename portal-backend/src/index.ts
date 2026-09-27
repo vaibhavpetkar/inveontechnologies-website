@@ -127,7 +127,6 @@ app.use("/api/v1/notifications", notificationsRouter(db, env));
 
 // Future feature routes mount here:
 // app.use("/api/v1/employees", employeesRouter(db, env));
-app.use("/api/v1/people", peopleRouter(db, env));
 // etc.
 
 app.use(errorHandler);
