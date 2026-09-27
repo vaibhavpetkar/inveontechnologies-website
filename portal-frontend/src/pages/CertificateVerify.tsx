@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useRoute } from "wouter";
 import { AuthLayout } from "../components/AuthLayout";
-import { apiFetch, ApiError } from "../lib/api";
+import { Download, FileText } from "lucide-react";
+import { API_BASE, apiFetch, ApiError } from "../lib/api";
 
 interface Verification {
   valid: boolean;
@@ -44,6 +45,12 @@ export default function CertificateVerify() {
               {data.revokedAt ? ` · revoked ${new Date(data.revokedAt).toLocaleDateString()}` : ""}
             </div>
           </div>
+          {data.valid && params?.code && (
+            <div className="cert-actions">
+              <a className="btn" href={`${API_BASE}/api/v1/certificates/verify/${encodeURIComponent(params.code)}/pdf?download=1`}><Download size={16} /> Download PDF</a>
+              <a className="btn btn-secondary" href={`${API_BASE}/api/v1/certificates/verify/${encodeURIComponent(params.code)}/pdf`} target="_blank" rel="noreferrer"><FileText size={16} /> Open</a>
+            </div>
+          )}
         </>
       )}
     </AuthLayout>

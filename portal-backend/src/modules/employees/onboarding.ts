@@ -6,6 +6,7 @@ import { formatBusinessId } from "../shared/business-id.js";
 import { enqueueJob } from "../shared/jobs.js";
 import { writeAuditLog } from "../shared/audit.js";
 import { formatWhen } from "../shared/format.js";
+import { enrollInOpportunityCourses } from "../courses/programs.js";
 import { notify } from "../notifications/service.js";
 import { logger } from "../shared/logger.js";
 
@@ -148,6 +149,8 @@ export async function queueWelcomeEmail(db: Database, appUrl: string, user: { id
  */
 export async function onboardFromAcceptedOffer(db: Database, offer: typeof offers.$inferSelect, applicantUserId: string) {
   try {
+    // The training track that comes with the role starts with the offer.
+    await enrollInOpportunityCourses(db, offer.applicationId, "offer_accepted");
     const application = await db.query.applications.findFirst({ where: eq(applications.id, offer.applicationId) });
     const hr = [offer.generatedBy, offer.approvedBy];
     const existing = await db.query.employees.findFirst({ where: eq(employees.applicationId, offer.applicationId) });
