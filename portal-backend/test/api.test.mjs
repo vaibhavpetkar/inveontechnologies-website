@@ -159,6 +159,30 @@ describe("task permissions", () => {
     assert.equal((await api.call("POST", "/tasks", { token: manager.token, body: { title: "Yours", assigneeId: other.id } })).status, 201);
   });
 
+  test("managers can list staff to assign work to, but never candidates", async () => {
+    const manager = await api.createUser("manager");
+    const emp = await api.createUser("employee", { profile: false });
+    const candidate = await api.createUser("candidate");
+    const list = await api.call("GET", "/users", { token: manager.token });
+    assert.equal(list.status, 200);
+    assert.ok(list.json.users.some((u) => u.id === emp.id));
+    assert.ok(list.json.users.every((u) => u.role !== "candidate" && u.id !== candidate.id));
+    assert.equal((await api.call("GET", "/users?role=candidate", { token: manager.token })).json.users.length, 0);
+    assert.equal((await api.call("GET", "/users", { token: emp.token })).status, 403);
+  });
+
+  test("a manager's workload includes personal tasks they assigned, not other managers'", async () => {
+    const manager = await api.createUser("manager");
+    const otherManager = await api.createUser("manager");
+    const emp = await api.createUser("employee", { profile: false });
+    const bystander = await api.createUser("employee", { profile: false });
+    await api.call("POST", "/tasks", { token: manager.token, body: { title: "Mine to give", assigneeId: emp.id } });
+    await api.call("POST", "/tasks", { token: otherManager.token, body: { title: "Not theirs", assigneeId: bystander.id } });
+    const { workload } = (await api.call("GET", "/tasks/workload", { token: manager.token })).json;
+    assert.equal(workload[emp.id]?.active, 1);
+    assert.equal(workload[bystander.id], undefined);
+  });
+
   test("project members can't reassign tasks; the assignee can edit details", async () => {
     const lead = await api.createUser("manager");
     const member = await api.createUser("employee", { profile: false });

@@ -341,11 +341,13 @@ export function tasksRouter(db: Database, env: Env) {
     } else if (PRIVILEGED_ROLES.includes(req.user!.role as (typeof PRIVILEGED_ROLES)[number])) {
       rows = await db.query.tasks.findMany();
     } else {
-      // A manager's team = projects they own or lead.
+      // A manager's team = projects they own or lead, plus anyone they've
+      // handed a personal task to.
       const owned = await db.query.projects.findMany({ where: eq(projects.ownerId, req.user!.sub) });
       const led = await db.query.projectMembers.findMany({ where: and(eq(projectMembers.userId, req.user!.sub), eq(projectMembers.roleOnProject, "lead")) });
       const projectIds = [...new Set([...owned.map((p) => p.id), ...led.map((m) => m.projectId)])];
-      rows = projectIds.length ? await db.query.tasks.findMany({ where: inArray(tasks.projectId, projectIds) }) : [];
+      const createdByMe = eq(tasks.createdBy, req.user!.sub);
+      rows = await db.query.tasks.findMany({ where: projectIds.length ? or(inArray(tasks.projectId, projectIds), createdByMe) : createdByMe });
     }
     const byAssignee: Record<string, { total: number; active: number; overdue: number }> = {};
     for (const t of rows) {

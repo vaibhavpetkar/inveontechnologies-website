@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { DashboardShell } from "../components/DashboardShell";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/api";
+import { MyTasksWidget } from "../components/tasks/MyTasksWidget";
 
 interface Employee {
   businessId: string;
@@ -44,6 +45,10 @@ export default function EmployeeDashboard() {
           <Row label="Portal access" value={employee.portalAccessActive ? "Active" : "Pending activation"} />
         </div>
       )}
+
+      <div className="stack">
+        <MyTasksWidget />
+      </div>
     </DashboardShell>
   );
 }

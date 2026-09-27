@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { and, desc, eq, isNull, sql, type SQL } from "drizzle-orm";
+import { and, desc, eq, isNull, ne, sql, type SQL } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
 import { refreshTokens, users } from "../shared/db/schema.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
@@ -11,7 +11,9 @@ import type { Env } from "../shared/env.js";
 
 const ROLES = ["candidate", "intern", "employee", "manager", "hr", "admin", "super_admin"] as const;
 // Staff pick interviewers, hiring managers and project members from this list.
-const DIRECTORY_ROLES = ["hr", "admin", "super_admin"] as const;
+// Managers use it to pick who to assign tasks to, so they get it too — but
+// only staff accounts (never candidates), since applicants aren't their team.
+const DIRECTORY_ROLES = ["manager", "hr", "admin", "super_admin"] as const;
 
 const listQuerySchema = z.object({
   role: z.enum(ROLES).optional(),
@@ -40,6 +42,7 @@ export function usersRouter(db: Database, env: Env) {
     const query = listQuerySchema.parse(req.query);
     const conditions: SQL[] = [];
     if (query.role) conditions.push(eq(users.role, query.role));
+    if (req.user!.role === "manager") conditions.push(ne(users.role, "candidate"));
     if (query.search) conditions.push(sql`${users.email} ILIKE ${"%" + query.search.replace(/[\\%_]/g, "\\$&") + "%"}`);
     const rows = await db.query.users.findMany({
       where: conditions.length ? and(...conditions) : undefined,

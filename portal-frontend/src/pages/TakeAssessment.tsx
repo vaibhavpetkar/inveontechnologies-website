@@ -1,7 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useRoute, Link } from "wouter";
 import { DashboardShell } from "../components/DashboardShell";
-import { CandidateNav } from "../components/CandidateNav";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/api";
 
@@ -152,17 +151,17 @@ export default function TakeAssessment() {
   }
 
   if (error && !attempt) {
-    return <DashboardShell nav={<CandidateNav />}><div className="error-banner">{error}</div></DashboardShell>;
+    return <DashboardShell><div className="error-banner">{error}</div></DashboardShell>;
   }
   if (!attempt) {
-    return <DashboardShell nav={<CandidateNav />}><p className="empty">Loading…</p></DashboardShell>;
+    return <DashboardShell><p className="empty">Loading…</p></DashboardShell>;
   }
 
   const answeredCount = Object.keys(answers).length;
   const totalQuestions = questions?.length ?? 0;
 
   return (
-    <DashboardShell nav={<CandidateNav />}>
+    <DashboardShell>
       <h1>Assessment</h1>
 
       {error && <div className="error-banner" style={{ marginTop: "1rem" }}>{error}</div>}
