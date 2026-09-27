@@ -1,4 +1,4 @@
-import { BookOpen, Briefcase, ClipboardCheck, FileText, KanbanSquare, LayoutDashboard, UserRound, type LucideIcon } from "lucide-react";
+import { BookOpen, Briefcase, ClipboardCheck, FileText, KanbanSquare, LayoutDashboard, UserRound, Users, type LucideIcon } from "lucide-react";
 import type { UserRole } from "../context/AuthContext";
 
 export interface NavItem {
@@ -23,6 +23,7 @@ export function navForRole(role: UserRole): NavItem[] {
   if (STAFF_ROLES.includes(role)) {
     return [
       { href: "/admin", label: "Console", icon: LayoutDashboard },
+      { href: "/people", label: role === "manager" ? "My team" : "People", icon: Users },
       { href: "/tasks", label: "Tasks", icon: KanbanSquare },
       { href: "/courses", label: "Courses", icon: BookOpen },
     ];

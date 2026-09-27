@@ -10,13 +10,13 @@ import {
   employeeDocuments,
   applications,
   offers,
-  users,
 } from "../shared/db/schema.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
-import { formatBusinessId } from "../shared/business-id.js";
 import type { Env } from "../shared/env.js";
+import { notify } from "../notifications/service.js";
+import { createEmployeeRecord, notifyIfOnboardingComplete } from "./onboarding.js";
 
 const PRIVILEGED_ROLES = ["hr", "admin", "super_admin"] as const;
 // Deliberately NOT including "manager" — employee records/documents/letters
@@ -97,42 +97,17 @@ export function employeesRouter(db: Database, env: Env) {
       throw new AppError("EMPLOYEE_ALREADY_EXISTS", "An employee record already exists for this application", 409);
     }
 
-    const newRole = body.employeeType === "intern" ? "intern" : "employee";
-
-    const employee = await db.transaction(async (tx) => {
-      const [created] = await tx
-        .insert(employees)
-        .values({
-          userId: application.userId,
-          applicationId: application.id,
-          employeeType: body.employeeType,
-          departmentId: body.departmentId,
-          designationId: body.designationId,
-          managerId: body.managerId,
-          hrManagerId: body.hrManagerId,
-          joiningDate: new Date(body.joiningDate),
-          durationMonths: body.durationMonths,
-          createdBy: req.user!.sub,
-        })
-        .returning();
-
-      const businessId = formatBusinessId("INV-EMP", created.seqNumber);
-      const [updated] = await tx.update(employees).set({ businessId }).where(eq(employees.id, created.id)).returning();
-
-      // The actual portal-access transition: the underlying user's role
-      // changes, not just a new row appearing in a table nobody checks.
-      await tx.update(users).set({ role: newRole, updatedAt: new Date() }).where(eq(users.id, application.userId));
-
-      return updated;
-    });
-
-    await writeAuditLog(db, {
-      actorUserId: req.user!.sub,
-      action: "employee.create",
-      entityType: "employee",
-      entityId: employee.id,
-      metadata: { applicationId: application.id, businessId: employee.businessId },
-      ipAddress: req.ip,
+    const employee = await createEmployeeRecord(db, {
+      userId: application.userId,
+      applicationId: application.id,
+      employeeType: body.employeeType,
+      departmentId: body.departmentId,
+      designationId: body.designationId,
+      managerId: body.managerId,
+      hrManagerId: body.hrManagerId ?? req.user!.sub,
+      joiningDate: new Date(body.joiningDate),
+      durationMonths: body.durationMonths,
+      createdBy: req.user!.sub,
     });
 
     res.status(201).json({ employee });
@@ -192,6 +167,7 @@ export function employeesRouter(db: Database, env: Env) {
     if (task.status !== "pending") throw new AppError("INVALID_STATE", `Task is already "${task.status}"`, 400);
 
     const [updated] = await db.update(employeeOnboardingTasks).set({ status: "completed", completedAt: new Date() }).where(eq(employeeOnboardingTasks.id, task.id)).returning();
+    if (employee.userId === req.user!.sub) await notifyIfOnboardingComplete(db, employee.id);
     res.json({ task: updated });
   });
 
@@ -214,6 +190,11 @@ export function employeesRouter(db: Database, env: Env) {
       .returning();
 
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "employee.activate_access", entityType: "employee", entityId: employee.id, ipAddress: req.ip });
+    await db
+      .update(employeeOnboardingTasks)
+      .set({ status: "completed", completedAt: new Date() })
+      .where(and(eq(employeeOnboardingTasks.employeeId, employee.id), eq(employeeOnboardingTasks.taskType, "access_activation"), eq(employeeOnboardingTasks.status, "pending")));
+    await notify(db, { userIds: [employee.userId], actorUserId: req.user!.sub, kind: "onboarding.activated", title: "Your portal access is active", body: "Onboarding is complete. Your workspace, tasks and courses are ready.", link: "/employee", email: true });
     res.json({ employee: updated });
   });
 
@@ -231,7 +212,6 @@ export function employeesRouter(db: Database, env: Env) {
       employee,
       onboarding: { total: tasks.length, completed: tasks.filter((t) => t.status === "completed").length },
       documents: documents.map(({ fileUrl, ...rest }) => rest), // don't leak raw file references into a dashboard summary
-      notifications: [], // Phase 9 (real notifications) not built yet
     });
   });
 

@@ -10,6 +10,7 @@ import type { Env } from "../shared/env.js";
 import { canStaffAccessApplication } from "../applications/access.js";
 import { notifyCandidate } from "../notifications/recruitment.js";
 import { notify } from "../notifications/service.js";
+import { onboardFromAcceptedOffer } from "../employees/onboarding.js";
 
 // Drafting an offer (HR) and sending it (Admin/Super Admin only) are
 // deliberately different privilege levels — a lightweight version of the
@@ -21,6 +22,11 @@ const SEND_ROLES = ["admin", "super_admin"] as const;
 const createOfferSchema = z.object({
   content: z.string().min(10).max(20000),
   acceptanceDeadline: z.string().datetime().optional(),
+  // Structured terms: with type + joining date, accepting the offer creates
+  // the employee record automatically.
+  employeeType: z.enum(["intern", "full_time", "contract"]).optional(),
+  joiningDate: z.string().datetime().optional(),
+  durationMonths: z.number().int().min(1).max(120).optional(),
 });
 
 async function resolveExpiryIfNeeded(db: Database, offer: typeof offers.$inferSelect) {
@@ -52,6 +58,9 @@ export function offersRouter(db: Database, env: Env) {
         version: nextVersion,
         content: body.content,
         acceptanceDeadline: body.acceptanceDeadline ? new Date(body.acceptanceDeadline) : null,
+        employeeType: body.employeeType,
+        joiningDate: body.joiningDate ? new Date(body.joiningDate) : null,
+        durationMonths: body.durationMonths,
         generatedBy: req.user!.sub,
       })
       .returning();
@@ -122,8 +131,10 @@ export function offersRouter(db: Database, env: Env) {
       .returning();
 
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "offer.accept", entityType: "offer", entityId: offer.id, ipAddress: req.ip });
-    await notify(db, { userIds: [offer.generatedBy, offer.approvedBy], actorUserId: req.user!.sub, kind: "offer.accepted", title: "Offer accepted", body: "A candidate accepted their offer. Onboarding can begin.", link: "/admin", email: true });
-    res.json({ offer: updated });
+    // Creates the employee record when the offer has structured terms, and
+    // tells HR either way.
+    const employee = await onboardFromAcceptedOffer(db, updated, req.user!.sub);
+    res.json({ offer: updated, employee });
   });
 
   router.post("/offers/:id/reject", requireAuth(env), async (req, res) => {
