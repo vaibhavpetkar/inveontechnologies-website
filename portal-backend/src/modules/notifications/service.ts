@@ -3,7 +3,7 @@ import { inArray } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
 import { notificationPreferences, notifications, users } from "../shared/db/schema.js";
 import { enqueueJob, registerJobHandler } from "../shared/jobs.js";
-import { deliverEmail } from "../shared/mailer.js";
+import { deliverEmail, type OutgoingEmail } from "../shared/mailer.js";
 import { logger } from "../shared/logger.js";
 
 export type NotificationRow = typeof notifications.$inferSelect;
@@ -85,6 +85,5 @@ export async function notify(db: Database, input: NotifyInput): Promise<void> {
 }
 
 registerJobHandler("email.send", async (payload) => {
-  const { to, subject, text } = payload as { to: string; subject: string; text: string };
-  await deliverEmail({ to, subject, text });
+  await deliverEmail(payload as unknown as OutgoingEmail);
 });
