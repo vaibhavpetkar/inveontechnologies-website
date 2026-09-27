@@ -28,6 +28,8 @@ export const users = pgTable("users", {
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }), // heartbeat-driven presence, see chat/presence-routes.ts
   // Display name for staff accounts (candidates keep theirs on candidate_profiles).
   fullName: text("full_name"),
+  // Used to assign linked GitHub issues and to match issue assignees back to people.
+  githubUsername: text("github_username"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -786,6 +788,7 @@ export const projects = pgTable("projects", {
   description: text("description"),
   status: projectStatusEnum("status").notNull().default("planning"),
   ownerId: uuid("owner_id").notNull().references(() => users.id), // the manager accountable for the project
+  githubRepo: text("github_repo"), // "owner/name": new task issues go here and its issues can be imported
   createdBy: uuid("created_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -856,9 +859,15 @@ export const tasks = pgTable("tasks", {
   actualHours: numeric("actual_hours", { precision: 6, scale: 2 }).notNull().default("0"),
   dueDate: timestamp("due_date", { withTimezone: true }),
   createdBy: uuid("created_by").notNull().references(() => users.id),
+  // Linked GitHub issue (see modules/github). Closing the issue finishes the task and vice versa.
+  githubRepo: text("github_repo"),
+  githubIssueNumber: integer("github_issue_number"),
+  githubIssueUrl: text("github_issue_url"),
+  githubIssueState: text("github_issue_state", { enum: ["open", "closed"] }),
+  githubSyncedAt: timestamp("github_synced_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => ({ uniqGithubIssue: unique("tasks_github_issue_unique").on(t.githubRepo, t.githubIssueNumber) }));
 
 export const taskRecurrences = pgTable("task_recurrences", {
   id: uuid("id").primaryKey().defaultRandom(),
