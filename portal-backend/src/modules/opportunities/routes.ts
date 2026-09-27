@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
-import { opportunities, opportunitySkills, skills, users } from "../shared/db/schema.js";
+import { courses, opportunities, opportunityCourses, opportunitySkills, skills, users } from "../shared/db/schema.js";
 import { optionalAuth, requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
@@ -26,7 +26,35 @@ const createOpportunitySchema = z.object({
   skillNames: z.array(z.string().min(1)).default([]),
   // Manager whose team is hiring — scopes that manager's pipeline access. null clears it.
   hiringManagerId: z.string().uuid().nullable().optional(),
+  // Internship programs: the kind of opening, its terms, and the courses
+  // people are enrolled in when they join.
+  kind: z.enum(["job", "internship", "program"]).optional(),
+  durationMonths: z.number().int().min(1).max(60).nullable().optional(),
+  stipendAmount: z.number().min(0).max(10_000_000).nullable().optional(),
+  startDate: z.string().datetime({ offset: true }).nullable().optional(),
+  location: z.string().trim().max(200).nullable().optional(),
+  courseIds: z.array(z.string().uuid()).max(30).optional(),
 });
+
+const updateOpportunitySchema = createOpportunitySchema.partial();
+
+const programFields = (body: z.infer<typeof updateOpportunitySchema>) => ({
+  ...(body.kind ? { kind: body.kind } : {}),
+  ...(body.durationMonths !== undefined ? { durationMonths: body.durationMonths } : {}),
+  ...(body.stipendAmount !== undefined ? { stipendAmount: body.stipendAmount === null ? null : String(body.stipendAmount) } : {}),
+  ...(body.startDate !== undefined ? { startDate: body.startDate ? new Date(body.startDate) : null } : {}),
+  ...(body.location !== undefined ? { location: body.location || null } : {}),
+});
+
+async function setOpportunityCourses(db: Database, opportunityId: string, courseIds: string[]) {
+  const unique = [...new Set(courseIds)];
+  if (unique.length) {
+    const found = await db.query.courses.findMany({ where: inArray(courses.id, unique), columns: { id: true } });
+    if (found.length !== unique.length) throw new AppError("VALIDATION_ERROR", "One or more courses don't exist", 400);
+  }
+  await db.delete(opportunityCourses).where(eq(opportunityCourses.opportunityId, opportunityId));
+  if (unique.length) await db.insert(opportunityCourses).values(unique.map((courseId, orderIndex) => ({ opportunityId, courseId, orderIndex })));
+}
 
 async function assertHiringManager(db: Database, userId: string | null | undefined) {
   if (!userId) return;
@@ -36,12 +64,13 @@ async function assertHiringManager(db: Database, userId: string | null | undefin
   }
 }
 
-const updateOpportunitySchema = createOpportunitySchema.partial();
+
 
 const listQuerySchema = z.object({
   status: z.enum(["draft", "published", "archived"]).optional(),
   skill: z.string().optional(),
   search: z.string().optional(),
+  kind: z.enum(["job", "internship", "program"]).optional(),
   cursor: z.coerce.number().int().optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
@@ -66,6 +95,9 @@ export function opportunitiesRouter(db: Database, env: Env) {
       conditions.push(eq(opportunities.status, query.status));
     } else if (!isPrivileged) {
       conditions.push(eq(opportunities.status, "published"));
+    }
+    if (query.kind) {
+      conditions.push(eq(opportunities.kind, query.kind));
     }
     if (query.search) {
       conditions.push(sql`${opportunities.title} ILIKE ${"%" + query.search + "%"}`);
@@ -109,7 +141,17 @@ export function opportunitiesRouter(db: Database, env: Env) {
     }
 
     const nextCursor = rows.length === query.limit ? rows[rows.length - 1].seqNumber : null;
-    res.json({ opportunities: rows, nextCursor });
+    // How many (published) courses come with each opening, for the cards.
+    const counts = rows.length
+      ? await db
+          .select({ opportunityId: opportunityCourses.opportunityId, n: sql<number>`count(*)::int` })
+          .from(opportunityCourses)
+          .innerJoin(courses, eq(opportunityCourses.courseId, courses.id))
+          .where(and(inArray(opportunityCourses.opportunityId, rows.map((r) => r.id)), eq(courses.status, "published")))
+          .groupBy(opportunityCourses.opportunityId)
+      : [];
+    const countBy = new Map(counts.map((c) => [c.opportunityId, c.n]));
+    res.json({ opportunities: rows.map((r) => ({ ...r, courseCount: countBy.get(r.id) ?? 0 })), nextCursor });
   });
 
   router.get("/:id", optionalAuth(env), async (req, res) => {
@@ -127,7 +169,16 @@ export function opportunitiesRouter(db: Database, env: Env) {
       .innerJoin(skills, eq(opportunitySkills.skillId, skills.id))
       .where(eq(opportunitySkills.opportunityId, opportunity.id));
 
-    res.json({ opportunity, skills: skillLinks.map((s) => s.skill) });
+    const courseLinks = await db
+      .select({ id: courses.id, title: courses.title, description: courses.description, status: courses.status })
+      .from(opportunityCourses)
+      .innerJoin(courses, eq(opportunityCourses.courseId, courses.id))
+      .where(eq(opportunityCourses.opportunityId, opportunity.id))
+      .orderBy(asc(opportunityCourses.orderIndex));
+    // Applicants only see courses that are live.
+    const visibleCourses = isPrivileged ? courseLinks : courseLinks.filter((c) => c.status === "published");
+
+    res.json({ opportunity, skills: skillLinks.map((s) => s.skill), courses: visibleCourses });
   });
 
   // --- Privileged: create/edit/publish/archive ---
@@ -145,6 +196,7 @@ export function opportunitiesRouter(db: Database, env: Env) {
           description: body.description,
           eligibility: body.eligibility,
           hiringManagerId: body.hiringManagerId ?? null,
+          ...programFields(body),
           createdBy: req.user!.sub,
         })
         .returning();
@@ -161,6 +213,7 @@ export function opportunitiesRouter(db: Database, env: Env) {
       }
       return updated;
     });
+    if (body.courseIds) await setOpportunityCourses(db, result.id, body.courseIds);
 
     await writeAuditLog(db, {
       actorUserId: req.user!.sub,
@@ -189,6 +242,7 @@ export function opportunitiesRouter(db: Database, env: Env) {
         ...(body.description ? { description: body.description } : {}),
         ...(body.eligibility ? { eligibility: body.eligibility } : {}),
         ...(body.hiringManagerId !== undefined ? { hiringManagerId: body.hiringManagerId } : {}),
+        ...programFields(body),
         updatedAt: new Date(),
       })
       .where(eq(opportunities.id, req.params.id))
@@ -201,6 +255,8 @@ export function opportunitiesRouter(db: Database, env: Env) {
         await db.insert(opportunitySkills).values(skillIds.map((skillId) => ({ opportunityId: req.params.id, skillId })));
       }
     }
+
+    if (body.courseIds) await setOpportunityCourses(db, req.params.id, body.courseIds);
 
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "opportunity.update", entityType: "opportunity", entityId: updated.id, ipAddress: req.ip });
     res.json({ opportunity: updated });

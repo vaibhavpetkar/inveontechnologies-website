@@ -11,6 +11,7 @@ import { checkEligibility, type EligibilityCriteria } from "./eligibility.js";
 import { isAdminTransitionAllowed, isCandidateTransitionAllowed, type ApplicationStatus } from "./state-machine.js";
 import type { Env } from "../shared/env.js";
 import { PIPELINE_ROLES, assertCanManageApplication, canViewApplication, isRecruitmentAdmin } from "./access.js";
+import { enrollInOpportunityCourses } from "../courses/programs.js";
 import { notifyApplicationStatus } from "../notifications/recruitment.js";
 
 const applySchema = z.object({}).optional(); // no body fields needed yet — reserved for a future cover-note field
@@ -229,6 +230,8 @@ export function applicationsRouter(db: Database, env: Env) {
     });
 
     await notifyApplicationStatus(db, application.id, body.toStatus, req.user!.sub);
+    // Programs start at selection: enroll the participant in its courses.
+    if (body.toStatus === "selected") await enrollInOpportunityCourses(db, application.id, "selected");
     res.json({ message: `Application moved to ${body.toStatus}.` });
   });
 

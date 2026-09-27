@@ -9,11 +9,14 @@ import EmployeeDashboard from "./pages/EmployeeDashboard";
 import AdminDashboard from "./pages/AdminDashboard";
 import Opportunities from "./pages/Opportunities";
 import OpportunityDetail from "./pages/OpportunityDetail";
+import OpportunityEditor from "./pages/OpportunityEditor";
 import Profile from "./pages/Profile";
 import Assessments from "./pages/Assessments";
 import TakeAssessment from "./pages/TakeAssessment";
 import Courses from "./pages/Courses";
 import CourseDetail from "./pages/CourseDetail";
+import CourseBuilder from "./pages/CourseBuilder";
+import LessonPlayer from "./pages/LessonPlayer";
 import VerifyEmail from "./pages/VerifyEmail";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
@@ -51,13 +54,17 @@ function AppRoutes() {
 
       {/* Candidate journey */}
       <Route path="/opportunities"><Protected><Opportunities /></Protected></Route>
+      <Route path="/opportunities/new"><Protected><OpportunityEditor /></Protected></Route>
+      <Route path="/opportunities/:id/edit"><Protected><OpportunityEditor /></Protected></Route>
       <Route path="/opportunities/:id"><Protected><OpportunityDetail /></Protected></Route>
       <Route path="/candidate"><Protected><CandidateDashboard /></Protected></Route>
       <Route path="/profile"><Protected><Profile /></Protected></Route>
       <Route path="/assessments"><Protected><Assessments /></Protected></Route>
       <Route path="/assessments/:applicationId"><Protected><TakeAssessment /></Protected></Route>
       <Route path="/courses"><Protected><Courses /></Protected></Route>
+      <Route path="/courses/:id/edit"><Protected><CourseBuilder /></Protected></Route>
       <Route path="/courses/:id"><Protected><CourseDetail /></Protected></Route>
+      <Route path="/learn/:courseId/:lessonId?"><Protected><LessonPlayer /></Protected></Route>
 
       {/* Employee / staff */}
       <Route path="/employee"><Protected><EmployeeDashboard /></Protected></Route>

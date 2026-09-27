@@ -105,6 +105,8 @@ export const skills = pgTable("skills", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const opportunityKindEnum = pgEnum("opportunity_kind", ["job", "internship", "program"]);
+
 export const opportunities = pgTable("opportunities", {
   id: uuid("id").primaryKey().defaultRandom(),
   // Human-readable business ID, e.g. OPP-2026-00001. Set in a follow-up
@@ -129,11 +131,32 @@ export const opportunities = pgTable("opportunities", {
   // only for opportunities they're the hiring manager of (plus applications
   // they're interviewing) — the "own team" rule in docs/permissions.md.
   hiringManagerId: uuid("hiring_manager_id").references(() => users.id),
+  // Internship programs (LMS): what kind of opening this is and its terms.
+  kind: opportunityKindEnum("kind").notNull().default("job"),
+  durationMonths: integer("duration_months"),
+  stipendAmount: numeric("stipend_amount", { precision: 10, scale: 2 }), // per month, INR
+  startDate: timestamp("start_date", { withTimezone: true }),
+  location: text("location"),
   publishedAt: timestamp("published_at", { withTimezone: true }),
   archivedAt: timestamp("archived_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Courses that come with an opportunity: an internship's training track or
+ * a program's curriculum. People are enrolled automatically when they join
+ * (offer accepted, or selected for a program).
+ */
+export const opportunityCourses = pgTable(
+  "opportunity_courses",
+  {
+    opportunityId: uuid("opportunity_id").notNull().references(() => opportunities.id, { onDelete: "cascade" }),
+    courseId: uuid("course_id").notNull().references(() => courses.id, { onDelete: "cascade" }),
+    orderIndex: integer("order_index").notNull().default(0),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.opportunityId, t.courseId] }) }),
+);
 
 export const opportunitySkills = pgTable(
   "opportunity_skills",
@@ -436,6 +459,10 @@ export const courses = pgTable("courses", {
   // course_enrollments.paymentStatus comment below) — this just records
   // the price a course is meant to cost.
   priceAmount: numeric("price_amount", { precision: 10, scale: 2 }),
+  // Issued automatically when a learner completes the course (LMS phase D).
+  // Null = certificates for this course are issued by hand, as before.
+  certificateTemplateId: uuid("certificate_template_id"),
+  category: text("category"),
   createdBy: uuid("created_by").notNull().references(() => users.id),
   publishedAt: timestamp("published_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -467,6 +494,51 @@ export const courseLessons = pgTable("course_lessons", {
   contentText: text("content_text"), // for text-based lessons/instructions
   required: boolean("required").notNull().default(true),
   orderIndex: integer("order_index").notNull().default(0),
+  // Estimated time to finish, shown in the outline.
+  durationMinutes: integer("duration_minutes"),
+  // For quiz ("test") lessons: score needed to pass.
+  passingScorePercent: integer("passing_score_percent").notNull().default(70),
+  // Exams: a quiz with a time limit is started on the server, its answers
+  // are saved as the learner goes (so a reload resumes it) and it's graded
+  // when time runs out. null = untimed / unlimited.
+  timeLimitMinutes: integer("time_limit_minutes"),
+  maxAttempts: integer("max_attempts"),
+});
+
+/**
+ * Auto-graded quizzes for "test" lessons (LMS phase D). Same multiple-choice
+ * shape as assessment_questions, but lesson-scoped and retakeable: every
+ * submission is kept as an attempt, and the lesson counts as passed once
+ * any attempt reaches passingScorePercent. A reviewer can still override
+ * through POST /lessons/:id/grade.
+ */
+export const lessonQuizQuestions = pgTable("lesson_quiz_questions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  lessonId: uuid("lesson_id").notNull().references(() => courseLessons.id, { onDelete: "cascade" }),
+  questionText: text("question_text").notNull(),
+  // [{ id: "a", text: "..." }, ...]
+  options: jsonb("options").notNull(),
+  correctOptionId: text("correct_option_id").notNull(),
+  explanation: text("explanation"),
+  points: integer("points").notNull().default(1),
+  orderIndex: integer("order_index").notNull().default(0),
+});
+
+export const quizAttemptStatusEnum = pgEnum("quiz_attempt_status", ["in_progress", "submitted"]);
+
+export const lessonQuizAttempts = pgTable("lesson_quiz_attempts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  lessonId: uuid("lesson_id").notNull().references(() => courseLessons.id, { onDelete: "cascade" }),
+  enrollmentId: uuid("enrollment_id").notNull().references(() => courseEnrollments.id, { onDelete: "cascade" }),
+  // [{ questionId, selectedOptionId, correct }]
+  answers: jsonb("answers").notNull(),
+  // in_progress only for timed exams; untimed quizzes are graded on submit.
+  status: quizAttemptStatusEnum("status").notNull().default("submitted"),
+  startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+  deadlineAt: timestamp("deadline_at", { withTimezone: true }),
+  scorePercent: integer("score_percent"),
+  passed: boolean("passed"),
+  submittedAt: timestamp("submitted_at", { withTimezone: true }),
 });
 
 // "overdue" added post-launch: a "skip for now" enrollment that isn't
@@ -514,6 +586,7 @@ export const lessonProgress = pgTable(
     status: lessonProgressStatusEnum("status").notNull().default("not_started"),
     // For "test" lessons only — set by a privileged reviewer's pass/fail call.
     passed: boolean("passed"),
+    bestScorePercent: integer("best_score_percent"),
     completedAt: timestamp("completed_at", { withTimezone: true }),
   },
   (t) => ({ uniqEnrollmentLesson: unique("lesson_progress_enrollment_lesson_unique").on(t.enrollmentId, t.lessonId) }),

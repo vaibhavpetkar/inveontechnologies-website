@@ -65,6 +65,10 @@ Each phase is one or two PRs, shippable on its own, and ends with the feature us
 - **Exams**: question bank, exam resume after reload, result page with animated score breakdown.
 - **Certificates as real PDFs** + public verify page (already exists).
 
+**Built (first LMS PR, on `feature/lms`):** course catalog with search, categories and a "continue learning" strip; course builder for staff (details, certificate template, modules and lessons with reorder, edit and delete); lesson player with YouTube/Vimeo/Drive/MP4/PDF embeds, outline sidebar and mark-complete; auto-graded quizzes per lesson (`lesson_quiz_questions`, `lesson_quiz_attempts`, pass mark per lesson, best score kept, a pass is never lost on a retake). When the last required lesson is done the enrollment completes, the learner is notified and, if the course has a certificate template, the certificate is issued automatically. Quizzes are lesson-scoped rather than a generalised MCQ engine. 
+
+**Built (second LMS PR):** openings now have a kind (internship, program or job), terms (location, start date, duration, stipend) and a linked training track of courses. Staff create and edit them on the Openings page, and applicants filter by kind. Program participants are enrolled in the track when selected; interns and hires are enrolled when they accept the offer (no payment due). Quiz lessons can have a time limit and an attempt limit: the clock runs on the server, answers autosave, a reload resumes the attempt, it submits itself at zero, and an attempt left to expire is graded on what was saved. Certificates download as a PDF (pdf-lib, landscape A4 with the verification link) from the course page and the public verify page. Class sessions on the calendar are not built.
+
 ### Phase E — Calendar + Google Meet / Zoom
 - `calendar_events` (title, start, end, attendees, source, meeting provider, join URL) populated from interviews, meetings, exam windows, class sessions and task due dates.
 - Calendar UI: month / week / agenda views, click-to-create meeting, attendee picker.

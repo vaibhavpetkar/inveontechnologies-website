@@ -14,6 +14,9 @@ import { optionalAuth, requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import type { Env } from "../shared/env.js";
+import { logger } from "../shared/logger.js";
+import { notify } from "../notifications/service.js";
+import { issueCertificateRow } from "../certificates/routes.js";
 
 const PRIVILEGED_ROLES = ["hr", "admin", "super_admin"] as const;
 
@@ -28,7 +31,7 @@ const PAYMENT_GRACE_PERIOD_MS = PAYMENT_GRACE_PERIOD_DAYS * 24 * 60 * 60 * 1000;
  * admin pending-payments list, mark-paid). Once "overdue", course access
  * is blocked until an admin resolves it.
  */
-async function resolveEnrollmentPaymentStatus(db: Database, enrollment: typeof courseEnrollments.$inferSelect) {
+export async function resolveEnrollmentPaymentStatus(db: Database, enrollment: typeof courseEnrollments.$inferSelect) {
   if (enrollment.paymentStatus !== "pending" || !enrollment.paymentDueAt || enrollment.paymentDueAt > new Date()) {
     return enrollment;
   }
@@ -52,6 +55,10 @@ const createLessonSchema = z.object({
   contentText: z.string().max(20000).optional(),
   required: z.boolean().default(true),
   orderIndex: z.number().int().default(0),
+  durationMinutes: z.number().int().min(1).max(1000).optional(),
+  passingScorePercent: z.number().int().min(1).max(100).optional(),
+  timeLimitMinutes: z.number().int().min(1).max(600).optional(),
+  maxAttempts: z.number().int().min(1).max(50).optional(),
 });
 
 const gradeSchema = z.object({ userId: z.string().uuid(), passed: z.boolean() });
@@ -62,7 +69,7 @@ const gradeSchema = z.object({ userId: z.string().uuid(), passed: z.boolean() })
  * progress reads, so lessons added to a course after someone enrolled
  * still show up instead of silently missing.
  */
-async function ensureProgressRows(db: Database, enrollmentId: string, courseId: string) {
+export async function ensureProgressRows(db: Database, enrollmentId: string, courseId: string) {
   const modules = await db.query.courseModules.findMany({ where: eq(courseModules.courseId, courseId) });
   const moduleIds = modules.map((m) => m.id);
   const lessons = moduleIds.length ? await db.query.courseLessons.findMany({ where: (l, { inArray }) => inArray(l.moduleId, moduleIds) }) : [];
@@ -75,8 +82,13 @@ async function ensureProgressRows(db: Database, enrollmentId: string, courseId: 
   return db.query.lessonProgress.findMany({ where: eq(lessonProgress.enrollmentId, enrollmentId) });
 }
 
-/** After marking a lesson complete, checks if every REQUIRED lesson is now done (and passed, for tests) and auto-completes the enrollment if so. */
-async function maybeAutoCompleteEnrollment(db: Database, enrollmentId: string, courseId: string) {
+/**
+ * After marking a lesson complete, checks if every REQUIRED lesson is now
+ * done (and passed, for tests) and auto-completes the enrollment if so.
+ * On completion the learner is told, and when the course has a
+ * certificate template the certificate is issued straight away.
+ */
+export async function maybeAutoCompleteEnrollment(db: Database, enrollmentId: string, courseId: string, appUrl: string) {
   const modules = await db.query.courseModules.findMany({ where: eq(courseModules.courseId, courseId) });
   const moduleIds = modules.map((m) => m.id);
   const lessons = moduleIds.length ? await db.query.courseLessons.findMany({ where: (l, { inArray }) => inArray(l.moduleId, moduleIds) }) : [];
@@ -94,11 +106,23 @@ async function maybeAutoCompleteEnrollment(db: Database, enrollmentId: string, c
     return true;
   });
 
-  if (allDone) {
-    await db
-      .update(courseEnrollments)
-      .set({ status: "completed", completedAt: new Date() })
-      .where(and(eq(courseEnrollments.id, enrollmentId), eq(courseEnrollments.status, "enrolled")));
+  if (!allDone) return;
+  const [completed] = await db
+    .update(courseEnrollments)
+    .set({ status: "completed", completedAt: new Date() })
+    .where(and(eq(courseEnrollments.id, enrollmentId), eq(courseEnrollments.status, "enrolled")))
+    .returning();
+  if (!completed) return; // already completed earlier
+
+  const course = await db.query.courses.findFirst({ where: eq(courses.id, courseId) });
+  if (!course) return;
+  await notify(db, { userIds: [completed.userId], kind: "course.completed", title: `Course complete: ${course.title}`, body: "Nice work, you've finished every required lesson.", link: `/courses/${course.id}` });
+  if (course.certificateTemplateId) {
+    try {
+      await issueCertificateRow(db, { userId: completed.userId, courseId, templateId: course.certificateTemplateId, issuedBy: course.createdBy, appUrl });
+    } catch (err) {
+      logger.error({ err, enrollmentId, courseId }, "Automatic certificate issue failed");
+    }
   }
 }
 
@@ -309,7 +333,7 @@ export function lessonsRouter(db: Database, env: Env) {
     const lesson = await db.query.courseLessons.findFirst({ where: eq(courseLessons.id, req.params.id) });
     if (!lesson) throw new NotFoundError("Lesson not found");
     if (lesson.contentType === "test") {
-      throw new AppError("USE_GRADE_ENDPOINT", "Test-type lessons are marked by a reviewer via /lessons/:id/grade, not self-reported", 400);
+      throw new AppError("USE_GRADE_ENDPOINT", "Quiz lessons are completed by passing the quiz (POST /lessons/:id/quiz/submit) or by a reviewer's grade, not self-reported", 400);
     }
 
     const courseModule = await db.query.courseModules.findFirst({ where: eq(courseModules.id, lesson.moduleId) });
@@ -332,7 +356,7 @@ export function lessonsRouter(db: Database, env: Env) {
       .values({ enrollmentId: enrollment.id, lessonId: lesson.id, status: "completed", completedAt: new Date() })
       .onConflictDoUpdate({ target: [lessonProgress.enrollmentId, lessonProgress.lessonId], set: { status: "completed", completedAt: new Date() } });
 
-    await maybeAutoCompleteEnrollment(db, enrollment.id, courseModule.courseId);
+    await maybeAutoCompleteEnrollment(db, enrollment.id, courseModule.courseId, env.PORTAL_APP_URL);
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "lesson.complete", entityType: "course_lesson", entityId: lesson.id, ipAddress: req.ip });
 
     const updatedEnrollment = await db.query.courseEnrollments.findFirst({ where: eq(courseEnrollments.id, enrollment.id) });
@@ -359,7 +383,7 @@ export function lessonsRouter(db: Database, env: Env) {
       .values({ enrollmentId: enrollment.id, lessonId: lesson.id, status: "completed", passed: body.passed, completedAt: new Date() })
       .onConflictDoUpdate({ target: [lessonProgress.enrollmentId, lessonProgress.lessonId], set: { status: "completed", passed: body.passed, completedAt: new Date() } });
 
-    await maybeAutoCompleteEnrollment(db, enrollment.id, courseModule.courseId);
+    await maybeAutoCompleteEnrollment(db, enrollment.id, courseModule.courseId, env.PORTAL_APP_URL);
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "lesson.grade", entityType: "course_lesson", entityId: lesson.id, metadata: { userId: enrolleeUserId, passed: body.passed }, ipAddress: req.ip });
 
     res.json({ message: `Lesson graded: ${body.passed ? "pass" : "fail"}` });
