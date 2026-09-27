@@ -90,3 +90,12 @@ Why this first: it's pure upside on APIs that are already built and tested, it s
 1. **Meeting provider for Phase E** — Google Meet, Zoom, or both. Recommendation: Google Meet first, since it also syncs to Google Calendar; Zoom as a second adapter.
 2. **Internship enrollment model** — is an internship always "apply and get selected", or can some programs be open self-enroll (possibly paid)? Default assumed here: both, controlled by a per-program `enrollmentMode` flag.
 3. **File storage** — where uploaded documents should live (S3-compatible bucket, or a volume on the VPS). Needed before Phase C ships document uploads.
+
+## 6. Branching
+
+LMS work stays on its own branch, separate from other portal fixes (Vaibhav's request, 2026-09-27).
+
+- A long-lived **`feature/lms`** branch is cut from `main` when Phase D starts.
+- Every LMS PR (internship programs, course authoring, lesson player, quizzes, exams, certificates) branches from `feature/lms` and targets it, not `main`.
+- Non-LMS work (Phase A UI foundation and tasks, notifications, onboarding, employee management, calendar) and ordinary portal fixes keep going to `main`.
+- `main` is merged into `feature/lms` regularly so the shared UI foundation and fixes flow in. `feature/lms` merges back to `main` in one reviewed PR when the LMS is ready to ship.
