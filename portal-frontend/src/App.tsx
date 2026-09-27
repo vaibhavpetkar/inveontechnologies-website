@@ -19,8 +19,10 @@ import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import CertificateVerify from "./pages/CertificateVerify";
 import Tasks from "./pages/Tasks";
+import People from "./pages/People";
 import { MotionConfig } from "framer-motion";
 import { ToastProvider } from "./components/Toast";
+import { NotificationsProvider } from "./context/NotificationsContext";
 import "./styles.css";
 
 function Home() {
@@ -61,6 +63,7 @@ function AppRoutes() {
       <Route path="/admin"><Protected><AdminDashboard /></Protected></Route>
       {/* One route for the board and an open task, so the board stays mounted under the drawer */}
       <Route path="/tasks/:id?"><Protected><Tasks /></Protected></Route>
+      <Route path="/people/:id?"><Protected><People /></Protected></Route>
 
       <Route><div className="page-loading">Page not found.</div></Route>
     </Switch>
@@ -73,7 +76,9 @@ export default function App() {
     <MotionConfig reducedMotion="user">
       <AuthProvider>
         <ToastProvider>
-          <AppRoutes />
+          <NotificationsProvider>
+            <AppRoutes />
+          </NotificationsProvider>
         </ToastProvider>
       </AuthProvider>
     </MotionConfig>

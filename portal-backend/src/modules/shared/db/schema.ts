@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, boolean, jsonb, pgEnum, integer, primaryKey, unique, numeric } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, boolean, jsonb, pgEnum, integer, primaryKey, unique, numeric, index } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 /**
@@ -26,6 +26,8 @@ export const users = pgTable("users", {
   failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
   lockedUntil: timestamp("locked_until", { withTimezone: true }),
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }), // heartbeat-driven presence, see chat/presence-routes.ts
+  // Display name for staff accounts (candidates keep theirs on candidate_profiles).
+  fullName: text("full_name"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -352,6 +354,9 @@ export const interviewRounds = pgTable("interview_rounds", {
 
 export const offerStatusEnum = pgEnum("offer_status", ["draft", "sent", "accepted", "rejected", "expired"]);
 
+// Declared here (not with the other Phase 6 enums) because offers uses it.
+export const employeeTypeEnum = pgEnum("employee_type", ["intern", "full_time", "contract"]);
+
 export const offers = pgTable("offers", {
   id: uuid("id").primaryKey().defaultRandom(),
   applicationId: uuid("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
@@ -362,6 +367,12 @@ export const offers = pgTable("offers", {
   // never an edit to a sent offer — preserves what was actually offered.
   content: text("content").notNull(),
   acceptanceDeadline: timestamp("acceptance_deadline", { withTimezone: true }),
+  // Optional structured terms. When all of employeeType + joiningDate are
+  // set, accepting the offer creates the employee record automatically
+  // (see employees/onboarding.ts); otherwise HR is asked to onboard by hand.
+  employeeType: employeeTypeEnum("employee_type"),
+  joiningDate: timestamp("joining_date", { withTimezone: true }),
+  durationMonths: integer("duration_months"),
   generatedBy: uuid("generated_by").notNull().references(() => users.id),
   approvedBy: uuid("approved_by").references(() => users.id),
   sentAt: timestamp("sent_at", { withTimezone: true }),
@@ -573,7 +584,6 @@ export const certificates = pgTable(
  *   employee dashboard endpoint checks it and 403s until activated.
  */
 
-export const employeeTypeEnum = pgEnum("employee_type", ["intern", "full_time", "contract"]);
 export const employeeStatusEnum = pgEnum("employee_status", ["preboarding", "active", "on_leave", "offboarded"]);
 export const employeeDocumentStatusEnum = pgEnum("employee_document_status", ["uploaded", "verified", "rejected"]);
 export const letterTypeEnum = pgEnum("letter_type", ["joining", "appointment"]);
@@ -1034,3 +1044,57 @@ export const notificationPreferences = pgTable("notification_preferences", {
   inAppEnabled: boolean("in_app_enabled").notNull().default(true),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Notifications and background jobs (roadmap phase B).
+ *
+ * - `notifications` is each person's inbox. Every notification is stored,
+ *   even for someone who turned in-app notifications off (`inApp` false):
+ *   the row doubles as the record that stops a reminder going out twice
+ *   (unique userId + dedupeKey; rows without a key never collide).
+ * - `jobs` is a small Postgres-backed queue (see shared/jobs.ts). Workers
+ *   claim rows with FOR UPDATE SKIP LOCKED, so more than one backend
+ *   process can run without sending anything twice. Email goes out through
+ *   it so a mail server outage retries instead of losing the message.
+ */
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind").notNull(),
+    title: text("title").notNull(),
+    body: text("body"),
+    link: text("link"),
+    dedupeKey: text("dedupe_key"),
+    inApp: boolean("in_app").notNull().default(true),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    byUser: index("notifications_user_created_idx").on(t.userId, t.createdAt),
+    dedupe: unique("notifications_user_dedupe_key").on(t.userId, t.dedupeKey),
+  }),
+);
+
+export const jobStatusEnum = pgEnum("job_status", ["pending", "running", "done", "failed"]);
+
+export const jobs = pgTable(
+  "jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    type: text("type").notNull(),
+    payload: jsonb("payload").notNull().default({}),
+    status: jobStatusEnum("status").notNull().default("pending"),
+    runAt: timestamp("run_at", { withTimezone: true }).notNull().defaultNow(),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(5),
+    lastError: text("last_error"),
+    lockedAt: timestamp("locked_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    due: index("jobs_status_run_at_idx").on(t.status, t.runAt),
+  }),
+);

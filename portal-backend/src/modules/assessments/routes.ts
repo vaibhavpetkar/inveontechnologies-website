@@ -10,6 +10,7 @@ import { isAdminTransitionAllowed, type ApplicationStatus } from "../application
 import { sendAssessmentInviteEmail } from "../shared/emails.js";
 import type { Env } from "../shared/env.js";
 import { PIPELINE_ROLES, assertCanManageApplication } from "../applications/access.js";
+import { notify } from "../notifications/service.js";
 
 const PRIVILEGED_ROLES = ["hr", "admin", "super_admin"] as const;
 
@@ -156,6 +157,8 @@ export function assessmentsRouter(db: Database, env: Env) {
         link: `${env.PORTAL_APP_URL}/assessments/${application.id}`,
       });
     }
+    // The invite email above is the email; this is the in-app copy.
+    await notify(db, { userIds: [application.userId], actorUserId: req.user!.sub, kind: "assessment.invited", title: `Assessment ready: ${assessment.title}`, body: `You have ${assessment.durationMinutes} minutes once you press Start.`, link: `/assessments/${application.id}` });
 
     await writeAuditLog(db, {
       actorUserId: req.user!.sub,

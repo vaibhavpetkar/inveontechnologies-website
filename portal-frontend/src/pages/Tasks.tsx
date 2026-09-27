@@ -9,6 +9,7 @@ import { TaskDrawer } from "../components/tasks/TaskDrawer";
 import { NewTaskDialog } from "../components/tasks/NewTaskDialog";
 import { useToast } from "../components/Toast";
 import { useAuth } from "../context/AuthContext";
+import { useNotifications } from "../context/NotificationsContext";
 import { apiFetch, ApiError } from "../lib/api";
 import { displayName } from "../lib/nav";
 import { allowedMoves, BOARD_COLUMNS, CAN_ASSIGN_OTHERS, isOverdue, STATUS_META, type Task, type TaskStatus } from "../lib/tasks";
@@ -49,6 +50,12 @@ export default function Tasks() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Something happened to someone's task (assigned, reviewed…): refresh the board.
+  const { arrivals } = useNotifications();
+  useEffect(() => {
+    if (arrivals) load();
+  }, [arrivals]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const visible = useMemo(() => {
     if (!tasks || !user) return [];

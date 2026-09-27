@@ -1,7 +1,7 @@
 // In dev, the backend runs on :4000; in production, nginx proxies /api/
 // on the same origin (see docs/domain-and-deployment.md), so an empty
 // base works there. Vite exposes env vars prefixed VITE_.
-const API_BASE = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://localhost:4000" : "");
+export const API_BASE = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://localhost:4000" : "");
 
 export class ApiError extends Error {
   constructor(

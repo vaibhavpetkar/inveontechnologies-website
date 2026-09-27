@@ -1,63 +1,76 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { motion } from "framer-motion";
+import { BadgeCheck, Briefcase, CalendarDays, Contact } from "lucide-react";
 import { DashboardShell } from "../components/DashboardShell";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/api";
+import { displayName } from "../lib/nav";
+import { formatDate, STATUS_META, TYPE_LABELS, type EmployeeStatus } from "../lib/people";
 import { MyTasksWidget } from "../components/tasks/MyTasksWidget";
-
-interface Employee {
-  businessId: string;
-  employeeType: string;
-  status: string;
-  portalAccessActive: boolean;
-}
+import { OnboardingCard, type MyEmployee } from "../components/people/OnboardingCard";
 
 export default function EmployeeDashboard() {
-  const { accessToken } = useAuth();
-  const [employee, setEmployee] = useState<Employee | null | "none">(null);
+  const { user, accessToken } = useAuth();
+  const [employee, setEmployee] = useState<MyEmployee | null | "none">(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     if (!accessToken) return;
-    apiFetch<{ employee: Employee }>("/api/v1/employees/me", { accessToken })
+    apiFetch<{ employee: MyEmployee }>("/api/v1/employees/me", { accessToken })
       .then((res) => setEmployee(res.employee))
       .catch((err) => {
-        if (err instanceof ApiError && err.status === 404) {
-          setEmployee("none");
-        } else {
-          setError("Couldn't load your employee record right now.");
-        }
+        if (err instanceof ApiError && err.status === 404) setEmployee("none");
+        else setError("Couldn't load your employee record right now.");
       });
   }, [accessToken]);
 
+  useEffect(load, [load]);
+
+  const first = user ? displayName(user.email).split(" ")[0] : "";
+
   return (
     <DashboardShell>
-      <h1>Your workspace</h1>
-      <p>Your employee record, onboarding status, and documents live here.</p>
-
-      {error && <div className="error-banner" style={{ marginTop: "1.5rem" }}>{error}</div>}
-      {employee === null && !error && <p>Loading…</p>}
-      {employee === "none" && <p>No employee record is linked to your account yet. Check back after HR completes onboarding.</p>}
-      {employee && employee !== "none" && (
-        <div style={{ marginTop: "1.5rem", display: "grid", gap: "0.75rem" }}>
-          <Row label="Employee ID" value={employee.businessId} />
-          <Row label="Type" value={employee.employeeType.replace("_", " ")} />
-          <Row label="Status" value={employee.status.replace("_", " ")} />
-          <Row label="Portal access" value={employee.portalAccessActive ? "Active" : "Pending activation"} />
+      <div className="page-head">
+        <div>
+          <h1>Hi {first}</h1>
+          <p>Your onboarding, your tasks, and your employee details.</p>
         </div>
+      </div>
+
+      {error && <div className="error-banner">{error}</div>}
+      {employee === null && !error && <div className="skeleton" style={{ height: 90 }} />}
+      {employee === "none" && <p className="muted-small">No employee record is linked to your account yet. It appears here once HR sets you up.</p>}
+
+      {employee && employee !== "none" && (
+        <>
+          <div className="fact-strip">
+            {[
+              { icon: Contact, label: "Employee ID", value: employee.businessId },
+              { icon: Briefcase, label: "Type", value: TYPE_LABELS[employee.employeeType] },
+              { icon: CalendarDays, label: "Joining date", value: formatDate(employee.joiningDate) },
+              { icon: BadgeCheck, label: "Status", value: STATUS_META[employee.status as EmployeeStatus]?.label ?? employee.status },
+            ].map((f, i) => (
+              <motion.div key={f.label} className="fact" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
+                <f.icon size={18} />
+                <div>
+                  <span className="muted-small">{f.label}</span>
+                  <strong>{f.value}</strong>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+          <div className="panel-grid">
+            <OnboardingCard employee={employee} onChanged={load} />
+            <MyTasksWidget />
+          </div>
+        </>
       )}
 
-      <div className="stack">
-        <MyTasksWidget />
-      </div>
+      {employee === "none" && (
+        <div className="stack">
+          <MyTasksWidget />
+        </div>
+      )}
     </DashboardShell>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", padding: "0.75rem 0", borderBottom: "1px solid var(--line)" }}>
-      <span style={{ color: "var(--muted)" }}>{label}</span>
-      <span style={{ textTransform: "capitalize" }}>{value}</span>
-    </div>
   );
 }
