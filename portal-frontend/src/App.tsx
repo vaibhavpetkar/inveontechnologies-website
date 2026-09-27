@@ -14,6 +14,8 @@ import Assessments from "./pages/Assessments";
 import TakeAssessment from "./pages/TakeAssessment";
 import Courses from "./pages/Courses";
 import CourseDetail from "./pages/CourseDetail";
+import CourseBuilder from "./pages/CourseBuilder";
+import LessonPlayer from "./pages/LessonPlayer";
 import VerifyEmail from "./pages/VerifyEmail";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
@@ -56,7 +58,9 @@ function AppRoutes() {
       <Route path="/assessments"><Protected><Assessments /></Protected></Route>
       <Route path="/assessments/:applicationId"><Protected><TakeAssessment /></Protected></Route>
       <Route path="/courses"><Protected><Courses /></Protected></Route>
+      <Route path="/courses/:id/edit"><Protected><CourseBuilder /></Protected></Route>
       <Route path="/courses/:id"><Protected><CourseDetail /></Protected></Route>
+      <Route path="/learn/:courseId/:lessonId?"><Protected><LessonPlayer /></Protected></Route>
 
       {/* Employee / staff */}
       <Route path="/employee"><Protected><EmployeeDashboard /></Protected></Route>

@@ -436,6 +436,10 @@ export const courses = pgTable("courses", {
   // course_enrollments.paymentStatus comment below) — this just records
   // the price a course is meant to cost.
   priceAmount: numeric("price_amount", { precision: 10, scale: 2 }),
+  // Issued automatically when a learner completes the course (LMS phase D).
+  // Null = certificates for this course are issued by hand, as before.
+  certificateTemplateId: uuid("certificate_template_id"),
+  category: text("category"),
   createdBy: uuid("created_by").notNull().references(() => users.id),
   publishedAt: timestamp("published_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -467,6 +471,40 @@ export const courseLessons = pgTable("course_lessons", {
   contentText: text("content_text"), // for text-based lessons/instructions
   required: boolean("required").notNull().default(true),
   orderIndex: integer("order_index").notNull().default(0),
+  // Estimated time to finish, shown in the outline.
+  durationMinutes: integer("duration_minutes"),
+  // For quiz ("test") lessons: score needed to pass.
+  passingScorePercent: integer("passing_score_percent").notNull().default(70),
+});
+
+/**
+ * Auto-graded quizzes for "test" lessons (LMS phase D). Same multiple-choice
+ * shape as assessment_questions, but lesson-scoped and retakeable: every
+ * submission is kept as an attempt, and the lesson counts as passed once
+ * any attempt reaches passingScorePercent. A reviewer can still override
+ * through POST /lessons/:id/grade.
+ */
+export const lessonQuizQuestions = pgTable("lesson_quiz_questions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  lessonId: uuid("lesson_id").notNull().references(() => courseLessons.id, { onDelete: "cascade" }),
+  questionText: text("question_text").notNull(),
+  // [{ id: "a", text: "..." }, ...]
+  options: jsonb("options").notNull(),
+  correctOptionId: text("correct_option_id").notNull(),
+  explanation: text("explanation"),
+  points: integer("points").notNull().default(1),
+  orderIndex: integer("order_index").notNull().default(0),
+});
+
+export const lessonQuizAttempts = pgTable("lesson_quiz_attempts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  lessonId: uuid("lesson_id").notNull().references(() => courseLessons.id, { onDelete: "cascade" }),
+  enrollmentId: uuid("enrollment_id").notNull().references(() => courseEnrollments.id, { onDelete: "cascade" }),
+  // [{ questionId, selectedOptionId, correct }]
+  answers: jsonb("answers").notNull(),
+  scorePercent: integer("score_percent").notNull(),
+  passed: boolean("passed").notNull(),
+  submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 // "overdue" added post-launch: a "skip for now" enrollment that isn't
@@ -514,6 +552,7 @@ export const lessonProgress = pgTable(
     status: lessonProgressStatusEnum("status").notNull().default("not_started"),
     // For "test" lessons only — set by a privileged reviewer's pass/fail call.
     passed: boolean("passed"),
+    bestScorePercent: integer("best_score_percent"),
     completedAt: timestamp("completed_at", { withTimezone: true }),
   },
   (t) => ({ uniqEnrollmentLesson: unique("lesson_progress_enrollment_lesson_unique").on(t.enrollmentId, t.lessonId) }),

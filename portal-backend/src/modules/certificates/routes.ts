@@ -28,7 +28,7 @@ function generateVerificationCode(): string {
   return randomBytes(16).toString("base64url");
 }
 
-async function issueCertificateRow(
+export async function issueCertificateRow(
   db: Database,
   params: {
     userId: string;
@@ -72,7 +72,7 @@ async function issueCertificateRow(
   }
 
   const snapshotContent = renderTemplate(template.bodyTemplate, {
-    recipientName: profile?.fullName ?? user.email, // email fallback keeps this working if a profile was never filled in
+    recipientName: user.fullName ?? profile?.fullName ?? user.email, // email fallback keeps this working if a profile was never filled in
     courseTitle: course.title,
     issuedDate: new Date().toISOString().slice(0, 10),
   });
@@ -144,6 +144,11 @@ export function certificateTemplatesRouter(db: Database, env: Env) {
     const [template] = await db.insert(certificateTemplates).values({ ...body, createdBy: req.user!.sub }).returning();
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "certificate_template.create", entityType: "certificate_template", entityId: template.id, ipAddress: req.ip });
     res.status(201).json({ template });
+  });
+
+  // For the course builder's "certificate on completion" picker.
+  router.get("/", requireAuth(env), requireRole(...PRIVILEGED_ROLES), async (_req, res) => {
+    res.json({ templates: await db.query.certificateTemplates.findMany({ orderBy: (t, { desc: d }) => [d(t.createdAt)] }) });
   });
 
   router.get("/:id", requireAuth(env), requireRole(...PRIVILEGED_ROLES), async (req, res) => {
