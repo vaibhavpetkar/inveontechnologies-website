@@ -1,9 +1,11 @@
 import { useState, type FormEvent } from "react";
-import { useLocation, Link } from "wouter";
+import { useLocation, useSearch, Link } from "wouter";
+import { nextQuery } from "../lib/next";
 import { apiFetch, ApiError } from "../lib/api";
 
 export default function Register() {
   const [, navigate] = useLocation();
+  const search = useSearch();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -57,7 +59,7 @@ export default function Register() {
               You can sign in right away with the email and password you just set. We've also sent a verification link to your
               email — open it to confirm your address (check spam if it doesn't arrive).
             </p>
-            <button className="submit-button" onClick={() => navigate("/login")}>
+            <button className="submit-button" onClick={() => navigate(`/login${nextQuery(search)}`)}>
               Go to sign in
             </button>
           </div>
@@ -129,7 +131,7 @@ export default function Register() {
 
           <p className="login-footnote">
             Already have an account?{" "}
-            <Link href="/login" style={{ color: "var(--primary)", fontWeight: 600 }}>
+            <Link href={`/login${nextQuery(search)}`} style={{ color: "var(--primary)", fontWeight: 600 }}>
               Sign in
             </Link>
           </p>

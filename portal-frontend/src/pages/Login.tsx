@@ -1,11 +1,13 @@
 import { useState, type FormEvent } from "react";
-import { Link, Redirect } from "wouter";
+import { Link, Redirect, useSearch } from "wouter";
+import { nextQuery, safeNext } from "../lib/next";
 import { useAuth } from "../context/AuthContext";
 import { ApiError } from "../lib/api";
 import { landingPathForRole } from "../lib/roles";
 
 export default function Login() {
   const { user, login } = useAuth();
+  const search = useSearch();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -38,7 +40,7 @@ export default function Login() {
     }
   }
 
-  if (user) return <Redirect to={landingPathForRole(user.role)} replace />;
+  if (user) return <Redirect to={safeNext(search) ?? landingPathForRole(user.role)} replace />;
 
   return (
     <div className="login-screen">
@@ -107,7 +109,7 @@ export default function Login() {
 
           <p className="login-footnote">
             Don't have an account yet?{" "}
-            <Link href="/register" style={{ color: "var(--primary)", fontWeight: 600 }}>
+            <Link href={`/register${nextQuery(search)}`} style={{ color: "var(--primary)", fontWeight: 600 }}>
               Create one
             </Link>
           </p>

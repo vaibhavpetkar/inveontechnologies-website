@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useRoute, useLocation, Link } from "wouter";
 import { motion } from "framer-motion";
-import { ArrowRight, BookOpen, CalendarDays, Clock, GraduationCap, IndianRupee, MapPin, Pencil, Rocket } from "lucide-react";
+import { ArrowRight, BookOpen, CalendarDays, ClipboardCheck, Clock, GraduationCap, IndianRupee, MapPin, Pencil, Rocket } from "lucide-react";
+import { ExamsPanel } from "../components/exams/ExamsPanel";
 import { DashboardShell } from "../components/DashboardShell";
 import { useToast } from "../components/Toast";
 import { useAuth } from "../context/AuthContext";
@@ -9,6 +10,7 @@ import { apiFetch, ApiError } from "../lib/api";
 import { durationLabel, KIND_META, OPPORTUNITY_ADMIN_ROLES, OPPORTUNITY_PUBLISH_ROLES, startLabel, stipendLabel, type LinkedCourse, type Opportunity } from "../lib/opportunities";
 
 interface Skill { id: string; name: string }
+interface ExamInfo { id: string; title: string; language: string | null; durationMinutes: number; passingScorePercent: number; maxAttempts: number; questionCount: number }
 
 export default function OpportunityDetail() {
   const [, params] = useRoute("/opportunities/:id");
@@ -16,7 +18,7 @@ export default function OpportunityDetail() {
   const { user, accessToken } = useAuth();
   const toast = useToast();
   const isAdmin = !!user && OPPORTUNITY_ADMIN_ROLES.includes(user.role);
-  const [data, setData] = useState<{ opportunity: Opportunity; skills: Skill[]; courses: LinkedCourse[] } | null>(null);
+  const [data, setData] = useState<{ opportunity: Opportunity; skills: Skill[]; courses: LinkedCourse[]; exams?: ExamInfo[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
@@ -27,7 +29,7 @@ export default function OpportunityDetail() {
 
   useEffect(() => {
     if (!params?.id) return;
-    apiFetch<{ opportunity: Opportunity; skills: Skill[]; courses: LinkedCourse[] }>(`/api/v1/opportunities/${params.id}`, { accessToken })
+    apiFetch<{ opportunity: Opportunity; skills: Skill[]; courses: LinkedCourse[]; exams?: ExamInfo[] }>(`/api/v1/opportunities/${params.id}`, { accessToken })
       .then(setData)
       .catch(() => setError("Couldn't load this opportunity."));
   }, [params?.id, accessToken]);
@@ -39,11 +41,14 @@ export default function OpportunityDetail() {
     setProfileIncomplete(false);
     setNeedsVerification(false);
     try {
-      const res = await apiFetch<{ eligibilityWarning: string[] | null }>(
+      const res = await apiFetch<{ application: { id: string }; examRequired?: boolean; eligibilityWarning: string[] | null }>(
         `/api/v1/applications/opportunities/${params.id}/apply`,
         { method: "POST", body: {}, accessToken },
       );
-      if (res.eligibilityWarning?.length) {
+      if (res.examRequired) {
+        toast("Application sent. Next up: your exam.");
+        navigate(`/assessments/${res.application.id}`);
+      } else if (res.eligibilityWarning?.length) {
         // Applied successfully, but flag the mismatch honestly rather than
         // pretending everything matched.
         setWarnings(res.eligibilityWarning);
@@ -102,6 +107,7 @@ export default function OpportunityDetail() {
   }
 
   const { opportunity, skills, courses } = data;
+  const exams = data.exams ?? [];
   const meta = KIND_META[opportunity.kind];
   const facts = [
     opportunity.location && { icon: MapPin, label: "Location", text: opportunity.location },
@@ -149,6 +155,21 @@ export default function OpportunityDetail() {
             </div>
           )}
         </div>
+        {(courses.length > 0 || (!isAdmin && exams.length > 0)) && (
+          <div className="opp-side">
+        {!isAdmin && exams.length > 0 && (
+          <aside className="opp-training opp-exam-card">
+            <h2 className="opp-section-title"><ClipboardCheck size={18} /> Exam after you apply</h2>
+            <p className="muted-small">
+              {exams.length > 1 ? `Pick one language: ${exams.map((e) => e.language ?? e.title).join(", ")}.` : `${exams[0].language ? `${exams[0].language}, ` : ""}${exams[0].questionCount} multiple-choice questions.`} You start it straight after applying, and the timer only runs once you press Start.
+            </p>
+            <div className="exam-facts">
+              <span><Clock size={14} /> {Math.min(...exams.map((e) => e.durationMinutes))}{exams.some((e) => e.durationMinutes !== exams[0].durationMinutes) ? "+" : ""} min</span>
+              <span>Pass {Math.min(...exams.map((e) => e.passingScorePercent))}%+</span>
+              <span>Up to {Math.max(...exams.map((e) => e.maxAttempts))} attempts</span>
+            </div>
+          </aside>
+        )}
         {courses.length > 0 && (
           <aside className="opp-training">
             <h2 className="opp-section-title"><BookOpen size={18} /> Training included</h2>
@@ -163,7 +184,11 @@ export default function OpportunityDetail() {
             </ol>
           </aside>
         )}
+          </div>
+        )}
       </div>
+
+      {isAdmin && <ExamsPanel opportunityId={opportunity.id} />}
 
       {warnings && (
         <>
