@@ -36,7 +36,22 @@ PORTAL_SMTP_PASSWORD=<mailbox password>
 PORTAL_MAIL_FROM=Inveon Portal <no-reply@inveontechnologies.in>
 ```
 
-Check `docker compose logs portal-backend` for `Email sent` / `Email sending failed` after registering a test account.
+After `docker compose up -d --build portal-backend`, the backend checks the mail server login once at startup. `docker compose logs portal-backend` should show `SMTP connection verified`; `SMTP connection check failed` means the host, port, TLS setting or password is wrong (the error says which), and `PORTAL_SMTP_HOST is not set` means the variables above were not picked up. Each email then logs `Email sent` or `Email sending failed`.
+
+The same variables are listed in `portal-backend/.env.example`.
+
+### Can't sign in and no reset email arrives
+
+Set a new password directly from the server. This also clears the lockout after 5 wrong passwords and signs out old sessions:
+
+```bash
+docker compose exec \
+  -e SEED_SUPER_ADMIN_EMAIL=admin@inveontechnologies.in \
+  -e SEED_SUPER_ADMIN_PASSWORD='new-strong-password' \
+  portal-backend npm run admin:reset-password
+```
+
+It works for any existing account, not only the super admin. If it says there is no account with that email, the super admin was never created: run `npm run db:seed` the same way.
 
 ### Require verified email before applying
 

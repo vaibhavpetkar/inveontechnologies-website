@@ -14,7 +14,10 @@ let fromAddress = "";
 export function configureMailer(env: Env) {
   fromAddress = env.PORTAL_MAIL_FROM;
   if (!env.PORTAL_SMTP_HOST) {
-    logger.warn("PORTAL_SMTP_HOST is not set — emails will be logged, not sent");
+    // In production this means password reset and verification silently
+    // don't work, so make it stand out in `docker compose logs`.
+    const log = env.NODE_ENV === "production" ? logger.error.bind(logger) : logger.warn.bind(logger);
+    log("PORTAL_SMTP_HOST is not set — emails will be logged, not sent. See portal-backend/.env.example.");
     return;
   }
   transporter = nodemailer.createTransport({
@@ -23,6 +26,14 @@ export function configureMailer(env: Env) {
     secure: env.PORTAL_SMTP_SECURE,
     auth: env.PORTAL_SMTP_USER ? { user: env.PORTAL_SMTP_USER, pass: env.PORTAL_SMTP_PASSWORD } : undefined,
   });
+  // Check the connection and login once at startup, so a wrong host, port
+  // or password shows up right away instead of on the first reset request.
+  // Doesn't block startup: the server still runs if the mail server is down.
+  const target = { host: env.PORTAL_SMTP_HOST, port: env.PORTAL_SMTP_PORT, secure: env.PORTAL_SMTP_SECURE };
+  transporter
+    .verify()
+    .then(() => logger.info(target, "SMTP connection verified — emails will be sent"))
+    .catch((err: unknown) => logger.error({ err, ...target }, "SMTP connection check failed — emails will not arrive until this is fixed"));
 }
 
 export interface OutgoingEmail {
