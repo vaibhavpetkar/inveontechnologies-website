@@ -55,6 +55,8 @@ Each phase is one or two PRs, shippable on its own, and ends with the feature us
 - **Employee directory** (search, filters by department/status), employee profile page with documents, letters and onboarding progress; **onboarding tracker** board for HR.
 - Manager team scoping (a manager sees their direct reports) — flagged as deferred in phases 2, 6 and 7.
 
+**Built:** accepting an offer that carries structured terms (type + joining date) creates the employee record, sets the portal role and seeds the default checklist (`employees/onboarding.ts`); without terms, HR is notified to onboard by hand. `/api/v1/people` gives the directory (managers see their direct reports), single and CSV invites with a dry-run preview, and HR edits. The People page, invite dialog and the joiner's own checklist are in the portal. HR is told when a joiner finishes the required steps; activation completes the last one.
+
 ### Phase D — LMS experience
 - **Internship programs**: add `type` (internship / job / program), duration, stipend, start date and cohort to opportunities; a program page with **Enroll** that runs the existing application pipeline and, once selected, auto-enrolls the intern in the program's courses.
 - **Course authoring UI** for staff (modules, lessons, drag-to-reorder, publish).

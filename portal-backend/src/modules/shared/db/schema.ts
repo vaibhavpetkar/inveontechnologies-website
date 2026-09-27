@@ -26,6 +26,8 @@ export const users = pgTable("users", {
   failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
   lockedUntil: timestamp("locked_until", { withTimezone: true }),
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }), // heartbeat-driven presence, see chat/presence-routes.ts
+  // Display name for staff accounts (candidates keep theirs on candidate_profiles).
+  fullName: text("full_name"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -352,6 +354,9 @@ export const interviewRounds = pgTable("interview_rounds", {
 
 export const offerStatusEnum = pgEnum("offer_status", ["draft", "sent", "accepted", "rejected", "expired"]);
 
+// Declared here (not with the other Phase 6 enums) because offers uses it.
+export const employeeTypeEnum = pgEnum("employee_type", ["intern", "full_time", "contract"]);
+
 export const offers = pgTable("offers", {
   id: uuid("id").primaryKey().defaultRandom(),
   applicationId: uuid("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
@@ -362,6 +367,12 @@ export const offers = pgTable("offers", {
   // never an edit to a sent offer — preserves what was actually offered.
   content: text("content").notNull(),
   acceptanceDeadline: timestamp("acceptance_deadline", { withTimezone: true }),
+  // Optional structured terms. When all of employeeType + joiningDate are
+  // set, accepting the offer creates the employee record automatically
+  // (see employees/onboarding.ts); otherwise HR is asked to onboard by hand.
+  employeeType: employeeTypeEnum("employee_type"),
+  joiningDate: timestamp("joining_date", { withTimezone: true }),
+  durationMonths: integer("duration_months"),
   generatedBy: uuid("generated_by").notNull().references(() => users.id),
   approvedBy: uuid("approved_by").references(() => users.id),
   sentAt: timestamp("sent_at", { withTimezone: true }),
@@ -573,7 +584,6 @@ export const certificates = pgTable(
  *   employee dashboard endpoint checks it and 403s until activated.
  */
 
-export const employeeTypeEnum = pgEnum("employee_type", ["intern", "full_time", "contract"]);
 export const employeeStatusEnum = pgEnum("employee_status", ["preboarding", "active", "on_leave", "offboarded"]);
 export const employeeDocumentStatusEnum = pgEnum("employee_document_status", ["uploaded", "verified", "rejected"]);
 export const letterTypeEnum = pgEnum("letter_type", ["joining", "appointment"]);
