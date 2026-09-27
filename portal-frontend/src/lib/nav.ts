@@ -1,4 +1,4 @@
-import { BookOpen, Briefcase, ClipboardCheck, FileText, KanbanSquare, LayoutDashboard, UserRound, Users, type LucideIcon } from "lucide-react";
+import { BookOpen, CalendarDays, Briefcase, ClipboardCheck, FileText, KanbanSquare, LayoutDashboard, UserRound, Users, type LucideIcon } from "lucide-react";
 import type { UserRole } from "../context/AuthContext";
 
 export interface NavItem {
@@ -16,6 +16,7 @@ export function navForRole(role: UserRole): NavItem[] {
       { href: "/opportunities", label: "Opportunities", icon: Briefcase },
       { href: "/candidate", label: "My applications", icon: FileText },
       { href: "/assessments", label: "Assessments", icon: ClipboardCheck },
+      { href: "/calendar", label: "Calendar", icon: CalendarDays },
       { href: "/courses", label: "Courses", icon: BookOpen },
       { href: "/profile", label: "Profile", icon: UserRound },
     ];
@@ -26,12 +27,14 @@ export function navForRole(role: UserRole): NavItem[] {
       { href: "/people", label: role === "manager" ? "My team" : "People", icon: Users },
       { href: "/tasks", label: "Tasks", icon: KanbanSquare },
       ...(role === "manager" ? [] : [{ href: "/opportunities", label: "Openings", icon: Briefcase }]),
+      { href: "/calendar", label: "Calendar", icon: CalendarDays },
       { href: "/courses", label: "Courses", icon: BookOpen },
     ];
   }
   return [
     { href: "/employee", label: "Workspace", icon: LayoutDashboard },
     { href: "/tasks", label: "My tasks", icon: KanbanSquare },
+    { href: "/calendar", label: "Calendar", icon: CalendarDays },
     { href: "/courses", label: "Courses", icon: BookOpen },
   ];
 }
