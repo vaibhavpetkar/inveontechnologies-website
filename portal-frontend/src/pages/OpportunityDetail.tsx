@@ -3,6 +3,7 @@ import { useRoute, useLocation, Link } from "wouter";
 import { motion } from "framer-motion";
 import { ArrowRight, BookOpen, CalendarDays, ClipboardCheck, Clock, GraduationCap, IndianRupee, MapPin, Pencil, Rocket } from "lucide-react";
 import { ExamsPanel } from "../components/exams/ExamsPanel";
+import { ApplicantsPanel } from "../components/applicants/ApplicantsPanel";
 import { DashboardShell } from "../components/DashboardShell";
 import { useToast } from "../components/Toast";
 import { useAuth } from "../context/AuthContext";
@@ -188,6 +189,7 @@ export default function OpportunityDetail() {
         )}
       </div>
 
+      {isAdmin && <ApplicantsPanel opportunityId={opportunity.id} opportunityTitle={opportunity.title} />}
       {isAdmin && <ExamsPanel opportunityId={opportunity.id} />}
 
       {warnings && (

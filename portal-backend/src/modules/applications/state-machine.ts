@@ -62,5 +62,10 @@ export function isCandidateTransitionAllowed(from: ApplicationStatus, to: Applic
  *   has no attempts left on any exam (see assessments/attempt-routes.ts).
  */
 export function isSystemTransitionAllowed(from: ApplicationStatus, to: ApplicationStatus): boolean {
-  return (from === "submitted" && to === "assessment_invited") || (from === "assessment_invited" && to === "assessment_completed");
+  return (
+    (from === "submitted" && to === "assessment_invited") ||
+    (from === "assessment_invited" && to === "assessment_completed") ||
+    // Passing the HR round (interview feedback "pass") shortlists the candidate.
+    ((from === "under_review" || from === "assessment_completed") && to === "shortlisted")
+  );
 }
