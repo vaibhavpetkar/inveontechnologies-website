@@ -65,6 +65,8 @@ Each phase is one or two PRs, shippable on its own, and ends with the feature us
 - **Exams**: question bank, exam resume after reload, result page with animated score breakdown.
 - **Certificates as real PDFs** + public verify page (already exists).
 
+**Built (first LMS PR, on `feature/lms`):** course catalog with search, categories and a "continue learning" strip; course builder for staff (details, certificate template, modules and lessons with reorder, edit and delete); lesson player with YouTube/Vimeo/Drive/MP4/PDF embeds, outline sidebar and mark-complete; auto-graded quizzes per lesson (`lesson_quiz_questions`, `lesson_quiz_attempts`, pass mark per lesson, best score kept, a pass is never lost on a retake). When the last required lesson is done the enrollment completes, the learner is notified and, if the course has a certificate template, the certificate is issued automatically. Quizzes are lesson-scoped rather than a generalised MCQ engine. Still to do: internship programs, timed exams with resume, and PDF certificates.
+
 ### Phase E — Calendar + Google Meet / Zoom
 - `calendar_events` (title, start, end, attendees, source, meeting provider, join URL) populated from interviews, meetings, exam windows, class sessions and task due dates.
 - Calendar UI: month / week / agenda views, click-to-create meeting, attendee picker.
