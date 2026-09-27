@@ -7,6 +7,7 @@ import { requireAuth } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import type { Env } from "../shared/env.js";
+import { assertChatEligible } from "./inbox-routes.js";
 
 const PRIVILEGED_ROLES = ["hr", "admin", "super_admin"] as const;
 
@@ -56,6 +57,7 @@ export function communitiesRouter(db: Database, env: Env) {
   router.post("/channels/:channelId/join", requireAuth(env), async (req, res) => {
     const channel = await db.query.channels.findFirst({ where: eq(channels.id, req.params.channelId) });
     if (!channel) throw new NotFoundError("Channel not found");
+    await assertChatEligible(db, req.user!.sub);
 
     const banned = await db.query.channelBans.findFirst({ where: and(eq(channelBans.channelId, channel.id), eq(channelBans.userId, req.user!.sub)) });
     if (banned) throw new ForbiddenError("You are banned from this channel");

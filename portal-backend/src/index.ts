@@ -40,6 +40,7 @@ import { configureNotifications } from "./modules/notifications/service.js";
 import { registerReminderSchedules } from "./modules/notifications/reminders.js";
 import { calendarRouter, registerCalendarSchedules } from "./modules/calendar/routes.js";
 import { startJobWorker } from "./modules/shared/jobs.js";
+import { chatRouter } from "./modules/chat/inbox-routes.js";
 import { cashfreeWebhookRouter, programRouter, registerProgramSchedules } from "./modules/payments/routes.js";
 
 const env = loadEnv();
@@ -140,6 +141,7 @@ app.use("/api/v1/communities", communitiesRouter(db, env));
 app.use("/api/v1/conversations", conversationsRouter(db, env));
 app.use("/api/v1/messages", messagesRouter(db, env));
 app.use("/api/v1/presence", presenceRouter(db, env));
+app.use("/api/v1/chat", chatRouter(db, env));
 app.use("/api/v1/reports", reportsRouter(db, env));
 app.use("/api/v1/feature-flags", featureFlagsRouter(db, env));
 app.use("/api/v1/notification-preferences", notificationPreferencesRouter(db, env));

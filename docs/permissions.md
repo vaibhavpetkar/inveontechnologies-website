@@ -29,3 +29,13 @@ Every row above must be enforced **server-side**, on every request, independent 
 ## Sensitive-action rule (separation of duties)
 
 Refunds, employee termination, salary/stipend changes, and certificate revocation require the action to be *proposed* by one privileged user and *approved* by a second — no single Admin account can both create and approve these alone. This is a Phase 4+/Phase 6+ concern but is recorded here now so the schema design in later phases accounts for a `proposed_by` / `approved_by` pair on those tables.
+
+## Chat
+
+| Action | Who |
+| --- | --- |
+| Open chat, DM, create groups, join channels | Staff and employees; candidates only while their program enrollment is on trial, paid or waived |
+| Post in #announcements | Channel admins |
+| Rename a group, add or remove people, make admins | Group admins (the creator starts as admin) |
+| Leave a group or channel | Any member (not #announcements). When the last group admin leaves, the longest-standing member becomes admin |
+| @mention | Only people who can open that chat get the alert |
