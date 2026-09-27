@@ -1098,3 +1098,52 @@ export const jobs = pgTable(
     due: index("jobs_status_run_at_idx").on(t.status, t.runAt),
   }),
 );
+
+/**
+ * Phase E: calendar. Meetings people create live here; interviews and task
+ * due dates are read from their own tables and merged into the calendar
+ * view, so they never drift out of sync.
+ */
+export const meetingProviderEnum = pgEnum("meeting_provider", ["none", "manual", "google_meet", "zoom"]);
+export const attendeeResponseEnum = pgEnum("attendee_response", ["needs_action", "accepted", "declined", "tentative"]);
+
+export const calendarEvents = pgTable(
+  "calendar_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    title: text("title").notNull(),
+    description: text("description"),
+    location: text("location"),
+    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+    timezone: text("timezone").notNull().default("Asia/Kolkata"),
+    meetingProvider: meetingProviderEnum("meeting_provider").notNull().default("none"),
+    joinUrl: text("join_url"),
+    // The provider's id for the meeting (Google event id, Zoom meeting id),
+    // used to update or cancel it there.
+    externalId: text("external_id"),
+    // Bumped on every change so calendar apps replace the old invite.
+    sequence: integer("sequence").notNull().default(0),
+    createdBy: uuid("created_by").notNull().references(() => users.id),
+    cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    byStart: index("calendar_events_starts_at_idx").on(t.startsAt),
+  }),
+);
+
+export const calendarEventAttendees = pgTable(
+  "calendar_event_attendees",
+  {
+    eventId: uuid("event_id").notNull().references(() => calendarEvents.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    response: attendeeResponseEnum("response").notNull().default("needs_action"),
+    remindedAt: timestamp("reminded_at", { withTimezone: true }),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.eventId, t.userId] }),
+    byUser: index("calendar_event_attendees_user_idx").on(t.userId),
+  }),
+);

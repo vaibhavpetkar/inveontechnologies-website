@@ -7,6 +7,7 @@ import { apiFetch, ApiError } from "../lib/api";
 import { displayName } from "../lib/nav";
 import { formatDate, STATUS_META, TYPE_LABELS, type EmployeeStatus } from "../lib/people";
 import { MyTasksWidget } from "../components/tasks/MyTasksWidget";
+import { UpcomingWidget } from "../components/calendar/UpcomingWidget";
 import { OnboardingCard, type MyEmployee } from "../components/people/OnboardingCard";
 
 export default function EmployeeDashboard() {
@@ -62,6 +63,7 @@ export default function EmployeeDashboard() {
           <div className="panel-grid">
             <OnboardingCard employee={employee} onChanged={load} />
             <MyTasksWidget />
+            <UpcomingWidget />
           </div>
         </>
       )}
@@ -69,6 +71,7 @@ export default function EmployeeDashboard() {
       {employee === "none" && (
         <div className="stack">
           <MyTasksWidget />
+          <UpcomingWidget />
         </div>
       )}
     </DashboardShell>

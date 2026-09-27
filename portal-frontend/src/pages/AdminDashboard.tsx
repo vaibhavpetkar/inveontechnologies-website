@@ -5,6 +5,7 @@ import { apiFetch, ApiError } from "../lib/api";
 import { TeamAccounts } from "../components/TeamAccounts";
 import { WorkloadWidget } from "../components/tasks/WorkloadWidget";
 import { MyTasksWidget } from "../components/tasks/MyTasksWidget";
+import { UpcomingWidget } from "../components/calendar/UpcomingWidget";
 
 export default function AdminDashboard() {
   const { user, accessToken } = useAuth();
@@ -47,6 +48,7 @@ export default function AdminDashboard() {
       <div className="panel-grid">
         <WorkloadWidget />
         <MyTasksWidget />
+        <UpcomingWidget />
       </div>
 
       {user?.role === "super_admin" && <TeamAccounts />}

@@ -36,6 +36,7 @@ import { configureMailer } from "./modules/shared/mailer.js";
 import { notificationsRouter } from "./modules/notifications/routes.js";
 import { configureNotifications } from "./modules/notifications/service.js";
 import { registerReminderSchedules } from "./modules/notifications/reminders.js";
+import { calendarRouter, registerCalendarSchedules } from "./modules/calendar/routes.js";
 import { startJobWorker } from "./modules/shared/jobs.js";
 
 const env = loadEnv();
@@ -43,6 +44,7 @@ const { db, pool } = createDb(env);
 configureMailer(env);
 configureNotifications({ appUrl: env.PORTAL_APP_URL });
 registerReminderSchedules(db);
+registerCalendarSchedules(db);
 const app = express();
 // Behind nginx (and Cloudflare in front of that) — trust exactly one hop
 // so req.ip and X-Forwarded-For-based rate limiting resolve to the real
@@ -124,6 +126,7 @@ app.use("/api/v1/notification-preferences", notificationPreferencesRouter(db, en
 app.use("/api/v1/bulk", bulkActionsRouter(db, env));
 app.use("/api/v1/users", usersRouter(db, env));
 app.use("/api/v1/notifications", notificationsRouter(db, env));
+app.use("/api/v1/calendar", calendarRouter(db, env));
 
 // Future feature routes mount here:
 // app.use("/api/v1/employees", employeesRouter(db, env));
