@@ -25,6 +25,7 @@ export function navForRole(role: UserRole): NavItem[] {
       { href: "/admin", label: "Console", icon: LayoutDashboard },
       { href: "/people", label: role === "manager" ? "My team" : "People", icon: Users },
       { href: "/tasks", label: "Tasks", icon: KanbanSquare },
+      ...(role === "manager" ? [] : [{ href: "/opportunities", label: "Openings", icon: Briefcase }]),
       { href: "/courses", label: "Courses", icon: BookOpen },
     ];
   }

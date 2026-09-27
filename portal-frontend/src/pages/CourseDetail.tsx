@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useRoute } from "wouter";
 import { motion } from "framer-motion";
-import { Award, CheckCircle2, Circle, Clock, GraduationCap, Layers, Lock, Pencil, PlayCircle, Rocket } from "lucide-react";
+import { Award, CheckCircle2, Circle, Clock, Download, GraduationCap, Layers, Lock, Pencil, PlayCircle, Rocket } from "lucide-react";
 import { DashboardShell } from "../components/DashboardShell";
 import { useToast } from "../components/Toast";
 import { useAuth } from "../context/AuthContext";
-import { apiFetch, ApiError } from "../lib/api";
+import { API_BASE, apiFetch, ApiError } from "../lib/api";
 import { AUTHOR_ROLES, coverFor, minutesLabel, priceLabel, TYPE_META } from "../lib/lms";
 import { useCourse } from "../lib/useCourse";
 
@@ -123,7 +123,7 @@ export default function CourseDetail() {
                     <Icon size={16} className="outline-type" />
                     <span className="outline-title">{l.title}</span>
                     <span className="muted-small">
-                      {TYPE_META[l.contentType].label}
+                      {l.timeLimitMinutes ? "Timed exam" : TYPE_META[l.contentType].label}
                       {l.durationMinutes ? ` · ${l.durationMinutes} min` : ""}
                       {l.contentType === "test" && p?.bestScorePercent != null ? ` · best ${p.bestScorePercent}%` : ""}
                     </span>
@@ -148,7 +148,10 @@ export default function CourseDetail() {
               <span className="progress-bar"><motion.span className="progress-fill" initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.8 }} /></span>
               <p className="muted-small">{done} of {lessons.length} lessons done</p>
               {enrollment.status === "completed" && (certificateCode ? (
-                <Link href={`/verify/${certificateCode}`} className="btn"><Award size={16} /> View certificate</Link>
+                <div className="cert-actions">
+                  <a className="btn" href={`${API_BASE}/api/v1/certificates/verify/${certificateCode}/pdf?download=1`}><Download size={16} /> Download certificate</a>
+                  <Link href={`/verify/${certificateCode}`} className="btn btn-secondary"><Award size={16} /> Verify page</Link>
+                </div>
               ) : (
                 <p className="muted-small">Completed. {course.certificateTemplateId ? "Your certificate is on its way." : ""}</p>
               ))}

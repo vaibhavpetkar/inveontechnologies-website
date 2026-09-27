@@ -114,7 +114,7 @@ export default function LessonPlayer() {
           <div className="player-crumbs">
             <button className="icon-button outline-toggle" aria-label="Show outline" onClick={() => setOutlineOpen(true)}><ListTree size={18} /></button>
             <span className="muted-small">Lesson {index + 1} of {lessons.length}</span>
-            <span className="pill pill-slate"><Icon size={13} style={{ marginRight: 4 }} />{TYPE_META[lesson.contentType].label}</span>
+            <span className="pill pill-slate"><Icon size={13} style={{ marginRight: 4 }} />{lesson.timeLimitMinutes ? `Exam · ${lesson.timeLimitMinutes} min` : TYPE_META[lesson.contentType].label}</span>
             {isDone && <span className="pill pill-green">Done</span>}
           </div>
 

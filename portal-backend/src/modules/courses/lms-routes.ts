@@ -31,6 +31,8 @@ const lessonFields = {
   required: z.boolean(),
   durationMinutes: z.number().int().min(1).max(1000).nullable().optional(),
   passingScorePercent: z.number().int().min(1).max(100),
+  timeLimitMinutes: z.number().int().min(1).max(600).nullable().optional(),
+  maxAttempts: z.number().int().min(1).max(50).nullable().optional(),
 };
 const updateLessonSchema = z.object(lessonFields).partial();
 
@@ -52,9 +54,18 @@ const quizSchema = z.object({
     .max(100),
 });
 
-const submitSchema = z.object({
-  answers: z.array(z.object({ questionId: z.string().uuid(), selectedOptionId: z.string().max(20).nullable() })).max(100),
-});
+const answersSchema = z.array(z.object({ questionId: z.string().uuid(), selectedOptionId: z.string().max(20).nullable() })).max(100);
+const submitSchema = z.object({ answers: answersSchema, attemptId: z.string().uuid().optional() });
+const saveAnswersSchema = z.object({ answers: answersSchema });
+
+// A timed exam still accepts a submit this long after its deadline, to
+// cover network lag on the automatic submit.
+const SUBMIT_GRACE_MS = 30_000;
+
+type Lesson = typeof courseLessons.$inferSelect;
+type Enrollment = typeof courseEnrollments.$inferSelect;
+type Attempt = typeof lessonQuizAttempts.$inferSelect;
+type DraftAnswer = { questionId: string; selectedOptionId: string | null };
 
 /**
  * LMS phase D: course authoring (edit, delete, reorder, quizzes), the
@@ -183,7 +194,11 @@ export function lmsRouter(db: Database, env: Env) {
 
   // ---- Quizzes ----
 
-  /** Authors get the answer key; enrolled learners get questions only, plus their attempts. */
+  /**
+   * Authors get the answer key. Enrolled learners get the questions, their
+   * past attempts, how many tries remain and, for a timed exam, the attempt
+   * in progress with its saved answers so a reload picks up where it was.
+   */
   router.get("/lessons/:lessonId/quiz", requireAuth(env), async (req, res) => {
     const { lesson, courseId } = await lessonWithCourse(req.params.lessonId);
     const questions = await db.query.lessonQuizQuestions.findMany({ where: eq(lessonQuizQuestions.lessonId, lesson.id), orderBy: [asc(lessonQuizQuestions.orderIndex)] });
@@ -192,11 +207,18 @@ export function lmsRouter(db: Database, env: Env) {
       return;
     }
     const enrollment = await activeEnrollment(req.user!.sub, courseId);
-    const attempts = await db.query.lessonQuizAttempts.findMany({ where: and(eq(lessonQuizAttempts.lessonId, lesson.id), eq(lessonQuizAttempts.enrollmentId, enrollment.id)), orderBy: [desc(lessonQuizAttempts.submittedAt)], limit: 10 });
+    await finalizeExpired(lesson, courseId, enrollment);
+    const attempts = await db.query.lessonQuizAttempts.findMany({ where: and(eq(lessonQuizAttempts.lessonId, lesson.id), eq(lessonQuizAttempts.enrollmentId, enrollment.id)), orderBy: [desc(lessonQuizAttempts.startedAt)] });
+    const submitted = attempts.filter((a) => a.status === "submitted");
+    const live = attempts.find((a) => a.status === "in_progress");
     res.json({
       lesson,
       questions: questions.map(({ correctOptionId, explanation, ...q }) => q),
-      attempts: attempts.map(({ answers, ...a }) => a),
+      attempts: submitted.slice(0, 10).map(({ answers, ...a }) => a),
+      attemptsUsed: submitted.length,
+      attemptsLeft: lesson.maxAttempts ? Math.max(0, lesson.maxAttempts - submitted.length) : null,
+      inProgress: live ? { id: live.id, startedAt: live.startedAt, deadlineAt: live.deadlineAt, answers: live.answers as DraftAnswer[] } : null,
+      serverTime: new Date(),
     });
   });
 
@@ -222,23 +244,25 @@ export function lmsRouter(db: Database, env: Env) {
   });
 
   /**
-   * Grades a quiz on the spot. Every attempt is kept; the lesson is passed
-   * once any attempt reaches the lesson's passing score, and a later lower
-   * score never un-passes it.
+   * Grades an attempt and records it: a timed attempt already has a row
+   * (in progress), an untimed one gets a new row. The lesson is passed once
+   * any attempt reaches its passing score, and a later lower score never
+   * un-passes it.
    */
-  router.post("/lessons/:lessonId/quiz/submit", requireAuth(env), async (req, res) => {
-    const body = submitSchema.parse(req.body);
-    const { lesson, courseId } = await lessonWithCourse(req.params.lessonId);
-    if (lesson.contentType !== "test") throw new AppError("NOT_A_QUIZ", "This lesson has no quiz", 400);
-    const enrollment = await activeEnrollment(req.user!.sub, courseId);
+  async function grade(lesson: Lesson, courseId: string, enrollment: Enrollment, answers: DraftAnswer[], existingAttempt?: Attempt) {
     const questions = await db.query.lessonQuizQuestions.findMany({ where: eq(lessonQuizQuestions.lessonId, lesson.id), orderBy: [asc(lessonQuizQuestions.orderIndex)] });
     if (questions.length === 0) throw new AppError("QUIZ_EMPTY", "This quiz has no questions yet", 400);
-
-    const result = scoreAttempt(questions, body.answers, lesson.passingScorePercent);
-    const [attempt] = await db
-      .insert(lessonQuizAttempts)
-      .values({ lessonId: lesson.id, enrollmentId: enrollment.id, answers: result.answers.map((a) => ({ questionId: a.questionId, selectedOptionId: a.selectedOptionId, correct: a.isCorrect })), scorePercent: result.scorePercent, passed: result.passed })
-      .returning();
+    const result = scoreAttempt(questions, answers, lesson.passingScorePercent);
+    const values = {
+      answers: result.answers.map((a) => ({ questionId: a.questionId, selectedOptionId: a.selectedOptionId, correct: a.isCorrect })),
+      scorePercent: result.scorePercent,
+      passed: result.passed,
+      status: "submitted" as const,
+      submittedAt: new Date(),
+    };
+    const [attempt] = existingAttempt
+      ? await db.update(lessonQuizAttempts).set(values).where(eq(lessonQuizAttempts.id, existingAttempt.id)).returning()
+      : await db.insert(lessonQuizAttempts).values({ lessonId: lesson.id, enrollmentId: enrollment.id, ...values }).returning();
 
     await ensureProgressRows(db, enrollment.id, courseId);
     const existing = await db.query.lessonProgress.findFirst({ where: and(eq(lessonProgress.enrollmentId, enrollment.id), eq(lessonProgress.lessonId, lesson.id)) });
@@ -258,15 +282,96 @@ export function lmsRouter(db: Database, env: Env) {
     const updatedEnrollment = await db.query.courseEnrollments.findFirst({ where: eq(courseEnrollments.id, enrollment.id) });
 
     const byId = new Map(questions.map((q) => [q.id, q]));
-    res.status(201).json({
-      attempt: { id: attempt.id, scorePercent: attempt.scorePercent, passed: attempt.passed, submittedAt: attempt.submittedAt },
+    return {
+      attempt: { id: attempt.id, scorePercent: attempt.scorePercent, passed: attempt.passed, submittedAt: attempt.submittedAt, startedAt: attempt.startedAt },
       passingScorePercent: lesson.passingScorePercent,
       bestScorePercent: best,
       lessonPassed: nowPassed,
       courseCompleted: updatedEnrollment?.status === "completed",
       // Feedback per question: shown after submitting, so learners learn from mistakes.
       review: result.answers.map((a) => ({ questionId: a.questionId, selectedOptionId: a.selectedOptionId, correct: a.isCorrect, correctOptionId: byId.get(a.questionId)!.correctOptionId, explanation: byId.get(a.questionId)!.explanation })),
-    });
+    };
+  }
+
+  /** A timed attempt whose time ran out (plus grace) is graded on what was saved. */
+  async function finalizeExpired(lesson: Lesson, courseId: string, enrollment: Enrollment) {
+    const live = await db.query.lessonQuizAttempts.findFirst({ where: and(eq(lessonQuizAttempts.lessonId, lesson.id), eq(lessonQuizAttempts.enrollmentId, enrollment.id), eq(lessonQuizAttempts.status, "in_progress")) });
+    if (live?.deadlineAt && live.deadlineAt.getTime() + SUBMIT_GRACE_MS < Date.now()) {
+      await grade(lesson, courseId, enrollment, live.answers as DraftAnswer[], live);
+    }
+  }
+
+  async function attemptsLeft(lesson: Lesson, enrollmentId: string) {
+    if (!lesson.maxAttempts) return null;
+    const [{ n }] = (await db.execute<{ n: number }>(sql`SELECT count(*)::int AS n FROM lesson_quiz_attempts WHERE lesson_id = ${lesson.id} AND enrollment_id = ${enrollmentId} AND status = 'submitted'`)).rows;
+    return lesson.maxAttempts - n;
+  }
+
+  /** Starts (or resumes) a timed exam. The clock runs on the server. */
+  router.post("/lessons/:lessonId/quiz/start", requireAuth(env), async (req, res) => {
+    const { lesson, courseId } = await lessonWithCourse(req.params.lessonId);
+    if (lesson.contentType !== "test") throw new AppError("NOT_A_QUIZ", "This lesson has no quiz", 400);
+    if (!lesson.timeLimitMinutes) throw new AppError("NOT_TIMED", "This quiz isn't timed; submit your answers directly", 400);
+    const enrollment = await activeEnrollment(req.user!.sub, courseId);
+    await finalizeExpired(lesson, courseId, enrollment);
+
+    const live = await db.query.lessonQuizAttempts.findFirst({ where: and(eq(lessonQuizAttempts.lessonId, lesson.id), eq(lessonQuizAttempts.enrollmentId, enrollment.id), eq(lessonQuizAttempts.status, "in_progress")) });
+    if (live) {
+      res.json({ attempt: { id: live.id, startedAt: live.startedAt, deadlineAt: live.deadlineAt, answers: live.answers }, resumed: true, serverTime: new Date() });
+      return;
+    }
+    const left = await attemptsLeft(lesson, enrollment.id);
+    if (left !== null && left <= 0) throw new AppError("NO_ATTEMPTS_LEFT", "You've used all your attempts for this exam", 400);
+    const [{ n }] = (await db.execute<{ n: number }>(sql`SELECT count(*)::int AS n FROM lesson_quiz_questions WHERE lesson_id = ${lesson.id}`)).rows;
+    if (n === 0) throw new AppError("QUIZ_EMPTY", "This quiz has no questions yet", 400);
+
+    const now = new Date();
+    const [attempt] = await db
+      .insert(lessonQuizAttempts)
+      .values({ lessonId: lesson.id, enrollmentId: enrollment.id, answers: [], status: "in_progress", startedAt: now, deadlineAt: new Date(now.getTime() + lesson.timeLimitMinutes * 60_000) })
+      .returning();
+    res.status(201).json({ attempt: { id: attempt.id, startedAt: attempt.startedAt, deadlineAt: attempt.deadlineAt, answers: [] }, resumed: false, serverTime: now });
+  });
+
+  /** Saves a timed exam's answers as the learner goes. */
+  router.put("/quiz-attempts/:attemptId/answers", requireAuth(env), async (req, res) => {
+    const { answers } = saveAnswersSchema.parse(req.body);
+    const attempt = await db.query.lessonQuizAttempts.findFirst({ where: eq(lessonQuizAttempts.id, req.params.attemptId) });
+    if (!attempt) throw new NotFoundError("Attempt not found");
+    const enrollment = await db.query.courseEnrollments.findFirst({ where: eq(courseEnrollments.id, attempt.enrollmentId) });
+    if (!enrollment || enrollment.userId !== req.user!.sub) throw new NotFoundError("Attempt not found");
+    if (attempt.status !== "in_progress") throw new AppError("ATTEMPT_SUBMITTED", "This attempt has already been submitted", 400);
+    if (attempt.deadlineAt && attempt.deadlineAt.getTime() + SUBMIT_GRACE_MS < Date.now()) throw new AppError("TIME_UP", "Time is up for this attempt", 400);
+    await db.update(lessonQuizAttempts).set({ answers }).where(eq(lessonQuizAttempts.id, attempt.id));
+    res.json({ savedAt: new Date() });
+  });
+
+  /**
+   * Grades a quiz on the spot. A timed exam needs the attemptId from
+   * /start; once its time is up, the answers saved on the server are what
+   * count.
+   */
+  router.post("/lessons/:lessonId/quiz/submit", requireAuth(env), async (req, res) => {
+    const body = submitSchema.parse(req.body);
+    const { lesson, courseId } = await lessonWithCourse(req.params.lessonId);
+    if (lesson.contentType !== "test") throw new AppError("NOT_A_QUIZ", "This lesson has no quiz", 400);
+    const enrollment = await activeEnrollment(req.user!.sub, courseId);
+
+    if (lesson.timeLimitMinutes) {
+      if (!body.attemptId) throw new AppError("NOT_STARTED", "Start the exam first", 400);
+      const attempt = await db.query.lessonQuizAttempts.findFirst({ where: and(eq(lessonQuizAttempts.id, body.attemptId), eq(lessonQuizAttempts.enrollmentId, enrollment.id), eq(lessonQuizAttempts.lessonId, lesson.id)) });
+      if (!attempt) throw new NotFoundError("Attempt not found");
+      if (attempt.status !== "in_progress") throw new AppError("ATTEMPT_SUBMITTED", "This attempt has already been submitted", 400);
+      const late = !!attempt.deadlineAt && attempt.deadlineAt.getTime() + SUBMIT_GRACE_MS < Date.now();
+      const result = await grade(lesson, courseId, enrollment, late ? (attempt.answers as DraftAnswer[]) : body.answers, attempt);
+      res.status(201).json({ ...result, late, attemptsLeft: await attemptsLeft(lesson, enrollment.id) });
+      return;
+    }
+
+    const left = await attemptsLeft(lesson, enrollment.id);
+    if (left !== null && left <= 0) throw new AppError("NO_ATTEMPTS_LEFT", "You've used all your attempts for this quiz", 400);
+    const result = await grade(lesson, courseId, enrollment, body.answers);
+    res.status(201).json({ ...result, late: false, attemptsLeft: left === null ? null : left - 1 });
   });
 
   return router;

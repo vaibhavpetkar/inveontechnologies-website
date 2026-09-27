@@ -27,6 +27,8 @@ export function LessonEditor({ lesson, moduleId, onClose, onSaved }: Props) {
     durationMinutes: lesson?.durationMinutes ? String(lesson.durationMinutes) : "",
     required: lesson?.required ?? true,
     passingScorePercent: lesson?.passingScorePercent ?? 70,
+    timeLimitMinutes: lesson?.timeLimitMinutes ? String(lesson.timeLimitMinutes) : "",
+    maxAttempts: lesson?.maxAttempts ? String(lesson.maxAttempts) : "",
   });
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
   const [busy, setBusy] = useState(false);
@@ -58,6 +60,8 @@ export function LessonEditor({ lesson, moduleId, onClose, onSaved }: Props) {
         durationMinutes: form.durationMinutes ? Number(form.durationMinutes) : null,
         required: form.required,
         passingScorePercent: Number(form.passingScorePercent),
+        timeLimitMinutes: form.contentType === "test" && form.timeLimitMinutes ? Number(form.timeLimitMinutes) : null,
+        maxAttempts: form.contentType === "test" && form.maxAttempts ? Number(form.maxAttempts) : null,
       };
       let id = lesson?.id;
       if (id) {
@@ -65,7 +69,7 @@ export function LessonEditor({ lesson, moduleId, onClose, onSaved }: Props) {
       } else {
         const created = await apiFetch<{ lesson: Lesson }>(`/api/v1/courses/modules/${moduleId}/lessons`, {
           method: "POST",
-          body: { ...body, contentUrl: body.contentUrl ?? undefined, contentText: body.contentText ?? undefined, durationMinutes: body.durationMinutes ?? undefined, orderIndex: 999 },
+          body: { ...body, contentUrl: body.contentUrl ?? undefined, contentText: body.contentText ?? undefined, durationMinutes: body.durationMinutes ?? undefined, timeLimitMinutes: body.timeLimitMinutes ?? undefined, maxAttempts: body.maxAttempts ?? undefined, orderIndex: 999 },
           accessToken,
         });
         id = created.lesson.id;
@@ -132,6 +136,19 @@ export function LessonEditor({ lesson, moduleId, onClose, onSaved }: Props) {
               <div className="field"><label htmlFor="le-pass">Pass mark (%)</label><input id="le-pass" type="number" min={1} max={100} value={form.passingScorePercent} onChange={(e) => setForm({ ...form, passingScorePercent: Number(e.target.value) })} /></div>
             )}
           </div>
+          {form.contentType === "test" && (
+            <div className="form-grid">
+              <div className="field">
+                <label htmlFor="le-limit">Time limit (minutes)</label>
+                <input id="le-limit" type="number" min={1} max={600} placeholder="No limit" value={form.timeLimitMinutes} onChange={(e) => setForm({ ...form, timeLimitMinutes: e.target.value })} />
+                <span className="muted-small">{form.timeLimitMinutes ? "A timed exam: it resumes after a reload and submits itself at the end." : "Leave empty for an untimed quiz."}</span>
+              </div>
+              <div className="field">
+                <label htmlFor="le-attempts">Attempts allowed</label>
+                <input id="le-attempts" type="number" min={1} max={50} placeholder="Unlimited" value={form.maxAttempts} onChange={(e) => setForm({ ...form, maxAttempts: e.target.value })} />
+              </div>
+            </div>
+          )}
           <label className="toggle" style={{ marginBottom: "1rem" }}>
             <input type="checkbox" checked={form.required} onChange={(e) => setForm({ ...form, required: e.target.checked })} /> Required to complete the course
           </label>

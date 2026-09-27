@@ -57,6 +57,8 @@ const createLessonSchema = z.object({
   orderIndex: z.number().int().default(0),
   durationMinutes: z.number().int().min(1).max(1000).optional(),
   passingScorePercent: z.number().int().min(1).max(100).optional(),
+  timeLimitMinutes: z.number().int().min(1).max(600).optional(),
+  maxAttempts: z.number().int().min(1).max(50).optional(),
 });
 
 const gradeSchema = z.object({ userId: z.string().uuid(), passed: z.boolean() });

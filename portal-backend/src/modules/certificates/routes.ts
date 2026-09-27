@@ -6,6 +6,7 @@ import type { Database } from "../shared/db/client.js";
 import { certificateTemplates, certificates, courses, courseEnrollments, users, auditLogs, candidateProfiles } from "../shared/db/schema.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
+import { renderCertificatePdf } from "./pdf.js";
 import { writeAuditLog } from "../shared/audit.js";
 import { formatBusinessId } from "../shared/business-id.js";
 import { sendCertificateIssuedEmail } from "../shared/emails.js";
@@ -254,7 +255,8 @@ export function certificatesRouter(db: Database, env: Env) {
       return;
     }
 
-    const [profile, course] = await Promise.all([
+    const [user, profile, course] = await Promise.all([
+      db.query.users.findFirst({ where: eq(users.id, certificate.userId), columns: { fullName: true } }),
       db.query.candidateProfiles.findFirst({ where: eq(candidateProfiles.userId, certificate.userId) }),
       db.query.courses.findFirst({ where: eq(courses.id, certificate.courseId) }),
     ]);
@@ -264,7 +266,7 @@ export function certificatesRouter(db: Database, env: Env) {
       status: certificate.status,
       businessId: certificate.businessId,
       // Name only — this endpoint is public, so never fall back to the email.
-      recipientName: profile?.fullName ?? null,
+      recipientName: user?.fullName ?? profile?.fullName ?? null,
       courseTitle: course?.title ?? "Unknown",
       issuedAt: certificate.issuedAt,
       revokedAt: certificate.revokedAt,
@@ -272,6 +274,31 @@ export function certificatesRouter(db: Database, env: Env) {
       // who issued/revoked it, or any other internal metadata — "minimum
       // necessary data" per the plan.
     });
+  });
+
+  // The certificate as a PDF. Public like the verify page: the code is the
+  // secret, and the PDF shows nothing the verify page doesn't.
+  router.get("/verify/:verificationCode/pdf", async (req, res) => {
+    const certificate = await db.query.certificates.findFirst({ where: eq(certificates.verificationCode, req.params.verificationCode) });
+    if (!certificate) throw new NotFoundError("No certificate found for this verification code");
+    if (certificate.status !== "issued") throw new AppError("CERTIFICATE_REVOKED", "This certificate has been revoked", 410);
+    const [user, profile, course] = await Promise.all([
+      db.query.users.findFirst({ where: eq(users.id, certificate.userId), columns: { fullName: true } }),
+      db.query.candidateProfiles.findFirst({ where: eq(candidateProfiles.userId, certificate.userId) }),
+      db.query.courses.findFirst({ where: eq(courses.id, certificate.courseId) }),
+    ]);
+    const pdf = await renderCertificatePdf({
+      recipientName: user?.fullName ?? profile?.fullName ?? "Certificate holder",
+      courseTitle: course?.title ?? "Course",
+      body: certificate.snapshotContent,
+      issuedAt: certificate.issuedAt,
+      certificateId: certificate.businessId ?? certificate.id.slice(0, 8).toUpperCase(),
+      verifyUrl: `${env.PORTAL_APP_URL}/verify/${certificate.verificationCode}`,
+    });
+    const slug = (course?.title ?? "certificate").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `${req.query.download ? "attachment" : "inline"}; filename="${slug || "certificate"}-certificate.pdf"`);
+    res.send(Buffer.from(pdf));
   });
 
   return router;

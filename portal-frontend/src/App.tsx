@@ -9,6 +9,7 @@ import EmployeeDashboard from "./pages/EmployeeDashboard";
 import AdminDashboard from "./pages/AdminDashboard";
 import Opportunities from "./pages/Opportunities";
 import OpportunityDetail from "./pages/OpportunityDetail";
+import OpportunityEditor from "./pages/OpportunityEditor";
 import Profile from "./pages/Profile";
 import Assessments from "./pages/Assessments";
 import TakeAssessment from "./pages/TakeAssessment";
@@ -52,6 +53,8 @@ function AppRoutes() {
 
       {/* Candidate journey */}
       <Route path="/opportunities"><Protected><Opportunities /></Protected></Route>
+      <Route path="/opportunities/new"><Protected><OpportunityEditor /></Protected></Route>
+      <Route path="/opportunities/:id/edit"><Protected><OpportunityEditor /></Protected></Route>
       <Route path="/opportunities/:id"><Protected><OpportunityDetail /></Protected></Route>
       <Route path="/candidate"><Protected><CandidateDashboard /></Protected></Route>
       <Route path="/profile"><Protected><Profile /></Protected></Route>

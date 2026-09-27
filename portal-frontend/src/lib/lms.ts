@@ -40,6 +40,9 @@ export interface Lesson {
   orderIndex: number;
   durationMinutes: number | null;
   passingScorePercent: number;
+  // Exams: a time limit makes the quiz resumable and auto-submitted.
+  timeLimitMinutes: number | null;
+  maxAttempts: number | null;
 }
 
 export interface Enrollment { id: string; status: "enrolled" | "completed" | "dropped"; paymentStatus: string; paymentDueAt: string | null }

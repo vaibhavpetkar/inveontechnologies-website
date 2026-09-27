@@ -1240,3 +1240,82 @@ a.outline-lesson:hover { background: var(--surface); }
   .player-nav .btn { max-width: 100%; }
   .player-nav { flex-direction: column; }
 }
+
+/* --- Timed exams --- */
+.exam-facts { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.8rem; }
+.exam-facts span { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.35rem 0.7rem; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); font-size: 0.84rem; font-weight: 500; }
+.exam-bar { position: sticky; top: 0.5rem; z-index: 3; display: flex; align-items: center; gap: 0.8rem; margin-bottom: 1rem; padding: 0.55rem 0.8rem; border-radius: 12px; background: var(--paper); border: 1px solid var(--line); box-shadow: var(--shadow-sm); --exam: var(--primary); }
+.exam-bar.soon { --exam: #d97706; }
+.exam-bar.urgent { --exam: #dc2626; animation: exam-pulse 1s ease-in-out infinite; }
+@keyframes exam-pulse { 50% { box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.15); } }
+.exam-clock { display: inline-flex; align-items: center; gap: 0.35rem; font: 700 1.05rem var(--font-display); font-variant-numeric: tabular-nums; color: var(--exam); min-width: 4.8rem; }
+.exam-track { flex: 1; height: 6px; border-radius: 999px; background: var(--line); overflow: hidden; }
+.exam-fill { height: 100%; border-radius: inherit; background: var(--exam); }
+.exam-save { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
+.exam-save.saved { color: #16a34a; }
+.exam-save.offline { color: #dc2626; }
+@media (max-width: 600px) { .exam-save { display: none; } }
+
+/* --- Openings: internships, programs, jobs --- */
+.kind-internship { --kind: #7c3aed; --kind-soft: rgba(124, 58, 237, 0.1); --kind-grad: linear-gradient(135deg, #7c3aed, #4f46e5); }
+.kind-program { --kind: #059669; --kind-soft: rgba(5, 150, 105, 0.1); --kind-grad: linear-gradient(135deg, #059669, #0d9488); }
+.kind-job { --kind: #2563eb; --kind-soft: rgba(37, 99, 235, 0.1); --kind-grad: linear-gradient(135deg, #2563eb, #0891b2); }
+
+.opp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 1rem; }
+.opp-card { position: relative; display: flex; flex-direction: column; gap: 0.55rem; height: 100%; padding: 1.1rem 1.2rem 1.2rem; border-radius: 16px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); text-decoration: none; overflow: hidden; transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease; }
+.opp-card::before { content: ""; position: absolute; inset: 0 0 auto; height: 4px; background: var(--kind-grad); }
+.opp-card:hover { box-shadow: var(--shadow-md); transform: translateY(-3px); border-color: var(--kind); }
+.opp-card-top { display: flex; gap: 0.4rem; }
+.opp-card h3 { font-size: 1.1rem; line-height: 1.3; margin: 0; }
+.opp-card-desc { margin: 0; color: var(--muted); font-size: 0.88rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.opp-facts { display: flex; flex-wrap: wrap; gap: 0.35rem 0.8rem; margin-top: auto; padding-top: 0.3rem; font-size: 0.8rem; color: #334155; }
+.opp-facts span { display: inline-flex; align-items: center; gap: 0.3rem; }
+.opp-facts svg { color: var(--kind); }
+.opp-courses { display: inline-flex; align-items: center; gap: 0.35rem; align-self: flex-start; padding: 0.25rem 0.6rem; border-radius: 999px; background: var(--kind-soft); color: var(--kind); font-size: 0.76rem; font-weight: 600; }
+
+.opp-hero { position: relative; overflow: hidden; border-radius: 20px; padding: 1.8rem 2rem; margin-bottom: 1.4rem; color: #fff; background: var(--kind-grad); }
+.opp-hero h1 { color: #fff; font-size: clamp(1.6rem, 3vw, 2.3rem); margin: 0.4rem 0 0.3rem; max-width: 85%; }
+.opp-hero-top { display: flex; align-items: center; gap: 0.5rem; }
+.opp-hero-kind { padding: 0.2rem 0.6rem; border-radius: 999px; background: rgba(255, 255, 255, 0.2); font-size: 0.74rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+.opp-hero-id { margin-left: auto; font-size: 0.78rem; opacity: 0.75; }
+.opp-hero-blurb { margin: 0; color: rgba(255, 255, 255, 0.88); max-width: 60ch; }
+.opp-hero-facts { display: flex; flex-wrap: wrap; gap: 0.7rem; margin-top: 1.2rem; }
+.opp-hero-facts > div { display: flex; align-items: center; gap: 0.6rem; padding: 0.55rem 0.9rem; border-radius: 12px; background: rgba(255, 255, 255, 0.14); backdrop-filter: blur(6px); }
+.opp-hero-facts > div > span { display: grid; }
+.opp-hero-facts span span { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.75; }
+.opp-hero-actions { display: flex; gap: 0.5rem; margin-top: 1.2rem; }
+.opp-hero-art { position: absolute; right: -14px; bottom: -22px; opacity: 0.14; transform: rotate(-12deg); }
+.opp-body { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 1.5rem; align-items: start; }
+.opp-section-title { display: flex; align-items: center; gap: 0.45rem; font-size: 1.05rem; margin-bottom: 0.6rem; }
+.opp-desc { white-space: pre-wrap; line-height: 1.65; color: #1e293b; }
+.opp-skills { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 1rem; }
+.opp-training { padding: 1.1rem 1.2rem; border-radius: 16px; border: 1px solid var(--line); background: var(--paper); }
+.opp-training ol, .track-list { list-style: none; margin: 0.8rem 0 0; padding: 0; display: grid; gap: 0.55rem; }
+.opp-training li, .track-list li { display: flex; align-items: center; gap: 0.7rem; }
+.opp-step { flex: none; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; background: var(--primary); color: #fff; font-size: 0.78rem; font-weight: 700; }
+.opp-apply { margin-top: 1.6rem; }
+.btn-lg { padding: 0.8rem 1.4rem; font-size: 1rem; border-radius: 12px; }
+
+.opp-editor { display: grid; gap: 1rem; max-width: 860px; }
+.kind-picker { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.6rem; margin-bottom: 1rem; }
+.kind-picker button { position: relative; display: grid; justify-items: start; align-content: start; gap: 0.3rem; padding: 0.9rem; border: 1.5px solid var(--line); border-radius: 14px; background: var(--paper); font: inherit; text-align: left; cursor: pointer; color: var(--ink); }
+.kind-picker button > :not(.kind-pick-bg) { position: relative; z-index: 1; }
+.kind-picker button svg { color: var(--kind); }
+.kind-picker button span { font-size: 0.78rem; color: var(--muted); line-height: 1.4; }
+.kind-picker button.active { border-color: var(--kind); }
+.kind-pick-bg { position: absolute; inset: 0; border-radius: 12px; background: var(--kind-soft); }
+.track-list li { padding: 0.5rem 0.6rem; border-radius: 10px; background: var(--surface); }
+.track-title { flex: 1; min-width: 0; font-weight: 500; }
+.track-options { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0.45rem; }
+.track-options button { display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.6rem 0.7rem; border: 1px dashed var(--line); border-radius: 10px; background: var(--paper); font: inherit; text-align: left; cursor: pointer; }
+.track-options button:hover { border-style: solid; border-color: var(--primary); background: rgba(37, 99, 235, 0.04); }
+.track-options button > span { display: grid; }
+.track-add { margin-top: 3px; color: var(--primary); }
+.opp-editor-actions { display: flex; justify-content: flex-end; gap: 0.6rem; }
+.cert-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
+
+@media (max-width: 860px) {
+  .opp-body { grid-template-columns: 1fr; }
+  .kind-picker { grid-template-columns: 1fr; }
+  .opp-hero { padding: 1.4rem 1.2rem; }
+}

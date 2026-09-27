@@ -1,64 +1,164 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, ArrowRight, CheckCircle2, RotateCcw, Trophy, XCircle } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, Cloud, RotateCcw, Timer, Trophy, XCircle } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { apiFetch, ApiError } from "../../lib/api";
 import type { Lesson, QuizQuestion } from "../../lib/lms";
+import { useToast } from "../Toast";
 
 interface Attempt { id: string; scorePercent: number; passed: boolean; submittedAt: string }
 interface Review { questionId: string; selectedOptionId: string | null; correct: boolean; correctOptionId: string; explanation: string | null }
-interface Result { attempt: Attempt; passingScorePercent: number; bestScorePercent: number; lessonPassed: boolean; courseCompleted: boolean; review: Review[] }
+interface Result { attempt: Attempt; passingScorePercent: number; bestScorePercent: number; lessonPassed: boolean; courseCompleted: boolean; review: Review[]; late?: boolean; attemptsLeft?: number | null }
+interface Draft { questionId: string; selectedOptionId: string | null }
+interface LiveAttempt { id: string; startedAt: string; deadlineAt: string; answers: Draft[] }
+interface QuizData { questions: QuizQuestion[]; attempts?: Attempt[]; attemptsLeft?: number | null; inProgress?: LiveAttempt | null; serverTime?: string }
 
-/** One question at a time, instant grading, per-question feedback and retakes. */
+const toMap = (d: Draft[]) => Object.fromEntries(d.filter((a) => a.selectedOptionId).map((a) => [a.questionId, a.selectedOptionId!]));
+
+function clock(ms: number) {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
+}
+
+/**
+ * One question at a time, instant grading, per-question feedback and
+ * retakes. With a time limit it becomes an exam: the clock runs on the
+ * server, answers are saved as you go, a reload picks up where you were,
+ * and it submits itself when time runs out.
+ */
 export function QuizPlayer({ lesson, onGraded }: { lesson: Lesson; onGraded: (r: { lessonPassed: boolean; courseCompleted: boolean }) => void }) {
   const { accessToken } = useAuth();
+  const toast = useToast();
+  const timed = !!lesson.timeLimitMinutes;
   const [questions, setQuestions] = useState<QuizQuestion[] | null>(null);
   const [attempts, setAttempts] = useState<Attempt[]>([]);
+  const [attemptsLeft, setAttemptsLeft] = useState<number | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [index, setIndex] = useState(0);
   const [started, setStarted] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [live, setLive] = useState<LiveAttempt | null>(null);
+  const [offset, setOffset] = useState(0); // server clock minus ours
+  const [now, setNow] = useState(() => Date.now());
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "offline">("idle");
+  const submitting = useRef(false);
+  const autoSubmitted = useRef<string | null>(null);
+  const welcomed = useRef<string | null>(null);
+  const dirty = useRef(false);
 
   const load = useCallback(async () => {
     try {
-      const r = await apiFetch<{ questions: QuizQuestion[]; attempts?: Attempt[] }>(`/api/v1/courses/lessons/${lesson.id}/quiz`, { accessToken });
+      const r = await apiFetch<QuizData>(`/api/v1/courses/lessons/${lesson.id}/quiz`, { accessToken });
       setQuestions(r.questions);
       setAttempts(r.attempts ?? []);
+      setAttemptsLeft(r.attemptsLeft ?? null);
+      if (r.serverTime) setOffset(new Date(r.serverTime).getTime() - Date.now());
+      if (r.inProgress) {
+        setLive(r.inProgress);
+        setAnswers(toMap(r.inProgress.answers));
+        setStarted(true);
+        if (welcomed.current !== r.inProgress.id) {
+          welcomed.current = r.inProgress.id;
+          toast("Welcome back. Your exam picked up where you left off.");
+        }
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't load the quiz.");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lesson.id, accessToken]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  async function submit() {
-    if (!questions) return;
+  const draft = useCallback(() => (questions ?? []).map((q) => ({ questionId: q.id!, selectedOptionId: answers[q.id!] ?? null })), [questions, answers]);
+
+  // Save a timed exam's answers shortly after each change.
+  useEffect(() => {
+    if (!live || !dirty.current) return;
+    const t = setTimeout(async () => {
+      setSaveState("saving");
+      try {
+        await apiFetch(`/api/v1/courses/quiz-attempts/${live.id}/answers`, { method: "PUT", body: { answers: draft() }, accessToken });
+        setSaveState("saved");
+        dirty.current = false;
+      } catch {
+        setSaveState("offline");
+      }
+    }, 600);
+    return () => clearTimeout(t);
+  }, [answers, live, draft, accessToken]);
+
+  const submit = useCallback(async () => {
+    if (!questions || submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     try {
       const r = await apiFetch<Result>(`/api/v1/courses/lessons/${lesson.id}/quiz/submit`, {
         method: "POST",
-        body: { answers: questions.map((q) => ({ questionId: q.id, selectedOptionId: answers[q.id!] ?? null })) },
+        body: { answers: draft(), ...(live ? { attemptId: live.id } : {}) },
         accessToken,
       });
       setResult(r);
+      setLive(null);
       setAttempts((a) => [r.attempt, ...a]);
+      if (r.attemptsLeft !== undefined) setAttemptsLeft(r.attemptsLeft);
       onGraded(r);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't submit.");
     }
     setBusy(false);
-  }
+    submitting.current = false;
+  }, [questions, lesson.id, draft, live, accessToken, onGraded]);
 
-  function retake() {
+  // The countdown, and the automatic submit when it reaches zero.
+  const remaining = live ? new Date(live.deadlineAt).getTime() - (now + offset) : null;
+  useEffect(() => {
+    if (!live) return;
+    const t = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(t);
+  }, [live]);
+  useEffect(() => {
+    if (live && remaining !== null && remaining <= 0 && !submitting.current && autoSubmitted.current !== live.id) {
+      autoSubmitted.current = live.id;
+      toast("Time's up. Your answers were submitted.");
+      submit();
+    }
+  }, [remaining, submit, toast, live]);
+
+  async function begin() {
+    setError(null);
     setAnswers({});
     setIndex(0);
     setResult(null);
-    setStarted(true);
+    if (!timed) {
+      setStarted(true);
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await apiFetch<{ attempt: LiveAttempt; resumed: boolean; serverTime: string }>(`/api/v1/courses/lessons/${lesson.id}/quiz/start`, { method: "POST", accessToken });
+      setOffset(new Date(r.serverTime).getTime() - Date.now());
+      setLive(r.attempt);
+      setAnswers(toMap(r.attempt.answers));
+      setSaveState("idle");
+      setStarted(true);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't start the exam.");
+    }
+    setBusy(false);
   }
+
+  const choose = (questionId: string, optionId: string) => {
+    dirty.current = true;
+    setAnswers((a) => ({ ...a, [questionId]: optionId }));
+  };
 
   if (error) return <div className="error-banner">{error}</div>;
   if (!questions) return <div className="skeleton" style={{ height: 200 }} />;
@@ -98,7 +198,12 @@ export function QuizPlayer({ lesson, onGraded }: { lesson: Lesson; onGraded: (r:
             );
           })}
         </ol>
-        <button className="btn btn-secondary" onClick={retake}><RotateCcw size={16} /> Retake quiz</button>
+        {result.late && <p className="muted-small">Time ran out, so the answers saved before the deadline were graded.</p>}
+        {attemptsLeft === 0 ? (
+          <p className="muted-small">You've used all your attempts for this {timed ? "exam" : "quiz"}.</p>
+        ) : (
+          <button className="btn btn-secondary" disabled={busy} onClick={begin}><RotateCcw size={16} /> {timed ? "Try again" : "Retake quiz"}{attemptsLeft ? ` (${attemptsLeft} left)` : ""}</button>
+        )}
       </motion.div>
     );
   }
@@ -106,9 +211,23 @@ export function QuizPlayer({ lesson, onGraded }: { lesson: Lesson; onGraded: (r:
   if (!started) {
     return (
       <div className="quiz-intro">
-        <p>{questions.length} question{questions.length > 1 ? "s" : ""}. You need {lesson.passingScorePercent}% to pass, and you can retake it as often as you like.</p>
+        {timed ? (
+          <div className="exam-facts">
+            <span><Timer size={16} /> {lesson.timeLimitMinutes} minutes</span>
+            <span>{questions.length} question{questions.length > 1 ? "s" : ""}</span>
+            <span>Pass mark {lesson.passingScorePercent}%</span>
+            {lesson.maxAttempts && <span>{attemptsLeft ?? lesson.maxAttempts} of {lesson.maxAttempts} attempts left</span>}
+          </div>
+        ) : (
+          <p>{questions.length} question{questions.length > 1 ? "s" : ""}. You need {lesson.passingScorePercent}% to pass{lesson.maxAttempts ? `, with ${attemptsLeft ?? lesson.maxAttempts} of ${lesson.maxAttempts} attempts left.` : ", and you can retake it as often as you like."}</p>
+        )}
+        {timed && <p className="muted-small">The timer starts when you press Start and keeps running if you leave. Answers are saved as you go, and the exam submits itself when time is up.</p>}
         {attempts.length > 0 && <p className="muted-small">{passedBefore ? "Passed" : "Not passed yet"} · best score {best}% · {attempts.length} attempt{attempts.length > 1 ? "s" : ""}</p>}
-        <motion.button className="btn" onClick={() => setStarted(true)} whileTap={{ scale: 0.96 }}>{attempts.length ? "Retake quiz" : "Start quiz"}</motion.button>
+        {attemptsLeft === 0 ? (
+          <p className="muted-small">You've used all your attempts.</p>
+        ) : (
+          <motion.button className="btn" disabled={busy} onClick={begin} whileTap={{ scale: 0.96 }}>{timed ? (attempts.length ? "Start another attempt" : "Start exam") : attempts.length ? "Retake quiz" : "Start quiz"}</motion.button>
+        )}
       </div>
     );
   }
@@ -119,6 +238,13 @@ export function QuizPlayer({ lesson, onGraded }: { lesson: Lesson; onGraded: (r:
 
   return (
     <div className="quiz">
+      {live && remaining !== null && (
+        <div className={`exam-bar${remaining < 60_000 ? " urgent" : remaining < 5 * 60_000 ? " soon" : ""}`}>
+          <span className="exam-clock"><Timer size={16} /> {clock(remaining)}</span>
+          <div className="exam-track"><motion.div className="exam-fill" animate={{ width: `${Math.max(0, Math.min(100, (remaining / (lesson.timeLimitMinutes! * 60_000)) * 100))}%` }} transition={{ ease: "linear", duration: 0.5 }} /></div>
+          <span className={`exam-save ${saveState}`}><Cloud size={14} /> {saveState === "saving" ? "Saving…" : saveState === "offline" ? "Not saved, retrying" : saveState === "saved" ? "Saved" : "Autosave on"}</span>
+        </div>
+      )}
       <div className="quiz-top">
         <span className="muted-small">Question {index + 1} of {questions.length}</span>
         <div className="quiz-dots">
@@ -139,7 +265,7 @@ export function QuizPlayer({ lesson, onGraded }: { lesson: Lesson; onGraded: (r:
                   role="radio"
                   aria-checked={selected}
                   className={`quiz-option${selected ? " selected" : ""}`}
-                  onClick={() => setAnswers({ ...answers, [q.id!]: o.id })}
+                  onClick={() => choose(q.id!, o.id)}
                   whileTap={{ scale: 0.98 }}
                 >
                   <span className="quiz-letter">{String.fromCharCode(65 + oi)}</span>

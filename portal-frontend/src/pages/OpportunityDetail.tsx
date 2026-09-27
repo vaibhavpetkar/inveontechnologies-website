@@ -1,24 +1,22 @@
 import { useEffect, useState } from "react";
 import { useRoute, useLocation, Link } from "wouter";
+import { motion } from "framer-motion";
+import { ArrowRight, BookOpen, CalendarDays, Clock, GraduationCap, IndianRupee, MapPin, Pencil, Rocket } from "lucide-react";
 import { DashboardShell } from "../components/DashboardShell";
+import { useToast } from "../components/Toast";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/api";
-
-interface Opportunity {
-  id: string;
-  businessId: string | null;
-  title: string;
-  description: string;
-  eligibility: Record<string, unknown>;
-}
+import { durationLabel, KIND_META, OPPORTUNITY_ADMIN_ROLES, OPPORTUNITY_PUBLISH_ROLES, startLabel, stipendLabel, type LinkedCourse, type Opportunity } from "../lib/opportunities";
 
 interface Skill { id: string; name: string }
 
 export default function OpportunityDetail() {
   const [, params] = useRoute("/opportunities/:id");
   const [, navigate] = useLocation();
-  const { accessToken } = useAuth();
-  const [data, setData] = useState<{ opportunity: Opportunity; skills: Skill[] } | null>(null);
+  const { user, accessToken } = useAuth();
+  const toast = useToast();
+  const isAdmin = !!user && OPPORTUNITY_ADMIN_ROLES.includes(user.role);
+  const [data, setData] = useState<{ opportunity: Opportunity; skills: Skill[]; courses: LinkedCourse[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
@@ -29,7 +27,7 @@ export default function OpportunityDetail() {
 
   useEffect(() => {
     if (!params?.id) return;
-    apiFetch<{ opportunity: Opportunity; skills: Skill[] }>(`/api/v1/opportunities/${params.id}`, { accessToken })
+    apiFetch<{ opportunity: Opportunity; skills: Skill[]; courses: LinkedCourse[] }>(`/api/v1/opportunities/${params.id}`, { accessToken })
       .then(setData)
       .catch(() => setError("Couldn't load this opportunity."));
   }, [params?.id, accessToken]);
@@ -66,6 +64,17 @@ export default function OpportunityDetail() {
     }
   }
 
+  async function publish() {
+    if (!data) return;
+    try {
+      await apiFetch(`/api/v1/opportunities/${data.opportunity.id}/publish`, { method: "POST", accessToken });
+      setData({ ...data, opportunity: { ...data.opportunity, status: "published" } });
+      toast("Published. It's now open for applications.");
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "Couldn't publish.", "error");
+    }
+  }
+
   async function resendVerification() {
     setResendState("sending");
     try {
@@ -92,24 +101,69 @@ export default function OpportunityDetail() {
     );
   }
 
-  const { opportunity, skills } = data;
+  const { opportunity, skills, courses } = data;
+  const meta = KIND_META[opportunity.kind];
+  const facts = [
+    opportunity.location && { icon: MapPin, label: "Location", text: opportunity.location },
+    durationLabel(opportunity.durationMonths) && { icon: Clock, label: "Duration", text: durationLabel(opportunity.durationMonths)! },
+    stipendLabel(opportunity) && { icon: IndianRupee, label: opportunity.kind === "job" ? "Pay" : "Stipend", text: stipendLabel(opportunity)! },
+    startLabel(opportunity.startDate) && { icon: CalendarDays, label: "Start", text: startLabel(opportunity.startDate)!.replace("Starts ", "") },
+  ].filter(Boolean) as { icon: typeof MapPin; label: string; text: string }[];
 
   return (
     <DashboardShell>
-      <h1>{opportunity.title}</h1>
-      <p>{opportunity.businessId}</p>
-
-      <div className="card" style={{ marginTop: "1.5rem", whiteSpace: "pre-wrap" }}>
-        {opportunity.description}
-      </div>
-
-      {skills.length > 0 && (
-        <div style={{ marginTop: "1rem", display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-          {skills.map((s) => (
-            <span key={s.id} className="badge">{s.name}</span>
-          ))}
+      <motion.section className={`opp-hero kind-${opportunity.kind}`} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
+        <div className="opp-hero-top">
+          <span className="opp-hero-kind">{meta.label}</span>
+          {isAdmin && opportunity.status !== "published" && <span className="opp-hero-kind">{opportunity.status === "draft" ? "Draft" : opportunity.status}</span>}
+          <span className="opp-hero-id">{opportunity.businessId}</span>
         </div>
-      )}
+        <h1>{opportunity.title}</h1>
+        <p className="opp-hero-blurb">{meta.blurb}</p>
+        {facts.length > 0 && (
+          <div className="opp-hero-facts">
+            {facts.map((f, i) => (
+              <motion.div key={f.label} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 + i * 0.05 }}>
+                <f.icon size={18} />
+                <span><span>{f.label}</span><strong>{f.text}</strong></span>
+              </motion.div>
+            ))}
+          </div>
+        )}
+        {isAdmin && (
+          <div className="opp-hero-actions">
+            <Link href={`/opportunities/${opportunity.id}/edit`} className="btn btn-light"><Pencil size={16} /> Edit</Link>
+            {opportunity.status === "draft" && user && OPPORTUNITY_PUBLISH_ROLES.includes(user.role) && <button className="btn btn-ghost-light" onClick={publish}><Rocket size={16} /> Publish</button>}
+          </div>
+        )}
+        <GraduationCap className="opp-hero-art" size={130} />
+      </motion.section>
+
+      <div className="opp-body">
+        <div>
+          <h2 className="opp-section-title">About</h2>
+          <div className="opp-desc">{opportunity.description}</div>
+          {skills.length > 0 && (
+            <div className="opp-skills">
+              {skills.map((s) => <span key={s.id} className="badge">{s.name}</span>)}
+            </div>
+          )}
+        </div>
+        {courses.length > 0 && (
+          <aside className="opp-training">
+            <h2 className="opp-section-title"><BookOpen size={18} /> Training included</h2>
+            <p className="muted-small">{opportunity.kind === "program" ? "You're enrolled in these the moment you're selected." : "You're enrolled in these when you accept the offer."}</p>
+            <ol>
+              {courses.map((c, i) => (
+                <motion.li key={c.id} initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.15 + i * 0.05 }}>
+                  <span className="opp-step">{i + 1}</span>
+                  <span><strong>{c.title}</strong>{isAdmin && c.status !== "published" && <span className="muted-small"> · {c.status}</span>}</span>
+                </motion.li>
+              ))}
+            </ol>
+          </aside>
+        )}
+      </div>
 
       {warnings && (
         <>
@@ -148,11 +202,11 @@ export default function OpportunityDetail() {
 
       {applyError && <div className="error-banner" style={{ marginTop: "1rem" }}>{applyError}</div>}
 
-      {!warnings && (
-        <div style={{ marginTop: "1.5rem" }}>
-          <button className="btn" onClick={handleApply} disabled={applying}>
-            {applying ? "Submitting…" : "Apply now"}
-          </button>
+      {!warnings && !isAdmin && opportunity.status === "published" && (
+        <div className="opp-apply">
+          <motion.button className="btn btn-lg" onClick={handleApply} disabled={applying} whileTap={{ scale: 0.97 }}>
+            {applying ? "Submitting…" : meta.apply} <ArrowRight size={18} />
+          </motion.button>
         </div>
       )}
     </DashboardShell>
