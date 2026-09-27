@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
 import { applications, applicationEvents } from "../shared/db/schema.js";
 import type { ApplicationStatus } from "./state-machine.js";
+import { notifyApplicationStatus } from "../notifications/recruitment.js";
 
 /**
  * Shared by the admin /transition endpoint, the invite-assessment endpoint,
@@ -32,4 +33,5 @@ export async function applyApplicationTransition(
       note: params.note,
     });
   });
+  await notifyApplicationStatus(db, params.applicationId, params.to, params.actorUserId);
 }

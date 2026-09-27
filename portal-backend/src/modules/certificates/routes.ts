@@ -10,6 +10,7 @@ import { writeAuditLog } from "../shared/audit.js";
 import { formatBusinessId } from "../shared/business-id.js";
 import { sendCertificateIssuedEmail } from "../shared/emails.js";
 import type { Env } from "../shared/env.js";
+import { notify } from "../notifications/service.js";
 
 const PRIVILEGED_ROLES = ["hr", "admin", "super_admin"] as const;
 const REVOKE_ROLES = ["admin", "super_admin"] as const;
@@ -130,6 +131,7 @@ async function issueCertificateRow(
     businessId: certificate.businessId ?? "",
     verifyLink: `${params.appUrl}/verify/${certificate.verificationCode}`,
   });
+  await notify(db, { userIds: [params.userId], kind: "certificate.issued", title: `Certificate issued: ${course.title}`, body: `Your certificate ${certificate.businessId ?? ""} is ready to share.`, link: `/verify/${certificate.verificationCode}` });
 
   return certificate;
 }

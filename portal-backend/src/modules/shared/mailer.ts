@@ -57,3 +57,17 @@ export function sendEmail(email: OutgoingEmail): void {
     .then(() => logger.info({ toEmail: email.to, subject: email.subject }, "Email sent"))
     .catch((err: unknown) => logger.error({ err, toEmail: email.to, subject: email.subject }, "Email sending failed"));
 }
+
+/**
+ * Awaitable send for the job queue: resolves once the mail server accepts
+ * the message and throws otherwise, so the job is retried. Without SMTP
+ * configured the email is logged and counts as delivered.
+ */
+export async function deliverEmail(email: OutgoingEmail): Promise<void> {
+  if (!transporter) {
+    logger.info({ toEmail: email.to, subject: email.subject, text: email.text }, "[EMAIL NOT SENT — SMTP not configured]");
+    return;
+  }
+  await transporter.sendMail({ from: fromAddress, to: email.to, subject: email.subject, text: email.text });
+  logger.info({ toEmail: email.to, subject: email.subject }, "Email sent");
+}

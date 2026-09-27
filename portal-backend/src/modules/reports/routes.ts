@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
-import { savedReportViews, exportJobs } from "../shared/db/schema.js";
+import { savedReportViews, exportJobs, jobs } from "../shared/db/schema.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, NotFoundError } from "../shared/errors.js";
 import { getReportRows, REPORT_KEYS, type ReportKey } from "./data.js";
@@ -11,7 +11,7 @@ import type { Env } from "../shared/env.js";
 
 // Employee PII and audit logs are more sensitive than operational
 // recruitment/course reports — HR can see the latter, only Admin/Super
-// Admin can see the former. Neither payments nor email-job reports exist
+// Admin can see the former. Payment reports don't exist yet
 // (see schema.ts) so there's nothing to gate for those.
 const OPERATIONAL_ROLES = ["hr", "admin", "super_admin"] as const;
 const SENSITIVE_ROLES = ["admin", "super_admin"] as const;
@@ -59,8 +59,20 @@ export function reportsRouter(db: Database, env: Env) {
   router.get("/payment-reconciliation", requireAuth(env), requireRole(...SENSITIVE_ROLES), (_req, res) => {
     res.status(501).json({ implemented: false, reason: "Payments (Phase 5) has not been built yet — there are no application payment records or gateway events to reconcile." });
   });
-  router.get("/email-jobs", requireAuth(env), requireRole(...SENSITIVE_ROLES), (_req, res) => {
-    res.status(501).json({ implemented: false, reason: "Real email/outbox (Phase 9) has not been built yet — only stubbed, logged 'would send' events exist, not queryable job records." });
+  // Queued notification emails and whether they went out (see shared/jobs.ts).
+  router.get("/email-jobs", requireAuth(env), requireRole(...SENSITIVE_ROLES), async (req, res) => {
+    const status = z.enum(["pending", "running", "done", "failed"]).optional().parse(req.query.status);
+    const rows = await db.query.jobs.findMany({
+      where: status ? and(eq(jobs.type, "email.send"), eq(jobs.status, status)) : eq(jobs.type, "email.send"),
+      orderBy: [desc(jobs.createdAt)],
+      limit: 100,
+    });
+    res.json({
+      jobs: rows.map((j) => {
+        const p = j.payload as { to?: string; subject?: string };
+        return { id: j.id, status: j.status, to: p.to, subject: p.subject, attempts: j.attempts, lastError: j.lastError, createdAt: j.createdAt, finishedAt: j.finishedAt };
+      }),
+    });
   });
 
   router.post("/export", requireAuth(env), async (req, res) => {

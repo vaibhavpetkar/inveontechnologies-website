@@ -11,6 +11,7 @@ import { checkEligibility, type EligibilityCriteria } from "./eligibility.js";
 import { isAdminTransitionAllowed, isCandidateTransitionAllowed, type ApplicationStatus } from "./state-machine.js";
 import type { Env } from "../shared/env.js";
 import { PIPELINE_ROLES, assertCanManageApplication, canViewApplication, isRecruitmentAdmin } from "./access.js";
+import { notifyApplicationStatus } from "../notifications/recruitment.js";
 
 const applySchema = z.object({}).optional(); // no body fields needed yet — reserved for a future cover-note field
 
@@ -227,6 +228,7 @@ export function applicationsRouter(db: Database, env: Env) {
       ipAddress: req.ip,
     });
 
+    await notifyApplicationStatus(db, application.id, body.toStatus, req.user!.sub);
     res.json({ message: `Application moved to ${body.toStatus}.` });
   });
 

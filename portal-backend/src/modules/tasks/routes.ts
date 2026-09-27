@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { and, eq, inArray, or } from "drizzle-orm";
+import { and, eq, inArray, lte, or } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
 import {
   tasks,
@@ -22,7 +22,8 @@ import {
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
-import { logger } from "../shared/logger.js";
+import { notify } from "../notifications/service.js";
+import { formatWhen } from "../shared/format.js";
 import { isAssigneeTransitionAllowed, isReviewerTransitionAllowed, type TaskStatus } from "./state-machine.js";
 import { canAccessProject, canManageProject } from "../projects/routes.js";
 import type { Env } from "../shared/env.js";
@@ -143,6 +144,7 @@ export function tasksRouter(db: Database, env: Env) {
 
     await db.insert(taskEvents).values({ taskId: task.id, actorUserId: req.user!.sub, action: "create", toStatus: "todo" });
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "task.create", entityType: "task", entityId: task.id, ipAddress: req.ip });
+    await notifyAssigned(db, task, req.user!.sub);
     res.status(201).json({ task });
   });
 
@@ -186,9 +188,7 @@ export function tasksRouter(db: Database, env: Env) {
       await tx.insert(taskEvents).values({ taskId: task.id, actorUserId: req.user!.sub, action: "status_change", fromStatus: from, toStatus: body.toStatus, note: body.note });
     });
 
-    if (body.toStatus === "changes_requested") {
-      logger.info({ taskId: task.id, assigneeId: task.assigneeId, note: body.note }, "[NOTIFICATION STUB] Changes requested on task");
-    }
+    await notifyTransition(db, task, body.toStatus, req.user!.sub, body.note);
 
     res.json({ message: `Task moved to ${body.toStatus}.` });
   });
@@ -207,6 +207,14 @@ export function tasksRouter(db: Database, env: Env) {
     const body = commentSchema.parse(req.body);
     const [comment] = await db.insert(taskComments).values({ taskId: task.id, authorId: req.user!.sub, body: body.body }).returning();
     await db.insert(taskEvents).values({ taskId: task.id, actorUserId: req.user!.sub, action: "comment" });
+    await notify(db, {
+      userIds: [task.assigneeId, task.createdBy],
+      actorUserId: req.user!.sub,
+      kind: "task.comment",
+      title: `New comment on "${task.title}"`,
+      body: body.body.length > 200 ? `${body.body.slice(0, 200)}…` : body.body,
+      link: `/tasks/${task.id}`,
+    });
     res.status(201).json({ comment });
   });
 
@@ -280,6 +288,7 @@ export function tasksRouter(db: Database, env: Env) {
       .returning();
 
     await db.insert(taskEvents).values({ taskId: task.id, actorUserId: req.user!.sub, action: "create_from_template", toStatus: "todo" });
+    await notifyAssigned(db, task, req.user!.sub);
     res.status(201).json({ task });
   });
 
@@ -304,22 +313,7 @@ export function tasksRouter(db: Database, env: Env) {
     if (!templateTask) throw new NotFoundError("Template task not found");
     if (!(await canEditTask(db, req.user!.sub, req.user!.role, templateTask))) throw new ForbiddenError();
 
-    const [newTask] = await db
-      .insert(tasks)
-      .values({
-        projectId: templateTask.projectId,
-        title: templateTask.title,
-        description: templateTask.description,
-        assigneeId: templateTask.assigneeId,
-        priority: templateTask.priority,
-        estimateHours: templateTask.estimateHours,
-        createdBy: req.user!.sub,
-      })
-      .returning();
-    await db.insert(taskEvents).values({ taskId: newTask.id, actorUserId: req.user!.sub, action: "create_from_recurrence", toStatus: "todo" });
-
-    const [updatedRecurrence] = await db.update(taskRecurrences).set({ nextRunAt: addInterval(recurrence.nextRunAt, recurrence.frequency) }).where(eq(taskRecurrences.id, recurrence.id)).returning();
-
+    const { task: newTask, recurrence: updatedRecurrence } = await generateOccurrence(db, recurrence, templateTask, req.user!.sub);
     res.status(201).json({ task: newTask, recurrence: updatedRecurrence });
   });
 
@@ -422,8 +416,92 @@ export function tasksRouter(db: Database, env: Env) {
       .set({ ...body, estimateHours: body.estimateHours?.toString(), dueDate: body.dueDate ? new Date(body.dueDate) : undefined, updatedAt: new Date() })
       .where(eq(tasks.id, task.id))
       .returning();
+    if (updated.assigneeId && updated.assigneeId !== task.assigneeId) await notifyAssigned(db, updated, req.user!.sub);
     res.json({ task: updated });
   });
 
   return router;
+}
+
+type TaskRow = typeof tasks.$inferSelect;
+
+async function notifyAssigned(db: Database, task: TaskRow, actorUserId: string) {
+  const due = task.dueDate ? ` It's due ${formatWhen(task.dueDate)}.` : "";
+  await notify(db, {
+    userIds: [task.assigneeId],
+    actorUserId,
+    kind: "task.assigned",
+    title: `New task: ${task.title}`,
+    body: `You've been assigned "${task.title}" (${task.priority} priority).${due}`,
+    link: `/tasks/${task.id}`,
+    email: true,
+  });
+}
+
+/** Who hears about a move: the other side of the assignee/reviewer pair. */
+async function notifyTransition(db: Database, task: TaskRow, to: TaskStatus, actorUserId: string, note?: string) {
+  const link = `/tasks/${task.id}`;
+  const withNote = (text: string) => (note ? `${text}\n\n"${note}"` : text);
+  switch (to) {
+    case "in_review":
+      await notify(db, { userIds: [task.createdBy], actorUserId, kind: "task.in_review", title: `Ready for review: ${task.title}`, body: `"${task.title}" has been submitted for your review.`, link, email: true });
+      break;
+    case "changes_requested":
+      await notify(db, { userIds: [task.assigneeId], actorUserId, kind: "task.changes_requested", title: `Changes requested: ${task.title}`, body: withNote(`Your reviewer asked for changes on "${task.title}".`), link, email: true });
+      break;
+    case "done":
+      await notify(db, { userIds: [task.assigneeId], actorUserId, kind: "task.done", title: `Approved: ${task.title}`, body: `"${task.title}" was reviewed and marked done.`, link });
+      break;
+    case "cancelled":
+      await notify(db, { userIds: [task.assigneeId, task.createdBy], actorUserId, kind: "task.cancelled", title: `Cancelled: ${task.title}`, body: withNote(`"${task.title}" was cancelled.`), link });
+      break;
+    default:
+      break;
+  }
+}
+
+type RecurrenceRow = typeof taskRecurrences.$inferSelect;
+
+/** Creates the next task in a series and moves the series' next run on. */
+async function generateOccurrence(db: Database, recurrence: RecurrenceRow, templateTask: TaskRow, actorUserId: string) {
+  const [newTask] = await db
+    .insert(tasks)
+    .values({
+      projectId: templateTask.projectId,
+      title: templateTask.title,
+      description: templateTask.description,
+      assigneeId: templateTask.assigneeId,
+      priority: templateTask.priority,
+      estimateHours: templateTask.estimateHours,
+      createdBy: actorUserId,
+    })
+    .returning();
+  await db.insert(taskEvents).values({ taskId: newTask.id, actorUserId, action: "create_from_recurrence", toStatus: "todo" });
+  const [updated] = await db.update(taskRecurrences).set({ nextRunAt: addInterval(recurrence.nextRunAt, recurrence.frequency) }).where(eq(taskRecurrences.id, recurrence.id)).returning();
+  await notifyAssigned(db, newTask, actorUserId);
+  return { task: newTask, recurrence: updated };
+}
+
+/**
+ * Run by the job worker: creates every recurring task that has come due,
+ * as its original creator. The conditional update on nextRunAt means two
+ * workers racing on the same series create it once.
+ */
+export async function generateDueRecurrences(db: Database, now = new Date()) {
+  const due = await db.query.taskRecurrences.findMany({ where: and(eq(taskRecurrences.active, true), lte(taskRecurrences.nextRunAt, now)), limit: 200 });
+  let created = 0;
+  for (const recurrence of due) {
+    const templateTask = await db.query.tasks.findFirst({ where: eq(tasks.id, recurrence.templateTaskId) });
+    if (!templateTask) continue;
+    const [claimed] = await db
+      .update(taskRecurrences)
+      .set({ nextRunAt: addInterval(recurrence.nextRunAt, recurrence.frequency) })
+      .where(and(eq(taskRecurrences.id, recurrence.id), eq(taskRecurrences.nextRunAt, recurrence.nextRunAt)))
+      .returning();
+    if (!claimed) continue;
+    // generateOccurrence advances nextRunAt itself, so hand it the pre-claim row.
+    await generateOccurrence(db, { ...recurrence, nextRunAt: recurrence.nextRunAt }, templateTask, templateTask.createdBy);
+    created++;
+  }
+  return created;
 }

@@ -8,6 +8,8 @@ import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import type { Env } from "../shared/env.js";
 import { canStaffAccessApplication } from "../applications/access.js";
+import { notifyCandidate } from "../notifications/recruitment.js";
+import { notify } from "../notifications/service.js";
 
 // Drafting an offer (HR) and sending it (Admin/Super Admin only) are
 // deliberately different privilege levels — a lightweight version of the
@@ -91,6 +93,13 @@ export function offersRouter(db: Database, env: Env) {
       .returning();
 
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "offer.send", entityType: "offer", entityId: offer.id, ipAddress: req.ip });
+    await notifyCandidate(db, offer.applicationId, {
+      kind: "offer.sent",
+      title: "You have an offer",
+      body: (opp) => `Your offer for ${opp} is ready. Open the portal to read it and accept or decline.`,
+      email: true,
+      actorUserId: req.user!.sub,
+    });
     res.json({ offer: updated });
   });
 
@@ -113,6 +122,7 @@ export function offersRouter(db: Database, env: Env) {
       .returning();
 
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "offer.accept", entityType: "offer", entityId: offer.id, ipAddress: req.ip });
+    await notify(db, { userIds: [offer.generatedBy, offer.approvedBy], actorUserId: req.user!.sub, kind: "offer.accepted", title: "Offer accepted", body: "A candidate accepted their offer. Onboarding can begin.", link: "/admin", email: true });
     res.json({ offer: updated });
   });
 
@@ -135,6 +145,7 @@ export function offersRouter(db: Database, env: Env) {
       .returning();
 
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "offer.reject", entityType: "offer", entityId: offer.id, ipAddress: req.ip });
+    await notify(db, { userIds: [offer.generatedBy, offer.approvedBy], actorUserId: req.user!.sub, kind: "offer.declined", title: "Offer declined", body: "A candidate declined their offer.", link: "/admin" });
     res.json({ offer: updated });
   });
 

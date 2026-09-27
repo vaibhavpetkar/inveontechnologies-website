@@ -3,6 +3,7 @@ import { Link } from "wouter";
 import { motion } from "framer-motion";
 import { ArrowRight, CalendarClock } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
+import { useNotifications } from "../../context/NotificationsContext";
 import { apiFetch } from "../../lib/api";
 import { formatDue, isOverdue, STATUS_META, type Task } from "../../lib/tasks";
 import { AnimatedNumber } from "../AnimatedNumber";
@@ -19,13 +20,15 @@ export function MyTasksWidget() {
   const { accessToken } = useAuth();
   const [data, setData] = useState<MyDashboard | null>(null);
   const [failed, setFailed] = useState(false);
+  const { arrivals } = useNotifications();
 
+  // Re-read when a notification lands: it's usually about one of these tasks.
   useEffect(() => {
     if (!accessToken) return;
     apiFetch<MyDashboard>("/api/v1/tasks/me/dashboard", { accessToken })
       .then(setData)
       .catch(() => setFailed(true));
-  }, [accessToken]);
+  }, [accessToken, arrivals]);
 
   if (failed) return null;
 

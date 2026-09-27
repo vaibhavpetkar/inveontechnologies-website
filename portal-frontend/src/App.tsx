@@ -21,6 +21,7 @@ import CertificateVerify from "./pages/CertificateVerify";
 import Tasks from "./pages/Tasks";
 import { MotionConfig } from "framer-motion";
 import { ToastProvider } from "./components/Toast";
+import { NotificationsProvider } from "./context/NotificationsContext";
 import "./styles.css";
 
 function Home() {
@@ -73,7 +74,9 @@ export default function App() {
     <MotionConfig reducedMotion="user">
       <AuthProvider>
         <ToastProvider>
-          <AppRoutes />
+          <NotificationsProvider>
+            <AppRoutes />
+          </NotificationsProvider>
         </ToastProvider>
       </AuthProvider>
     </MotionConfig>

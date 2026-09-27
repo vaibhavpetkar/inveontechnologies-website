@@ -5,6 +5,7 @@ import { LogOut, Menu, X } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { navForRole, ROLE_LABELS, displayName } from "../lib/nav";
 import { Avatar } from "./Avatar";
+import { NotificationBell } from "./NotificationBell";
 
 /**
  * The signed-in app frame: a sidebar with each role's links, a top bar,
@@ -79,6 +80,7 @@ export function DashboardShell({ children, wide = false }: { children: ReactNode
             <Menu size={20} />
           </button>
           <div className="topbar-spacer" />
+          {user && <NotificationBell />}
           {user && (
             <div className="topbar-user">
               <Avatar email={user.email} size={32} />

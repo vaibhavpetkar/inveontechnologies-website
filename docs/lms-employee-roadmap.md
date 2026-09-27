@@ -34,7 +34,7 @@ So the fastest route to the goal is **UI-first on top of existing APIs**, adding
 
 Each phase is one or two PRs, shippable on its own, and ends with the feature usable in production.
 
-### Phase A — UI foundation + Tasks (first PR, see §4)
+### Phase A — UI foundation + Tasks (first PR, see §4) — done
 - Add **Tailwind + Radix** (matches decision #4 and the marketing site) and **Framer Motion** to `portal-frontend`.
 - New **app shell**: collapsible sidebar with role-based nav, top bar, page transitions, toasts, skeleton loaders, empty states, dark mode.
 - **Tasks**: Kanban board with drag between columns (calls the existing `/tasks/:id/transition`), task drawer with comments/timeline/time entries, **Assign task** form for managers/HR, **My tasks** for employees and interns.
@@ -46,6 +46,8 @@ Each phase is one or two PRs, shippable on its own, and ends with the feature us
 - Bell with unread badge and animated dropdown; notifications page.
 - **Job runner** (`pg-boss` on the existing Postgres — no new service): task due reminders, recurring task generation, assessment/offer/payment expiry sweeps, daily digest.
 - Replace every `[NOTIFICATION STUB]` log with a real `notify()` call.
+
+**Built:** `notifications` + `jobs` tables, `notify()` in `modules/notifications/service.ts`, SSE at `GET /api/v1/notifications/stream`, bell dropdown in the top bar. The job runner is a small queue on the `jobs` table (`modules/shared/jobs.ts`, `FOR UPDATE SKIP LOCKED`) instead of pg-boss: it needs no extra schema and its email log is readable at `GET /reports/email-jobs`. Periodic work: task due/overdue reminders and recurring-task generation. Assessment/offer expiry stays lazy (checked on read) and the daily digest is not built.
 
 ### Phase C — Automatic onboarding + employee management UI
 - On **offer accepted**: create the employee record, apply an onboarding **checklist template** for the employee type, and email a welcome message with a set-password link — no HR click needed. HR can still review and activate.

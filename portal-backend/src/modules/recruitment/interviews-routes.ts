@@ -8,6 +8,9 @@ import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import type { Env } from "../shared/env.js";
 import { PIPELINE_ROLES, assertCanManageApplication, canStaffAccessApplication, getApplicationOr404 } from "../applications/access.js";
+import { notifyCandidate } from "../notifications/recruitment.js";
+import { formatWhen } from "../shared/format.js";
+import { notify } from "../notifications/service.js";
 
 const TERMINAL_APPLICATION_STATUSES = ["rejected", "withdrawn"] as const;
 
@@ -60,6 +63,14 @@ export function interviewsRouter(db: Database, env: Env) {
       .returning();
 
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "interview.schedule", entityType: "interview_round", entityId: created.id, ipAddress: req.ip });
+    await notifyCandidate(db, application.id, {
+      kind: "interview.scheduled",
+      title: "Interview scheduled",
+      body: (opp) => `Your round ${created.roundNumber} interview for ${opp} is on ${formatWhen(created.scheduledAt, created.timezone)}.${created.meetingUrl ? `\n\nJoin here: ${created.meetingUrl}` : ""}`,
+      email: true,
+      actorUserId: req.user!.sub,
+    });
+    await notify(db, { userIds: [created.interviewerId], actorUserId: req.user!.sub, kind: "interview.assigned", title: "You're interviewing", body: `You've been added as interviewer for round ${created.roundNumber} on ${formatWhen(created.scheduledAt, created.timezone)}.`, link: "/admin", email: true });
     res.status(201).json({ interview: created });
   });
 
@@ -104,6 +115,13 @@ export function interviewsRouter(db: Database, env: Env) {
       .returning();
 
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "interview.reschedule", entityType: "interview_round", entityId: interview.id, metadata: { note: body.note }, ipAddress: req.ip });
+    await notifyCandidate(db, interview.applicationId, {
+      kind: "interview.rescheduled",
+      title: "Interview moved",
+      body: (opp) => `Your interview for ${opp} has moved to ${formatWhen(updated.scheduledAt, updated.timezone)}.${updated.meetingUrl ? `\n\nJoin here: ${updated.meetingUrl}` : ""}`,
+      email: true,
+      actorUserId: req.user!.sub,
+    });
     res.json({ interview: updated });
   });
 
@@ -140,6 +158,7 @@ export function interviewsRouter(db: Database, env: Env) {
       .returning();
 
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "interview.cancel", entityType: "interview_round", entityId: interview.id, ipAddress: req.ip });
+    await notifyCandidate(db, interview.applicationId, { kind: "interview.cancelled", title: "Interview cancelled", body: (opp) => `Your round ${interview.roundNumber} interview for ${opp} has been cancelled. The team will be in touch if it's rescheduled.`, email: true, actorUserId: req.user!.sub });
     res.json({ interview: updated });
   });
 

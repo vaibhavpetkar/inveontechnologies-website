@@ -32,10 +32,16 @@ import { reportsRouter } from "./modules/reports/routes.js";
 import { featureFlagsRouter, notificationPreferencesRouter, bulkActionsRouter } from "./modules/admin/routes.js";
 import { usersRouter } from "./modules/admin/users-routes.js";
 import { configureMailer } from "./modules/shared/mailer.js";
+import { notificationsRouter } from "./modules/notifications/routes.js";
+import { configureNotifications } from "./modules/notifications/service.js";
+import { registerReminderSchedules } from "./modules/notifications/reminders.js";
+import { startJobWorker } from "./modules/shared/jobs.js";
 
 const env = loadEnv();
 const { db, pool } = createDb(env);
 configureMailer(env);
+configureNotifications({ appUrl: env.PORTAL_APP_URL });
+registerReminderSchedules(db);
 const app = express();
 // Behind nginx (and Cloudflare in front of that) — trust exactly one hop
 // so req.ip and X-Forwarded-For-based rate limiting resolve to the real
@@ -115,6 +121,7 @@ app.use("/api/v1/feature-flags", featureFlagsRouter(db, env));
 app.use("/api/v1/notification-preferences", notificationPreferencesRouter(db, env));
 app.use("/api/v1/bulk", bulkActionsRouter(db, env));
 app.use("/api/v1/users", usersRouter(db, env));
+app.use("/api/v1/notifications", notificationsRouter(db, env));
 
 // Future feature routes mount here:
 // app.use("/api/v1/employees", employeesRouter(db, env));
@@ -124,4 +131,6 @@ app.use(errorHandler);
 
 app.listen(env.PORTAL_PORT, () => {
   logger.info({ port: env.PORTAL_PORT, env: env.NODE_ENV }, "portal-backend listening");
+  // Background jobs (queued email, reminders) run in the same process.
+  startJobWorker(db);
 });
