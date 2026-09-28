@@ -72,6 +72,14 @@ Leave goes to the person's manager, or to HR when they have none. Weekends (Satu
 
 Every download is recorded in the export log (admins see it at `GET /api/v1/reports/export/jobs`). PDFs stop at 2000 rows; Excel and CSV hold everything.
 
+## Live classes
+
+| Action | Who |
+| --- | --- |
+| Schedule a live class for a course (once or weekly) | Managers, HR and admins |
+| Change or cancel a class, or the rest of a weekly series | The person who scheduled it; admins |
+| See a course's classes and join them | Everyone enrolled in the course (their invite is added automatically, also when they enroll later) |
+
 ## GitHub issues on tasks
 
 | Action | Who |

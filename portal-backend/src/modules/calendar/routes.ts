@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { and, eq, gt, inArray, isNull, lte, ne, sql } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
-import { calendarEventAttendees, calendarEvents, users } from "../shared/db/schema.js";
+import { calendarEventAttendees, calendarEvents, courses, users } from "../shared/db/schema.js";
 import { requireAuth } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
@@ -38,7 +38,7 @@ const respondSchema = z.object({ response: z.enum(["accepted", "declined", "tent
 type EventRow = typeof calendarEvents.$inferSelect;
 type Person = { id: string; name: string; email: string };
 
-async function people(db: Database, ids: string[]): Promise<Map<string, Person>> {
+export async function people(db: Database, ids: string[]): Promise<Map<string, Person>> {
   if (ids.length === 0) return new Map();
   const rows = await db.execute<Person>(sql`
     SELECT u.id, u.email, coalesce(u.full_name, cp.full_name, initcap(replace(split_part(u.email, '@', 1), '.', ' '))) AS name
@@ -54,15 +54,19 @@ async function loadAttendees(db: Database, eventIds: string[]) {
 }
 
 /** The API shape of a meeting, with names resolved and the caller's RSVP. */
-async function present(db: Database, events: EventRow[], viewerId: string, viewerRole: string) {
+export async function present(db: Database, events: EventRow[], viewerId: string, viewerRole: string) {
   const attendees = await loadAttendees(db, events.map((e) => e.id));
   const who = await people(db, [...new Set([...attendees.map((a) => a.userId), ...events.map((e) => e.createdBy)])]);
+  const courseIds = [...new Set(events.map((e) => e.courseId).filter((id): id is string => !!id))];
+  const courseTitles = new Map(courseIds.length ? (await db.select({ id: courses.id, title: courses.title }).from(courses).where(inArray(courses.id, courseIds))).map((c) => [c.id, c.title]) : []);
   return events.map((e) => {
     const mine = attendees.filter((a) => a.eventId === e.id);
     const organizer = who.get(e.createdBy);
     return {
       id: e.id,
-      kind: "meeting" as const,
+      kind: e.courseId ? ("class" as const) : ("meeting" as const),
+      course: e.courseId ? { id: e.courseId, title: courseTitles.get(e.courseId) ?? "Course" } : null,
+      seriesId: e.seriesId,
       title: e.title,
       description: e.description,
       location: e.location,
@@ -80,7 +84,7 @@ async function present(db: Database, events: EventRow[], viewerId: string, viewe
   });
 }
 
-async function sendInvites(db: Database, event: EventRow, recipientIds: string[], mode: "new" | "updated" | "cancelled") {
+export async function sendInvites(db: Database, event: EventRow, recipientIds: string[], mode: "new" | "updated" | "cancelled") {
   if (recipientIds.length === 0) return;
   const all = await loadAttendees(db, [event.id]);
   const who = await people(db, [...new Set([...all.map((a) => a.userId), event.createdBy, ...recipientIds])]);
@@ -101,7 +105,9 @@ async function sendInvites(db: Database, event: EventRow, recipientIds: string[]
   const when = formatWhen(event.startsAt, event.timezone);
   const subject = mode === "new" ? `Invitation: ${event.title}` : mode === "updated" ? `Updated: ${event.title}` : `Cancelled: ${event.title}`;
   const lines = [
-    mode === "cancelled" ? `${organizer.name} cancelled this meeting.` : `${organizer.name} ${mode === "new" ? "invited you to" : "updated"} a meeting.`,
+    mode === "cancelled"
+      ? `${organizer.name} cancelled this ${event.courseId ? "class" : "meeting"}.`
+      : `${organizer.name} ${mode === "new" ? "invited you to" : "updated"} a ${event.courseId ? "live class" : "meeting"}.`,
     "",
     event.title,
     when,

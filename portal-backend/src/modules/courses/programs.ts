@@ -4,6 +4,7 @@ import { applications, courseEnrollments, courses, opportunities, opportunityCou
 import { logger } from "../shared/logger.js";
 import { notify } from "../notifications/service.js";
 import { ensureProgressRows } from "./routes.js";
+import { joinUpcomingClasses } from "./classes.js";
 
 /**
  * Enrolls a new intern or program participant in the courses linked to
@@ -29,6 +30,7 @@ export async function enrollInOpportunityCourses(db: Database, applicationId: st
       const [row] = await db.insert(courseEnrollments).values({ courseId: course.id, userId: application.userId, paymentStatus: "not_required" }).onConflictDoNothing().returning();
       if (!row) continue;
       await ensureProgressRows(db, row.id, course.id);
+      await joinUpcomingClasses(db, course.id, application.userId);
       enrolled.push(course.title);
     }
     if (enrolled.length) {

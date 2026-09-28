@@ -81,6 +81,8 @@ Each phase is one or two PRs, shippable on its own, and ends with the feature us
 
 **Built:** `calendar_events` and `calendar_event_attendees` hold meetings; interviews and my open task deadlines are merged into `GET /api/v1/calendar/events` from their own tables rather than copied. The Calendar page has month, week and agenda views, a new-meeting dialog with a people picker and a video-call choice, and a drawer to join, answer (Yes/Maybe/No), download the invite or edit/cancel. Every invite, change and cancellation is emailed as a real calendar invite (`text/calendar`, METHOD REQUEST/CANCEL). Google Meet and Zoom adapters are in `calendar/providers.ts` and switch on when their credentials are set (docs/calendar-integrations.md). Reminders go out 15 minutes before; a "Coming up" card sits on the dashboards. Class sessions and exam windows will join the calendar when those LMS features land.
 
+**Built (live classes):** staff schedule a live class (or a weekly run of up to 26) from a course page. Everyone learning the course gets a calendar invite, and people who enroll later are added to the classes still to come. Classes show on the calendar in green with a link back to the course, and a course page lists the next ones with a Join button. A weekly series can be cancelled in one go.
+
 ### Phase F — Deferred items (only if wanted)
 Cashfree payments (decision #10 / Phase 5), attendance and leave, payroll, XLSX/PDF report exports, real file storage for resumes/documents/attachments.
 

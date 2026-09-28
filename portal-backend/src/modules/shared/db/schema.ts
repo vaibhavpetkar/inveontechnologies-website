@@ -1227,12 +1227,17 @@ export const calendarEvents = pgTable(
     // Bumped on every change so calendar apps replace the old invite.
     sequence: integer("sequence").notNull().default(0),
     createdBy: uuid("created_by").notNull().references(() => users.id),
+    // A live class for a course: its learners are invited, and people who
+    // enroll later join the upcoming ones. Weekly repeats share a series id.
+    courseId: uuid("course_id").references(() => courses.id, { onDelete: "set null" }),
+    seriesId: uuid("series_id"),
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({
     byStart: index("calendar_events_starts_at_idx").on(t.startsAt),
+    byCourse: index("calendar_events_course_idx").on(t.courseId, t.startsAt),
   }),
 );
 
