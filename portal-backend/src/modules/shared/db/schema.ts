@@ -985,6 +985,10 @@ export const channelBans = pgTable(
 
 export const privateConversations = pgTable("private_conversations", {
   id: uuid("id").primaryKey().defaultRandom(),
+  // Group chats have a title and admins; a direct message has neither.
+  isGroup: boolean("is_group").notNull().default(false),
+  title: text("title"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -993,6 +997,8 @@ export const conversationParticipants = pgTable(
   {
     conversationId: uuid("conversation_id").notNull().references(() => privateConversations.id, { onDelete: "cascade" }),
     userId: uuid("user_id").notNull().references(() => users.id),
+    isAdmin: boolean("is_admin").notNull().default(false),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({ pk: primaryKey({ columns: [t.conversationId, t.userId] }) }),
 );

@@ -16,7 +16,7 @@ after(async () => api?.stop());
 describe("errors and input handling", () => {
   test("malformed ids and unknown references are 4xx, not 500", async () => {
     assert.equal((await api.call("GET", "/opportunities/not-a-uuid")).status, 400);
-    const c = await api.createUser("candidate");
+    const c = await api.createUser("employee"); // candidates outside a program can't start chats at all
     const r = await api.call("POST", "/conversations", { token: c.token, body: { participantIds: ["00000000-0000-0000-0000-000000000000"] } });
     assert.equal(r.status, 400);
   });

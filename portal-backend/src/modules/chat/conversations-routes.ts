@@ -6,6 +6,7 @@ import { privateConversations, conversationParticipants } from "../shared/db/sch
 import { requireAuth } from "../auth/middleware.js";
 import { ForbiddenError, NotFoundError } from "../shared/errors.js";
 import type { Env } from "../shared/env.js";
+import { assertChatEligible } from "./inbox-routes.js";
 
 const startSchema = z.object({ participantIds: z.array(z.string().uuid()).min(1).max(20) });
 
@@ -22,10 +23,13 @@ export function conversationsRouter(db: Database, env: Env) {
   // groups without duplicating threads every time two people message again.
   router.post("/", requireAuth(env), async (req, res) => {
     const body = startSchema.parse(req.body);
+    await assertChatEligible(db, req.user!.sub);
     const allParticipantIds = Array.from(new Set([req.user!.sub, ...body.participantIds])).sort();
 
     const myConversations = await db.query.conversationParticipants.findMany({ where: eq(conversationParticipants.userId, req.user!.sub) });
     for (const candidate of myConversations) {
+      const conv = await db.query.privateConversations.findFirst({ where: eq(privateConversations.id, candidate.conversationId) });
+      if (conv?.isGroup) continue; // groups are never reused as a DM
       const participants = await db.query.conversationParticipants.findMany({ where: eq(conversationParticipants.conversationId, candidate.conversationId) });
       const ids = participants.map((p) => p.userId).sort();
       if (ids.length === allParticipantIds.length && ids.every((id, i) => id === allParticipantIds[i])) {
