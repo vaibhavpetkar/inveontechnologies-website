@@ -84,6 +84,8 @@ Each phase is one or two PRs, shippable on its own, and ends with the feature us
 ### Phase F — Deferred items (only if wanted)
 Cashfree payments (decision #10 / Phase 5), attendance and leave, payroll, XLSX/PDF report exports, real file storage for resumes/documents/attachments.
 
+**Built (report exports):** a Reports page for HR and admins with 12 reports (now showing names and titles instead of ids, and adding attendance, leave and payroll), date presets, a preview, and downloads as Excel (.xlsx, written without extra libraries), PDF (landscape table with page numbers) or CSV.
+
 **Built (attendance and leave):** people check in and out (office or remote) from the Attendance page, see their month and their leave balance, and ask for casual, sick, earned or unpaid leave. Their manager (or HR) approves it from Leave requests, with notifications and emails each way. Staff see the team's day and can mark someone present, half day or absent. HR keeps the holiday list and the paid leave each employee type gets (defaults: full time 12 casual, 6 sick, 15 earned; interns 6 casual, 3 sick). Unpaid leave and absences flow into payroll as loss-of-pay days.
 
 **Built (file storage):** uploads go to a Docker volume on the server (`PORTAL_UPLOAD_DIR`, decision below) through `POST /api/v1/files`, and are served by `GET /api/v1/files/:id` only to people allowed to see them (docs/permissions.md). Candidates add a resume on their profile and upload requested documents from their journey page; the hiring team asks for, accepts or sends back documents from the applicant drawer, with notifications and emails each way. Tasks have a Files panel and chat messages can carry up to 5 files, with image previews.

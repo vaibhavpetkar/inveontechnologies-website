@@ -29,6 +29,7 @@ import Chat from "./pages/Chat";
 import Payroll from "./pages/Payroll";
 import Payslips from "./pages/Payslips";
 import Attendance from "./pages/Attendance";
+import Reports from "./pages/Reports";
 import { MotionConfig } from "framer-motion";
 import { ToastProvider } from "./components/Toast";
 import { NotificationsProvider } from "./context/NotificationsContext";
@@ -82,6 +83,7 @@ function AppRoutes() {
       <Route path="/payroll"><Protected><Payroll /></Protected></Route>
       <Route path="/payslips"><Protected><Payslips /></Protected></Route>
       <Route path="/attendance"><Protected><Attendance /></Protected></Route>
+      <Route path="/reports"><Protected><Reports /></Protected></Route>
       <Route path="/calendar"><Protected><Calendar /></Protected></Route>
 
       <Route><div className="page-loading">Page not found.</div></Route>

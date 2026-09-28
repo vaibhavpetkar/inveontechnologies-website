@@ -63,6 +63,15 @@ Files are stored on the server (the `portal-uploads` volume, `PORTAL_UPLOAD_DIR`
 
 Leave goes to the person's manager, or to HR when they have none. Weekends (Saturday and Sunday) and holidays don't count as leave days. Approved unpaid leave, and absences or half days no leave covers, become the loss-of-pay days on a new payslip draft.
 
+## Reports
+
+| Report | Who can open and download it (Excel, PDF or CSV) |
+| --- | --- |
+| Candidates, applications, exam results, attendance, leave, payroll, tasks, projects, courses, course certificates | HR, admin, super admin |
+| Employees, audit log | Admin, super admin |
+
+Every download is recorded in the export log (admins see it at `GET /api/v1/reports/export/jobs`). PDFs stop at 2000 rows; Excel and CSV hold everything.
+
 ## GitHub issues on tasks
 
 | Action | Who |
