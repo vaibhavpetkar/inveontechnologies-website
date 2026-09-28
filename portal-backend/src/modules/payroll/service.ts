@@ -7,6 +7,7 @@ import { writeAuditLog } from "../shared/audit.js";
 import { notify } from "../notifications/service.js";
 import { displayNameFor } from "../employees/onboarding.js";
 import { logger } from "../shared/logger.js";
+import { suggestedLopDays } from "../attendance/service.js";
 import { computeSlip, currentPeriod, periodBounds, periodLabel } from "./calc.js";
 
 type Employee = typeof employees.$inferSelect;
@@ -31,7 +32,8 @@ export async function structureFor(db: Database, employeeId: string, period: str
 /**
  * Creates or refreshes draft payslips for a month. Published slips are left
  * alone. `lop` overrides loss-of-pay days per employee; otherwise a draft
- * keeps the days it already had. `onlyMissing` skips employees who already
+ * keeps the days it already had, and a new one starts from
+ * unpaid leave and absences (attendance/service.ts). `onlyMissing` skips employees who already
  * have a slip (the monthly job uses it so it never touches HR's drafts).
  */
 export async function generatePayslips(
@@ -61,7 +63,8 @@ export async function generatePayslips(
       continue;
     }
     if (existing && opts.onlyMissing) continue;
-    const lopDays = opts.lop?.[employee.id] ?? (existing ? Number(existing.lopDays) : 0);
+    // A new draft starts from approved unpaid leave and days marked absent.
+    const lopDays = opts.lop?.[employee.id] ?? (existing ? Number(existing.lopDays) : await suggestedLopDays(db, employee.id, period));
     const f = computeSlip(structure.components, { period, joiningDate: employee.joiningDate, lopDays });
     const values = {
       daysInMonth: f.daysInMonth,

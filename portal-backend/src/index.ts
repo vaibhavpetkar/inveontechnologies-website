@@ -45,6 +45,7 @@ import { cashfreeWebhookRouter, programRouter, registerProgramSchedules } from "
 import { githubRouter, githubWebhookRouter, registerGithubSchedules } from "./modules/github/routes.js";
 import { payrollRouter, registerPayrollSchedules } from "./modules/payroll/routes.js";
 import { filesRouter } from "./modules/files/routes.js";
+import { attendanceRouter, holidaysRouter, leaveRouter } from "./modules/attendance/routes.js";
 
 const env = loadEnv();
 const { db, pool } = createDb(env);
@@ -160,6 +161,9 @@ app.use("/api/v1/calendar", calendarRouter(db, env));
 app.use("/api/v1/program", programRouter(db, env));
 app.use("/api/v1/github", githubRouter(db, env));
 app.use("/api/v1/payroll", payrollRouter(db, env));
+app.use("/api/v1/attendance", attendanceRouter(db, env));
+app.use("/api/v1/leave", leaveRouter(db, env));
+app.use("/api/v1/holidays", holidaysRouter(db, env));
 
 // Future feature routes mount here:
 // app.use("/api/v1/employees", employeesRouter(db, env));

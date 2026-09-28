@@ -8,6 +8,8 @@ export interface SalaryComponent {
 
 export interface PayrollRow {
   id: string;
+  /** Loss-of-pay days that month's unpaid leave and absences add up to. */
+  leaveLopDays?: number;
   businessId: string | null;
   employeeType: "intern" | "full_time" | "contract";
   status: string;
