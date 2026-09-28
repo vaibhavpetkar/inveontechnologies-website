@@ -52,6 +52,26 @@ Files are stored on the server (the `portal-uploads` volume, `PORTAL_UPLOAD_DIR`
 | Task file | Anyone who can open the task. The person who added it, HR and admins can remove it |
 | Chat file | Members of that chat |
 
+## Attendance and leave
+
+| Action | Who |
+| --- | --- |
+| Check in and out, ask for leave, cancel own leave | Anyone with an employee record (approved leave only before it starts) |
+| See the team's day, approve or decline leave, mark present, half day or absent | Managers for their direct reports; HR and admins for everyone. Nobody decides their own leave |
+| Cancel approved leave after it started | HR and admins |
+| Add or remove holidays, set yearly paid leave | HR and admins |
+
+Leave goes to the person's manager, or to HR when they have none. Weekends (Saturday and Sunday) and holidays don't count as leave days. Approved unpaid leave, and absences or half days no leave covers, become the loss-of-pay days on a new payslip draft.
+
+## Reports
+
+| Report | Who can open and download it (Excel, PDF or CSV) |
+| --- | --- |
+| Candidates, applications, exam results, attendance, leave, payroll, tasks, projects, courses, course certificates | HR, admin, super admin |
+| Employees, audit log | Admin, super admin |
+
+Every download is recorded in the export log (admins see it at `GET /api/v1/reports/export/jobs`). PDFs stop at 2000 rows; Excel and CSV hold everything.
+
 ## GitHub issues on tasks
 
 | Action | Who |

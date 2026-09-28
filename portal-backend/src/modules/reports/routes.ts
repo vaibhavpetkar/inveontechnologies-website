@@ -6,16 +6,18 @@ import { savedReportViews, exportJobs, jobs } from "../shared/db/schema.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, NotFoundError } from "../shared/errors.js";
 import { getReportRows, REPORT_KEYS, type ReportKey } from "./data.js";
+import { readable, REPORTS } from "./columns.js";
 import { toCsv } from "./csv.js";
+import { toXlsx } from "./xlsx.js";
+import { toPdf } from "./pdf.js";
 import type { Env } from "../shared/env.js";
 
 // Employee PII and audit logs are more sensitive than operational
-// recruitment/course reports — HR can see the latter, only Admin/Super
-// Admin can see the former. Payment reports don't exist yet
-// (see schema.ts) so there's nothing to gate for those.
+// reports — HR can see the latter, only Admin/Super Admin the former
+// (marked `sensitive` in columns.ts).
 const OPERATIONAL_ROLES = ["hr", "admin", "super_admin"] as const;
 const SENSITIVE_ROLES = ["admin", "super_admin"] as const;
-const SENSITIVE_REPORTS = new Set<ReportKey>(["employees", "audit-logs"]);
+const SENSITIVE_REPORTS = new Set<ReportKey>(REPORT_KEYS.filter((k) => "sensitive" in REPORTS[k] && REPORTS[k].sensitive));
 
 const dateRangeSchema = z.object({ from: z.string().datetime().optional(), to: z.string().datetime().optional() });
 const paginationSchema = z.object({ offset: z.coerce.number().int().min(0).default(0), limit: z.coerce.number().int().min(1).max(500).default(100) });
@@ -27,12 +29,29 @@ const exportSchema = z.object({
 });
 const saveViewSchema = z.object({ reportKey: z.string().min(1), name: z.string().min(1).max(200), filters: z.record(z.unknown()).default({}) });
 
+const fmtDay = (d: Date | string) => new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: typeof d === "string" ? "UTC" : "Asia/Kolkata" }).format(typeof d === "string" ? new Date(`${d}T00:00:00Z`) : d);
+
+/** "1 Sep 2026 to 28 Sep 2026 · 12 rows · generated 28 Sep 2026, 11:59 pm" for the PDF heading. */
+function describeRange(key: ReportKey, range: { from?: Date; to?: Date }, rows: Record<string, unknown>[]) {
+  let span = range.from && range.to ? `${fmtDay(range.from)} to ${fmtDay(range.to)}` : range.from ? `From ${fmtDay(range.from)}` : range.to ? `Up to ${fmtDay(range.to)}` : "All dates";
+  if (key === "attendance" && rows[0]) span = `${fmtDay(String(rows[0].from))} to ${fmtDay(String(rows[0].to))}`;
+  const at = new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit", timeZone: "Asia/Kolkata" }).format(new Date());
+  return `${span} · ${rows.length} ${rows.length === 1 ? "row" : "rows"} · generated ${at} IST`;
+}
+
 function requiredRoleFor(key: ReportKey): readonly string[] {
   return SENSITIVE_REPORTS.has(key) ? SENSITIVE_ROLES : OPERATIONAL_ROLES;
 }
 
 export function reportsRouter(db: Database, env: Env) {
   const router = Router();
+
+  /** The reports this person may open, with their columns. */
+  router.get("/", requireAuth(env), requireRole(...OPERATIONAL_ROLES), (req, res) => {
+    res.json({
+      reports: REPORT_KEYS.filter((k) => requiredRoleFor(k).includes(req.user!.role)).map((key) => ({ key, title: REPORTS[key].title, description: REPORTS[key].description, columns: REPORTS[key].columns })),
+    });
+  });
 
   router.get("/recruitment-conversion", requireAuth(env), requireRole(...OPERATIONAL_ROLES), async (req, res) => {
     const range = dateRangeSchema.parse(req.query);
@@ -82,20 +101,30 @@ export function reportsRouter(db: Database, env: Env) {
       throw new AppError("FORBIDDEN", "You do not have permission to export this report", 403);
     }
 
-    if (body.format !== "csv") {
-      await db.insert(exportJobs).values({ requestedBy: req.user!.sub, reportKey: body.reportKey, format: body.format, filters: { from: body.from, to: body.to }, status: "not_implemented" });
-      res.status(501).json({ implemented: false, reason: `${body.format.toUpperCase()} export is not implemented in this phase — only CSV is genuinely generated. No xlsx/pdf library is wired in.` });
-      return;
+    const range = { from: body.from ? new Date(body.from) : undefined, to: body.to ? new Date(body.to) : undefined };
+    const rows = readable(body.reportKey, await getReportRows(db, body.reportKey, range));
+    const def = REPORTS[body.reportKey];
+    const stamp = new Date().toISOString().slice(0, 10);
+    const filename = `${body.reportKey}-${stamp}.${body.format}`;
+
+    let file: Buffer | string;
+    let type: string;
+    if (body.format === "csv") {
+      file = toCsv(rows.map((r) => Object.fromEntries(def.columns.map((c) => [c.label, r[c.key]]))));
+      type = "text/csv; charset=utf-8";
+    } else if (body.format === "xlsx") {
+      file = toXlsx(def.title, def.columns, rows);
+      type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    } else {
+      file = await toPdf({ title: def.title, subtitle: describeRange(body.reportKey, range, rows), columns: def.columns, rows });
+      type = "application/pdf";
     }
 
-    const rows = await getReportRows(db, body.reportKey, { from: body.from ? new Date(body.from) : undefined, to: body.to ? new Date(body.to) : undefined });
-    const csv = toCsv(rows);
+    await db.insert(exportJobs).values({ requestedBy: req.user!.sub, reportKey: body.reportKey, format: body.format, filters: { from: body.from, to: body.to }, status: "completed", rowCount: rows.length });
 
-    await db.insert(exportJobs).values({ requestedBy: req.user!.sub, reportKey: body.reportKey, format: "csv", filters: { from: body.from, to: body.to }, status: "completed", rowCount: rows.length });
-
-    res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", `attachment; filename="${body.reportKey}.csv"`);
-    res.send(csv);
+    res.setHeader("Content-Type", type);
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(file);
   });
 
   router.get("/export/jobs", requireAuth(env), requireRole(...SENSITIVE_ROLES), async (_req, res) => {
@@ -136,9 +165,9 @@ export function reportsRouter(db: Database, env: Env) {
     const range = dateRangeSchema.parse(req.query);
     const pagination = paginationSchema.parse(req.query);
     const allRows = await getReportRows(db, key, { from: range.from ? new Date(range.from) : undefined, to: range.to ? new Date(range.to) : undefined });
-    const page = allRows.slice(pagination.offset, pagination.offset + pagination.limit);
+    const page = readable(key, allRows.slice(pagination.offset, pagination.offset + pagination.limit));
 
-    res.json({ reportKey: key, total: allRows.length, offset: pagination.offset, limit: pagination.limit, rows: page });
+    res.json({ reportKey: key, title: REPORTS[key].title, columns: REPORTS[key].columns, total: allRows.length, offset: pagination.offset, limit: pagination.limit, rows: page });
   });
 
   return router;

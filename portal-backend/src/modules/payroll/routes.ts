@@ -12,6 +12,7 @@ import { displayNameFor } from "../employees/onboarding.js";
 import { PERIOD_RE, currentPeriod, monthlyGross, monthlyNet, periodLabel } from "./calc.js";
 import { HR_ROLES, draftMonthlyPayslips, generatePayslips, issueDueInternshipCertificates, issueEmploymentCertificate, publishPayslips, structureFor } from "./service.js";
 import { renderPayslipPdf } from "./pdf.js";
+import { suggestedLopDays } from "../attendance/service.js";
 
 const isHr = (role: string) => (HR_ROLES as readonly string[]).includes(role);
 const periodSchema = z.string().regex(PERIOD_RE, "Use YYYY-MM");
@@ -72,7 +73,7 @@ export function payrollRouter(db: Database, env: Env) {
     const people = [];
     for (const r of rows.rows) {
       const structure = await structureFor(db, r.id as string, period);
-      people.push({ ...r, salary: structure ? { effectiveFrom: structure.effectiveFrom, components: structure.components, gross: monthlyGross(structure.components), net: monthlyNet(structure.components) } : null });
+      people.push({ ...r, leaveLopDays: await suggestedLopDays(db, r.id as string, period), salary: structure ? { effectiveFrom: structure.effectiveFrom, components: structure.components, gross: monthlyGross(structure.components), net: monthlyNet(structure.components) } : null });
     }
     res.json({ period, periodLabel: periodLabel(period), people });
   });
