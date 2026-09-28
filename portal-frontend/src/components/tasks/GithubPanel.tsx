@@ -91,15 +91,15 @@ export function GithubPanel({ task, canEdit, onUpdated }: Props) {
           {linking ? (
             <motion.form key="link" className="gh-link-form" onSubmit={link} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               <input value={ref} onChange={(e) => setRef(e.target.value)} placeholder={status.defaultRepo ? `Issue link or #number (${status.defaultRepo})` : "Issue link or owner/repo#number"} aria-label="GitHub issue" autoFocus />
-              <button className="btn btn-small" disabled={busy || !ref.trim()}>Link</button>
-              <button type="button" className="btn btn-secondary btn-small" onClick={() => setLinking(false)}>Cancel</button>
+              <button className="btn btn-sm" disabled={busy || !ref.trim()}>Link</button>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setLinking(false)}>Cancel</button>
             </motion.form>
           ) : (
             <motion.div key="buttons" className="gh-buttons" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-              <button className="btn btn-secondary btn-small" disabled={busy} onClick={() => run(`/api/v1/github/tasks/${task.id}/issue`, "POST", {}, "Issue opened on GitHub")}>
+              <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => run(`/api/v1/github/tasks/${task.id}/issue`, "POST", {}, "Issue opened on GitHub")}>
                 <Github size={15} /> Open an issue
               </button>
-              <button className="btn btn-secondary btn-small" disabled={busy} onClick={() => setLinking(true)}>
+              <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => setLinking(true)}>
                 <Link2 size={15} /> Link existing
               </button>
             </motion.div>
@@ -112,7 +112,7 @@ export function GithubPanel({ task, canEdit, onUpdated }: Props) {
       {mine && !status.username && (
         <form className="gh-link-form gh-handle" onSubmit={saveHandle}>
           <input value={handle} onChange={(e) => setHandle(e.target.value)} placeholder="Your GitHub username" aria-label="Your GitHub username" />
-          <button className="btn btn-small" disabled={!handle.trim()}>Save</button>
+          <button className="btn btn-sm" disabled={!handle.trim()}>Save</button>
         </form>
       )}
     </section>

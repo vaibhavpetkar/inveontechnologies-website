@@ -12,9 +12,13 @@ import {
   interviewRounds,
   opportunities,
   paymentOrders,
+  employees,
   programEnrollments,
+  salaryStructures,
   users,
 } from "../shared/db/schema.js";
+import { createEmployeeRecord, resolveDesignation } from "../employees/onboarding.js";
+import { applyApplicationTransition } from "../applications/transition-helper.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
@@ -124,6 +128,7 @@ export function programRouter(db: Database, env: Env) {
       enrollment,
       payments: { enabled: !!cashfree, mode: cashfree?.mode ?? null, orders: orders.map(({ lastEvent, paymentSessionId, ...o }) => o) },
       sessions: await sessionsFor(db, application.userId),
+      employee: await db.query.employees.findFirst({ where: eq(employees.userId, application.userId), columns: { id: true, businessId: true, employeeType: true, joiningDate: true, durationMonths: true, status: true } }) ?? null,
     });
   });
 
@@ -254,6 +259,60 @@ export function programRouter(db: Database, env: Env) {
     res.json({ enrollment: updated });
   });
 
+  /**
+   * The last step of the journey: hire someone who has paid for (or been
+   * waived into) the program. Creates their employee record (which makes
+   * them an intern or employee in the portal), marks the application
+   * selected, and optionally sets their monthly stipend or salary.
+   */
+  router.post("/enrollments/:id/hire", requireAuth(env), requireRole("hr", "admin", "super_admin"), async (req, res) => {
+    const body = z
+      .object({
+        employeeType: z.enum(["intern", "full_time", "contract"]).default("intern"),
+        joiningDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        durationMonths: z.number().int().min(1).max(60).optional(),
+        designationTitle: z.string().trim().max(200).optional(),
+        managerId: z.string().uuid().optional(),
+        monthlyPay: z.number().min(0).max(10_000_000).optional(),
+      })
+      .parse(req.body);
+    const enrollment = await loadEnrollment(db, req.params.id);
+    if (!["paid", "waived"].includes(enrollment.status)) throw new AppError("INVALID_STATE", "Hire once the program fee is paid or waived", 409);
+    const application = await getApplicationOr404(db, enrollment.applicationId);
+    const existing = await db.query.employees.findFirst({ where: eq(employees.userId, enrollment.userId) });
+    if (existing) throw new AppError("ALREADY_EMPLOYEE", `Already hired as ${existing.businessId}`, 409);
+    if (body.managerId) {
+      const manager = await db.query.users.findFirst({ where: eq(users.id, body.managerId) });
+      if (!manager || manager.role === "candidate") throw new AppError("INVALID_MANAGER", "Manager must be a staff account", 400);
+    }
+
+    const joiningDate = new Date(`${body.joiningDate}T00:00:00Z`);
+    const employee = await createEmployeeRecord(db, {
+      userId: enrollment.userId,
+      applicationId: application.id,
+      employeeType: body.employeeType,
+      designationId: await resolveDesignation(db, body.designationTitle),
+      managerId: body.managerId ?? null,
+      hrManagerId: req.user!.sub,
+      joiningDate,
+      durationMonths: body.durationMonths ?? null,
+      createdBy: req.user!.sub,
+    });
+    if (body.monthlyPay) {
+      await db.insert(salaryStructures).values({
+        employeeId: employee.id,
+        effectiveFrom: joiningDate,
+        components: [{ name: body.employeeType === "intern" ? "Stipend" : "Basic salary", amount: body.monthlyPay, kind: "earning" }],
+        createdBy: req.user!.sub,
+      });
+    }
+    if (application.status === "shortlisted") {
+      await applyApplicationTransition(db, { applicationId: application.id, from: "shortlisted", to: "selected", actorUserId: req.user!.sub, note: `Hired as ${employee.businessId}` });
+    }
+    await writeAuditLog(db, { actorUserId: req.user!.sub, action: "program.hire", entityType: "program_enrollment", entityId: enrollment.id, metadata: { employeeId: employee.id }, ipAddress: req.ip });
+    res.status(201).json({ employee });
+  });
+
   /** The opening's applicants with their exam, HR round and program state, for the staff panel. */
   router.get("/applicants", requireAuth(env), requireRole(...PIPELINE_ROLES), async (req, res) => {
     const { opportunityId } = z.object({ opportunityId: z.string().uuid() }).parse(req.query);
@@ -275,11 +334,13 @@ export function programRouter(db: Database, env: Env) {
         enrollmentStatus: programEnrollments.status,
         trialEndsAt: programEnrollments.trialEndsAt,
         joiningSubmittedAt: programEnrollments.joiningSubmittedAt,
+        employeeId: employees.id,
       })
       .from(applications)
       .innerJoin(users, eq(users.id, applications.userId))
       .leftJoin(candidateProfiles, eq(candidateProfiles.userId, applications.userId))
       .leftJoin(programEnrollments, eq(programEnrollments.applicationId, applications.id))
+      .leftJoin(employees, eq(employees.userId, applications.userId))
       .where(eq(applications.opportunityId, opportunityId))
       .orderBy(desc(applications.createdAt))
       .limit(300);

@@ -74,6 +74,7 @@ export interface Journey {
   enrollment: Enrollment | null;
   payments: { enabled: boolean; mode: "sandbox" | "production" | null; orders: { id: string; orderId: string; amount: string; status: string; createdAt: string }[] };
   sessions: Session[];
+  employee?: { id: string; businessId: string | null; employeeType: string; joiningDate: string; durationMonths: number | null; status: string } | null;
 }
 
 export const ENROLLMENT_LABELS: Record<EnrollmentStatus, string> = {

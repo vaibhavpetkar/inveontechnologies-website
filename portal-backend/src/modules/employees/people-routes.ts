@@ -9,6 +9,7 @@ import { hashPassword } from "../auth/password.js";
 import { AppError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import type { Env } from "../shared/env.js";
+import { issueEmploymentCertificate } from "../payroll/service.js";
 import { createEmployeeRecord, queueWelcomeEmail, resolveDepartment, resolveDesignation } from "./onboarding.js";
 
 const HR_ROLES = ["hr", "admin", "super_admin"] as const;
@@ -215,6 +216,10 @@ export function peopleRouter(db: Database, env: Env) {
     if (body.status) changes.status = body.status;
     if (body.joiningDate) changes.joiningDate = body.joiningDate;
     await db.update(employees).set(changes).where(eq(employees.id, id));
+    // Leaving: their completion or experience certificate is issued automatically (once).
+    if (body.status === "offboarded" && employee.status !== "offboarded") {
+      await issueEmploymentCertificate(db, { ...employee, ...changes } as typeof employee, { actorUserId: req.user!.sub, toDate: new Date(), appUrl: env.PORTAL_APP_URL });
+    }
     if (body.fullName) await db.update(users).set({ fullName: body.fullName, updatedAt: new Date() }).where(eq(users.id, employee.userId));
 
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "employee.update", entityType: "employee", entityId: id, metadata: { fields: Object.keys(body) }, ipAddress: req.ip });

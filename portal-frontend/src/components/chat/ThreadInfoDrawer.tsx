@@ -78,8 +78,8 @@ export function ThreadInfoDrawer({ info, people, onClose, onChanged, onLeft }: P
           {renaming ? (
             <form className="inline-form chat-rename" onSubmit={rename}>
               <input value={title} onChange={(e) => setTitle(e.target.value)} minLength={2} maxLength={80} autoFocus aria-label="Group name" />
-              <button className="btn btn-small" disabled={busy || title.trim().length < 2}>Save</button>
-              <button type="button" className="btn btn-secondary btn-small" onClick={() => setRenaming(false)}>Cancel</button>
+              <button className="btn btn-sm" disabled={busy || title.trim().length < 2}>Save</button>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={() => setRenaming(false)}>Cancel</button>
             </form>
           ) : (
             <h2 className="drawer-title">{heading}</h2>
@@ -94,7 +94,7 @@ export function ThreadInfoDrawer({ info, people, onClose, onChanged, onLeft }: P
           <div className="chat-info-sub">
             <h3>{info.members.length} {info.members.length === 1 ? "member" : "members"}</h3>
             {isGroup && info.canManage && !adding && (
-              <button className="btn btn-secondary btn-small" onClick={() => setAdding(true)}><UserPlus size={15} /> Add people</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => setAdding(true)}><UserPlus size={15} /> Add people</button>
             )}
           </div>
 
@@ -114,8 +114,8 @@ export function ThreadInfoDrawer({ info, people, onClose, onChanged, onLeft }: P
                 {candidates.length === 0 && <li className="muted-small">Everyone is already here.</li>}
               </ul>
               <div className="modal-actions">
-                <button className="btn btn-secondary btn-small" onClick={() => { setAdding(false); setPicked([]); }}>Cancel</button>
-                <button className="btn btn-small" disabled={busy || picked.length === 0} onClick={addPeople}>Add {picked.length || ""}</button>
+                <button className="btn btn-secondary btn-sm" onClick={() => { setAdding(false); setPicked([]); }}>Cancel</button>
+                <button className="btn btn-sm" disabled={busy || picked.length === 0} onClick={addPeople}>Add {picked.length || ""}</button>
               </div>
             </div>
           )}

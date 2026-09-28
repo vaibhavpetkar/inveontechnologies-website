@@ -1307,3 +1307,78 @@ export const paymentOrders = pgTable(
     byEnrollment: index("payment_orders_enrollment_idx").on(t.enrollmentId),
   }),
 );
+
+// --- Payroll and completion certificates (candidate journey, step 9) ---
+//
+// A salary structure is a dated list of monthly components; the one in force
+// on the 1st of a month drives that month's payslip. Payslips are generated
+// as drafts (by HR or the monthly job), can be adjusted for loss-of-pay days
+// while in draft, and become visible to the employee once published. A
+// published slip is never edited.
+
+export interface SalaryComponent {
+  name: string;
+  amount: number; // monthly, in rupees
+  kind: "earning" | "deduction";
+}
+
+export const salaryStructures = pgTable(
+  "salary_structures",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    employeeId: uuid("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+    effectiveFrom: timestamp("effective_from", { withTimezone: true }).notNull(),
+    components: jsonb("components").$type<SalaryComponent[]>().notNull(),
+    createdBy: uuid("created_by").notNull().references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ byEmployee: index("salary_structures_employee_idx").on(t.employeeId, t.effectiveFrom) }),
+);
+
+export const payslipStatusEnum = pgEnum("payslip_status", ["draft", "published"]);
+
+export const payslips = pgTable(
+  "payslips",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    employeeId: uuid("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+    period: text("period").notNull(), // "2026-09"
+    status: payslipStatusEnum("status").notNull().default("draft"),
+    daysInMonth: integer("days_in_month").notNull(),
+    payableDays: numeric("payable_days", { precision: 5, scale: 1 }).notNull(), // after joining date and loss of pay
+    lopDays: numeric("lop_days", { precision: 5, scale: 1 }).notNull().default("0"),
+    earnings: jsonb("earnings").$type<{ name: string; amount: number }[]>().notNull(),
+    deductions: jsonb("deductions").$type<{ name: string; amount: number }[]>().notNull(),
+    gross: numeric("gross", { precision: 12, scale: 2 }).notNull(),
+    totalDeductions: numeric("total_deductions", { precision: 12, scale: 2 }).notNull(),
+    net: numeric("net", { precision: 12, scale: 2 }).notNull(),
+    note: text("note"),
+    generatedBy: uuid("generated_by").references(() => users.id), // null = the monthly job
+    generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+    publishedBy: uuid("published_by").references(() => users.id),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+  },
+  (t) => ({ uniqPeriod: unique("payslips_employee_period_unique").on(t.employeeId, t.period) }),
+);
+
+export const employmentCertificateKindEnum = pgEnum("employment_certificate_kind", ["internship_completion", "experience"]);
+
+/** Internship completion and experience certificates, verified on the same public /verify page as course certificates. */
+export const employmentCertificates = pgTable("employment_certificates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: text("business_id").unique(),
+  seqNumber: integer("seq_number").generatedAlwaysAsIdentity(),
+  verificationCode: text("verification_code").notNull().unique(),
+  employeeId: uuid("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  kind: employmentCertificateKindEnum("kind").notNull(),
+  roleTitle: text("role_title").notNull(),
+  fromDate: timestamp("from_date", { withTimezone: true }).notNull(),
+  toDate: timestamp("to_date", { withTimezone: true }).notNull(),
+  snapshotContent: text("snapshot_content").notNull(),
+  status: certificateStatusEnum("status").notNull().default("issued"),
+  issuedBy: uuid("issued_by").references(() => users.id), // null = issued automatically
+  issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  revokeReason: text("revoke_reason"),
+});
