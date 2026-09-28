@@ -10,6 +10,7 @@ import { errorHandler } from "./modules/shared/errors.js";
 import { createDb } from "./modules/shared/db/client.js";
 import { authRouter } from "./modules/auth/routes.js";
 import { opportunitiesRouter } from "./modules/opportunities/routes.js";
+import { publicOpeningsRouter } from "./modules/opportunities/public-routes.js";
 import { profileRouter } from "./modules/profile/routes.js";
 import { applicationsRouter } from "./modules/applications/routes.js";
 import { assessmentsRouter } from "./modules/assessments/routes.js";
@@ -67,6 +68,18 @@ app.use(
 );
 
 app.use((req, res, next) => {
+  // Public read-only feeds (the careers page's openings list) are open to
+  // any origin, without credentials.
+  if (req.path.startsWith("/api/v1/public/")) {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+    if (req.method === "OPTIONS") {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+    return;
+  }
   // CORS. Credentialed (cookies for refresh token) so origin must be
   // explicit — never "*" when credentials are allowed.
   res.setHeader("Access-Control-Allow-Origin", env.PORTAL_CORS_ORIGIN);
@@ -98,6 +111,7 @@ app.get("/api/v1/health/ready", async (_req, res) => {
 
 app.use("/api/v1/auth", authRouter(db, env));
 app.use("/api/v1/opportunities", opportunitiesRouter(db, env));
+app.use("/api/v1/public", publicOpeningsRouter(db, env));
 app.use("/api/v1/profile", profileRouter(db, env));
 app.use("/api/v1/applications", applicationsRouter(db, env));
 app.use("/api/v1/assessments", assessmentsRouter(db, env));

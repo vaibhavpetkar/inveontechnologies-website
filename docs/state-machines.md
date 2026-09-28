@@ -19,8 +19,9 @@ stateDiagram-v2
 stateDiagram-v2
     [*] --> Submitted
     Submitted --> UnderReview: admin/manager opens
+    Submitted --> AssessmentInvited: system — the opening has an active exam, so applying invites straight away
     UnderReview --> AssessmentInvited: invite to assessment (dedicated endpoint)
-    AssessmentInvited --> AssessmentCompleted: system-triggered — candidate submits OR attempt expires
+    AssessmentInvited --> AssessmentCompleted: system — a passing attempt, or the last attempt on every exam is used up
     AssessmentCompleted --> Shortlisted: admin approval
     AssessmentCompleted --> Rejected: admin reject
     UnderReview --> Shortlisted: admin approval (assessment optional)
@@ -38,7 +39,8 @@ stateDiagram-v2
 **Implemented in `applications/state-machine.ts`** as three explicit transition tables — admin, candidate, and system — rather than one shared table, because each has a different actor and different validity rules:
 - **Admin transitions** (`isAdminTransitionAllowed`): used by the generic `/applications/:id/transition` endpoint. Notably this table does *not* allow moving directly into `AssessmentInvited` or `AssessmentCompleted` from that generic endpoint — those have side effects (creating an attempt; requiring a resolved score) that the generic endpoint doesn't know how to produce.
 - **Candidate transitions** (`isCandidateTransitionAllowed`): only ever `-> Withdrawn`, from any non-terminal state.
-- **System transition** (`isSystemTransitionAllowed`): exactly one — `AssessmentInvited -> AssessmentCompleted` — fired by `assessments/attempt-routes.ts` when a candidate submits or an attempt lazily resolves as expired. Kept separate from the admin table so it's obvious at the call site that this isn't a privilege-checked action.
+- **System transitions** (`isSystemTransitionAllowed`): two, both in `assessments/exams.ts`. `Submitted -> AssessmentInvited` fires when a candidate applies to an opening that has at least one active exam with questions. `AssessmentInvited -> AssessmentCompleted` fires after a scored attempt (submitted or lazily expired) when the attempt passed, or when it failed and no exam on the opening has attempts left. A failed attempt with retries remaining leaves the application in `AssessmentInvited`. Kept separate from the admin table so it's obvious at the call site that this isn't a privilege-checked action.
+- **Language exams**: an opening can have several exams (one per language or track), each with its own pass mark and `max_attempts`. The candidate picks one, and passing any one is enough. Attempts are numbered per application (`attempt_number`); an exam with attempts on record can't have its questions edited, and deleting it switches it off instead.
 
 ## Assessment attempt
 

@@ -15,7 +15,7 @@ export function navForRole(role: UserRole): NavItem[] {
     return [
       { href: "/opportunities", label: "Opportunities", icon: Briefcase },
       { href: "/candidate", label: "My applications", icon: FileText },
-      { href: "/assessments", label: "Assessments", icon: ClipboardCheck },
+      { href: "/assessments", label: "Exams", icon: ClipboardCheck },
       { href: "/calendar", label: "Calendar", icon: CalendarDays },
       { href: "/courses", label: "Courses", icon: BookOpen },
       { href: "/profile", label: "Profile", icon: UserRound },

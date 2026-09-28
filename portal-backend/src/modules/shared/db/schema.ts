@@ -273,6 +273,13 @@ export const assessments = pgTable("assessments", {
   durationMinutes: integer("duration_minutes").notNull(),
   // Percentage (0-100) of total points required to pass.
   passingScorePercent: integer("passing_score_percent").notNull().default(60),
+  // The language or track this exam covers ("JavaScript", "Python"). An
+  // opening can carry one exam per language; the candidate picks one.
+  language: text("language"),
+  // How many times a candidate may sit this exam for one application.
+  maxAttempts: integer("max_attempts").notNull().default(1),
+  // Inactive exams are hidden from candidates but keep their history.
+  isActive: boolean("is_active").notNull().default(true),
   createdBy: uuid("created_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -291,8 +298,11 @@ export const assessmentQuestions = pgTable("assessment_questions", {
 
 export const assessmentAttempts = pgTable("assessment_attempts", {
   id: uuid("id").primaryKey().defaultRandom(),
-  applicationId: uuid("application_id").notNull().unique().references(() => applications.id, { onDelete: "cascade" }),
+  // Several attempts per application: retries of one exam, or a switch to
+  // another language's exam. attemptNumber counts per (application, exam).
+  applicationId: uuid("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
   assessmentId: uuid("assessment_id").notNull().references(() => assessments.id, { onDelete: "cascade" }),
+  attemptNumber: integer("attempt_number").notNull().default(1),
   status: assessmentAttemptStatusEnum("status").notNull().default("not_started"),
   startedAt: timestamp("started_at", { withTimezone: true }),
   expiresAt: timestamp("expires_at", { withTimezone: true }),

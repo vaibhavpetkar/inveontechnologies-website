@@ -3,6 +3,7 @@ import { z } from "zod";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
 import { courses, opportunities, opportunityCourses, opportunitySkills, skills, users } from "../shared/db/schema.js";
+import { examsForOpportunity } from "../assessments/exams.js";
 import { optionalAuth, requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
@@ -178,7 +179,10 @@ export function opportunitiesRouter(db: Database, env: Env) {
     // Applicants only see courses that are live.
     const visibleCourses = isPrivileged ? courseLinks : courseLinks.filter((c) => c.status === "published");
 
-    res.json({ opportunity, skills: skillLinks.map((s) => s.skill), courses: visibleCourses });
+    // The exam(s) a candidate will sit after applying — no questions, just what to expect.
+    const exams = (await examsForOpportunity(db, opportunity.id)).map(({ description: _d, ...e }) => e);
+
+    res.json({ opportunity, skills: skillLinks.map((s) => s.skill), courses: visibleCourses, exams });
   });
 
   // --- Privileged: create/edit/publish/archive ---
