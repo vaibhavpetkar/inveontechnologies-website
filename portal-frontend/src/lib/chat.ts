@@ -41,6 +41,15 @@ export interface ChatMessage {
   editedAt: string | null;
   deletedAt: string | null;
   createdAt: string;
+  attachments?: ChatAttachment[];
+}
+
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  url: string;
+  mimeType: string;
+  sizeBytes: number;
 }
 
 export interface BrowseChannel {

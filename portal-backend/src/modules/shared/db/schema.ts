@@ -1382,3 +1382,27 @@ export const employmentCertificates = pgTable("employment_certificates", {
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
   revokeReason: text("revoke_reason"),
 });
+
+export const filePurposeEnum = pgEnum("file_purpose", ["resume", "application_document", "employee_document", "task_attachment", "chat_attachment"]);
+
+/**
+ * Uploaded files. The bytes live in storage (a Docker volume on the server,
+ * see modules/files/storage.ts); this row is the metadata. Places that hold a
+ * file keep its URL, /api/v1/files/<id>, in their existing file_url column,
+ * and who may download it follows from where it is attached.
+ */
+export const storedFiles = pgTable(
+  "stored_files",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    uploadedBy: uuid("uploaded_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+    purpose: filePurposeEnum("purpose").notNull(),
+    originalName: text("original_name").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    sha256: text("sha256").notNull(),
+    storageKey: text("storage_key").notNull().unique(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ byUploader: index("stored_files_uploaded_by_idx").on(t.uploadedBy) }),
+);

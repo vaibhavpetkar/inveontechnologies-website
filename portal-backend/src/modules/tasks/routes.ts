@@ -27,6 +27,7 @@ import { formatWhen } from "../shared/format.js";
 import { isAssigneeTransitionAllowed, isReviewerTransitionAllowed, type TaskStatus } from "./state-machine.js";
 import { canAccessProject, canManageProject } from "../projects/routes.js";
 import type { Env } from "../shared/env.js";
+import { claimFile, fileForUrl, publicFile } from "../files/service.js";
 import { pushTaskStatusToGithub } from "../github/push.js";
 
 const PRIVILEGED_ROLES = ["hr", "admin", "super_admin"] as const;
@@ -232,16 +233,27 @@ export function tasksRouter(db: Database, env: Env) {
     if (!task) throw new NotFoundError("Task not found");
     if (!(await canAccessTask(db, req.user!.sub, req.user!.role, task))) throw new ForbiddenError();
     const body = attachmentSchema.parse(req.body);
+    const file = await claimFile(db, body.fileUrl, req.user!.sub, "task_attachment", { allowLinks: true });
     const [attachment] = await db.insert(taskAttachments).values({ taskId: task.id, ...body, uploadedBy: req.user!.sub }).returning();
     await db.insert(taskEvents).values({ taskId: task.id, actorUserId: req.user!.sub, action: "attachment_added" });
-    res.status(201).json({ attachment });
+    res.status(201).json({ attachment: { ...attachment, file: file ? publicFile(file) : null } });
+  });
+
+  router.delete("/:id/attachments/:attachmentId", requireAuth(env), async (req, res) => {
+    const attachment = await db.query.taskAttachments.findFirst({ where: and(eq(taskAttachments.id, req.params.attachmentId), eq(taskAttachments.taskId, req.params.id)) });
+    if (!attachment) throw new NotFoundError("Attachment not found");
+    const privileged = PRIVILEGED_ROLES.includes(req.user!.role as (typeof PRIVILEGED_ROLES)[number]);
+    if (attachment.uploadedBy !== req.user!.sub && !privileged) throw new ForbiddenError("Only the person who added it can remove it");
+    await db.delete(taskAttachments).where(eq(taskAttachments.id, attachment.id));
+    res.status(204).end();
   });
 
   router.get("/:id/attachments", requireAuth(env), async (req, res) => {
     const task = await db.query.tasks.findFirst({ where: eq(tasks.id, req.params.id) });
     if (!task) throw new NotFoundError("Task not found");
     if (!(await canAccessTask(db, req.user!.sub, req.user!.role, task))) throw new ForbiddenError();
-    res.json({ attachments: await db.query.taskAttachments.findMany({ where: eq(taskAttachments.taskId, task.id) }) });
+    const rows = await db.query.taskAttachments.findMany({ where: eq(taskAttachments.taskId, task.id), orderBy: (a, { asc }) => [asc(a.uploadedAt)] });
+    res.json({ attachments: await Promise.all(rows.map(async (a) => ({ ...a, file: await fileForUrl(db, a.fileUrl).then((f) => (f ? publicFile(f) : null)) }))) });
   });
 
   router.post("/:id/time-entries", requireAuth(env), async (req, res) => {

@@ -1,7 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { DashboardShell } from "../components/DashboardShell";
 import { useAuth } from "../context/AuthContext";
-import { apiFetch } from "../lib/api";
+import { apiFetch, ApiError } from "../lib/api";
+import type { StoredFile } from "../lib/files";
+import { UploadButton } from "../components/files/UploadButton";
+import { FileChip } from "../components/files/FileChip";
+import { useToast } from "../components/Toast";
 
 interface ProfileData {
   fullName: string | null;
@@ -21,10 +25,23 @@ export default function Profile() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resume, setResume] = useState<StoredFile | null>(null);
+  const toast = useToast();
+
+  async function saveResume(file: StoredFile | null) {
+    try {
+      const r = await apiFetch<{ resume: StoredFile | null }>("/api/v1/profile/me/resume", { method: "PUT", body: { fileUrl: file?.url ?? null }, accessToken });
+      setResume(r.resume);
+      toast(file ? "Resume saved" : "Resume removed");
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "Couldn't save your resume.", "error");
+    }
+  }
 
   useEffect(() => {
-    apiFetch<{ profile: ProfileData; skills: { name: string }[] }>("/api/v1/profile/me", { accessToken })
+    apiFetch<{ profile: ProfileData; skills: { name: string }[]; resume: StoredFile | null }>("/api/v1/profile/me", { accessToken })
       .then((r) => {
+        setResume(r.resume);
         setForm({
           fullName: r.profile.fullName ?? "",
           phone: r.profile.phone ?? "",
@@ -105,6 +122,14 @@ export default function Profile() {
           <div className="field">
             <label htmlFor="skillNames">Skills (comma separated)</label>
             <input id="skillNames" placeholder="React, Node.js" value={form.skillNames} onChange={(e) => setForm({ ...form, skillNames: e.target.value })} />
+          </div>
+          <div className="field">
+            <label>Resume</label>
+            <div className="file-row">
+              {resume && <FileChip file={resume} onRemove={() => saveResume(null)} removeLabel="Remove resume" />}
+              <UploadButton purpose="resume" label={resume ? "Replace" : "Upload resume"} onUploaded={saveResume} />
+            </div>
+            <span className="muted-small">PDF or Word, up to 10 MB. Recruiters see it with your applications.</span>
           </div>
           <div className="field">
             <label htmlFor="bio">About you</label>

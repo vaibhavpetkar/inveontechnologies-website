@@ -15,6 +15,7 @@ import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import type { Env } from "../shared/env.js";
+import { claimFile } from "../files/service.js";
 import { notify } from "../notifications/service.js";
 import { createEmployeeRecord, notifyIfOnboardingComplete } from "./onboarding.js";
 
@@ -221,6 +222,7 @@ export function employeesRouter(db: Database, env: Env) {
     const employee = await db.query.employees.findFirst({ where: eq(employees.id, req.params.id) });
     if (!employee) throw new NotFoundError("Employee not found");
     if (employee.userId !== req.user!.sub) throw new ForbiddenError("Only the employee themselves can upload their own documents");
+    await claimFile(db, body.fileUrl, req.user!.sub, "employee_document");
 
     const [created] = await db.insert(employeeDocuments).values({ employeeId: employee.id, ...body }).returning();
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "employee_document.upload", entityType: "employee_document", entityId: created.id, ipAddress: req.ip });

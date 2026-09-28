@@ -82,7 +82,9 @@ Each phase is one or two PRs, shippable on its own, and ends with the feature us
 **Built:** `calendar_events` and `calendar_event_attendees` hold meetings; interviews and my open task deadlines are merged into `GET /api/v1/calendar/events` from their own tables rather than copied. The Calendar page has month, week and agenda views, a new-meeting dialog with a people picker and a video-call choice, and a drawer to join, answer (Yes/Maybe/No), download the invite or edit/cancel. Every invite, change and cancellation is emailed as a real calendar invite (`text/calendar`, METHOD REQUEST/CANCEL). Google Meet and Zoom adapters are in `calendar/providers.ts` and switch on when their credentials are set (docs/calendar-integrations.md). Reminders go out 15 minutes before; a "Coming up" card sits on the dashboards. Class sessions and exam windows will join the calendar when those LMS features land.
 
 ### Phase F — Deferred items (only if wanted)
-Cashfree payments (decision #10 / Phase 5), attendance and leave, payroll, XLSX/PDF report exports, real file storage for resumes/documents/attachments (every file field is still a placeholder URL — this becomes urgent once people upload documents during onboarding, so it may move up into Phase C).
+Cashfree payments (decision #10 / Phase 5), attendance and leave, payroll, XLSX/PDF report exports, real file storage for resumes/documents/attachments.
+
+**Built (file storage):** uploads go to a Docker volume on the server (`PORTAL_UPLOAD_DIR`, decision below) through `POST /api/v1/files`, and are served by `GET /api/v1/files/:id` only to people allowed to see them (docs/permissions.md). Candidates add a resume on their profile and upload requested documents from their journey page; the hiring team asks for, accepts or sends back documents from the applicant drawer, with notifications and emails each way. Tasks have a Files panel and chat messages can carry up to 5 files, with image previews.
 
 ## 4. First PR to open
 
@@ -99,7 +101,7 @@ Why this first: it's pure upside on APIs that are already built and tested, it s
 
 1. **Meeting provider for Phase E** — Google Meet, Zoom, or both. Recommendation: Google Meet first, since it also syncs to Google Calendar; Zoom as a second adapter.
 2. **Internship enrollment model** — is an internship always "apply and get selected", or can some programs be open self-enroll (possibly paid)? Default assumed here: both, controlled by a per-program `enrollmentMode` flag.
-3. **File storage** — where uploaded documents should live (S3-compatible bucket, or a volume on the VPS). Needed before Phase C ships document uploads.
+3. **File storage** — decided: a Docker volume on the server (`portal-uploads`). The storage code sits behind a small interface (`files/storage.ts`) so an S3-compatible bucket can replace it later.
 
 ## 6. Branching
 

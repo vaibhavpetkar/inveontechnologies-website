@@ -6,6 +6,7 @@ import { candidateProfiles, candidateSkills, skills } from "../shared/db/schema.
 import { requireAuth } from "../auth/middleware.js";
 import { resolveSkillIds } from "../shared/skills.js";
 import type { Env } from "../shared/env.js";
+import { claimFile, fileForUrl, publicFile } from "../files/service.js";
 
 const updateProfileSchema = z.object({
   fullName: z.string().min(1).max(200).optional(),
@@ -32,7 +33,26 @@ export function profileRouter(db: Database, env: Env) {
     res.json({
       profile: profile ?? { userId: req.user!.sub, profileCompleted: false },
       skills: skillLinks.map((s) => s.skill),
+      resume: await resumeFile(profile?.resumeUrl ?? null),
     });
+  });
+
+  async function resumeFile(url: string | null) {
+    const file = await fileForUrl(db, url);
+    return file ? publicFile(file) : null;
+  }
+
+  /** Attach an uploaded resume (purpose "resume") to my profile, or remove it with null. */
+  router.put("/me/resume", requireAuth(env), async (req, res) => {
+    const { fileUrl } = z.object({ fileUrl: z.string().max(200).nullable() }).parse(req.body);
+    if (fileUrl) await claimFile(db, fileUrl, req.user!.sub, "resume");
+    const existing = await db.query.candidateProfiles.findFirst({ where: eq(candidateProfiles.userId, req.user!.sub) });
+    if (existing) {
+      await db.update(candidateProfiles).set({ resumeUrl: fileUrl, updatedAt: new Date() }).where(eq(candidateProfiles.userId, req.user!.sub));
+    } else {
+      await db.insert(candidateProfiles).values({ userId: req.user!.sub, resumeUrl: fileUrl });
+    }
+    res.json({ resume: await resumeFile(fileUrl) });
   });
 
   router.put("/me", requireAuth(env), async (req, res) => {

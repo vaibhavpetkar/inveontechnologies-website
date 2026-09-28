@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { and, desc, eq, gt, lt } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, lt } from "drizzle-orm";
 import rateLimit from "express-rate-limit";
 import type { Database } from "../shared/db/client.js";
 import {
@@ -17,7 +17,8 @@ import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import { getChannelMembership, isChannelModerator } from "./communities-routes.js";
 import { isConversationParticipant } from "./conversations-routes.js";
-import { scanAttachmentStub, MAX_ATTACHMENT_BYTES, ALLOWED_MIME_TYPES } from "./attachments.js";
+import { scanAttachmentStub } from "./attachments.js";
+import { claimFile, fileUrl } from "../files/service.js";
 import type { Env } from "../shared/env.js";
 import { assertChatEligible, usersWithAccess } from "./inbox-routes.js";
 import { notify } from "../notifications/service.js";
@@ -28,14 +29,16 @@ const PRIVILEGED_ROLES = ["hr", "admin", "super_admin"] as const;
 const sendMessageSchema = z.object({
   channelId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
-  body: z.string().min(1).max(10000),
+  body: z.string().max(10000).default(""),
   replyToMessageId: z.string().uuid().optional(),
   mentionedUserIds: z.array(z.string().uuid()).max(50).default([]),
+  // Files uploaded first with purpose "chat_attachment".
+  fileUrls: z.array(z.string().max(200)).max(5).default([]),
 });
 
 const editSchema = z.object({ body: z.string().min(1).max(10000) });
 const reportSchema = z.object({ reason: z.string().min(3).max(1000) });
-const attachSchema = z.object({ fileName: z.string().min(1).max(300), fileUrl: z.string().min(1).max(2000), fileSizeBytes: z.number().int().min(1), mimeType: z.string().min(1) });
+const attachSchema = z.object({ fileName: z.string().min(1).max(300), fileUrl: z.string().min(1).max(2000) });
 const listQuerySchema = z.object({ channelId: z.string().uuid().optional(), conversationId: z.string().uuid().optional(), afterSeq: z.coerce.number().int().optional(), beforeSeq: z.coerce.number().int().optional(), limit: z.coerce.number().int().min(1).max(100).default(50) });
 const markReadSchema = z.object({ channelId: z.string().uuid().optional(), conversationId: z.string().uuid().optional(), lastReadSeq: z.number().int() });
 
@@ -65,6 +68,16 @@ async function assertCanAccessTarget(db: Database, userId: string, role: string,
   throw new AppError("MISSING_TARGET", "Provide either channelId or conversationId", 400);
 }
 
+/** Adds each message's files (clean ones only, and none on deleted messages). */
+async function withAttachments<T extends { id: string; deletedAt: Date | null }>(db: Database, rows: T[]) {
+  const ids = rows.filter((m) => !m.deletedAt).map((m) => m.id);
+  const all = ids.length ? await db.query.messageAttachments.findMany({ where: and(inArray(messageAttachments.messageId, ids), eq(messageAttachments.malwareScanStatus, "clean")) }) : [];
+  return rows.map((m) => ({
+    ...m,
+    attachments: all.filter((a) => a.messageId === m.id).map((a) => ({ id: a.id, name: a.fileName, url: a.fileUrl, mimeType: a.mimeType, sizeBytes: a.fileSizeBytes })),
+  }));
+}
+
 export function messagesRouter(db: Database, env: Env) {
   const router = Router();
 
@@ -73,6 +86,8 @@ export function messagesRouter(db: Database, env: Env) {
     if (!!body.channelId === !!body.conversationId) {
       throw new AppError("INVALID_TARGET", "Provide exactly one of channelId or conversationId, not both or neither", 400);
     }
+    if (!body.body.trim() && body.fileUrls.length === 0) throw new AppError("EMPTY_MESSAGE", "Write a message or attach a file", 400);
+    const files = await Promise.all(body.fileUrls.map((url) => claimFile(db, url, req.user!.sub, "chat_attachment")));
     await assertCanAccessTarget(db, req.user!.sub, req.user!.role, body.channelId, body.conversationId);
     await assertChatEligible(db, req.user!.sub);
 
@@ -107,11 +122,16 @@ export function messagesRouter(db: Database, env: Env) {
       if (mentioned.length > 0) {
         await tx.insert(messageMentions).values(mentioned.map((mentionedUserId) => ({ messageId: created.id, mentionedUserId })));
       }
+      if (files.length > 0) {
+        await tx.insert(messageAttachments).values(
+          files.map((f) => ({ messageId: created.id, fileName: f!.originalName, fileUrl: fileUrl(f!.id), fileSizeBytes: f!.sizeBytes, mimeType: f!.mimeType, malwareScanStatus: scanAttachmentStub(f!.originalName, f!.sizeBytes), uploadedBy: req.user!.sub })),
+        );
+      }
       return created;
     });
 
     await notifyChat(db, message, mentioned).catch(() => undefined);
-    res.status(201).json({ message });
+    res.status(201).json({ message: (await withAttachments(db, [message]))[0] });
   });
 
   router.get("/", requireAuth(env), async (req, res) => {
@@ -135,7 +155,7 @@ export function messagesRouter(db: Database, env: Env) {
       rows = (await db.query.messages.findMany({ where: and(...conditions), orderBy: desc(messages.seqNumber), limit: query.limit })).reverse();
     }
     const shaped = rows.map((m) => (m.deletedAt ? { ...m, body: "[message deleted]" } : m));
-    res.json({ messages: shaped });
+    res.json({ messages: await withAttachments(db, shaped) });
   });
 
   router.put("/:id", requireAuth(env), async (req, res) => {
@@ -206,17 +226,12 @@ export function messagesRouter(db: Database, env: Env) {
     if (!message) throw new NotFoundError("Message not found");
     if (message.authorId !== req.user!.sub) throw new ForbiddenError("Only the message author can attach files to it");
 
-    if (body.fileSizeBytes > MAX_ATTACHMENT_BYTES) {
-      throw new AppError("FILE_TOO_LARGE", `File exceeds the ${MAX_ATTACHMENT_BYTES / (1024 * 1024)}MB limit`, 400);
-    }
-    if (!ALLOWED_MIME_TYPES.has(body.mimeType)) {
-      throw new AppError("UNSUPPORTED_FILE_TYPE", `File type "${body.mimeType}" is not allowed`, 400);
-    }
-
-    const scanResult = scanAttachmentStub(body.fileName, body.fileSizeBytes);
+    // Size and type come from the upload itself, not from the request.
+    const file = (await claimFile(db, body.fileUrl, req.user!.sub, "chat_attachment"))!;
+    const scanResult = scanAttachmentStub(file.originalName, file.sizeBytes);
     const [attachment] = await db
       .insert(messageAttachments)
-      .values({ messageId: message.id, ...body, malwareScanStatus: scanResult, uploadedBy: req.user!.sub })
+      .values({ messageId: message.id, fileName: body.fileName, fileUrl: fileUrl(file.id), fileSizeBytes: file.sizeBytes, mimeType: file.mimeType, malwareScanStatus: scanResult, uploadedBy: req.user!.sub })
       .returning();
 
     res.status(201).json({ attachment });
@@ -275,7 +290,7 @@ async function notifyChat(db: Database, message: typeof messages.$inferSelect, m
   const author = await db.query.users.findFirst({ where: eq(users.id, message.authorId), columns: { email: true, fullName: true } });
   const profile = await db.query.candidateProfiles.findFirst({ where: eq(candidateProfiles.userId, message.authorId), columns: { fullName: true } });
   const who = author?.fullName || profile?.fullName || author?.email.split("@")[0] || "Someone";
-  const snippet = message.body.length > 140 ? `${message.body.slice(0, 137)}…` : message.body;
+  const snippet = !message.body.trim() ? "Sent a file" : message.body.length > 140 ? `${message.body.slice(0, 137)}…` : message.body;
 
   let where = "";
   let link = "";
