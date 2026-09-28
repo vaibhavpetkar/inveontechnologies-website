@@ -5,7 +5,7 @@ import { ArrowRight, Video } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useNotifications } from "../../context/NotificationsContext";
 import { apiFetch } from "../../lib/api";
-import { addDays, isLive, sameDay, shortDayFmt, timeFmt, type CalendarItem } from "../../lib/calendar";
+import { addDays, isLive, sameDay, shortDayFmt, timeFmt, isMeeting, type CalendarItem } from "../../lib/calendar";
 
 /** The next few meetings and interviews, with a Join button when it's time. */
 export function UpcomingWidget() {
@@ -18,7 +18,7 @@ export function UpcomingWidget() {
     const from = new Date(Date.now() - 60 * 60_000);
     const to = addDays(new Date(), 7);
     apiFetch<{ events: CalendarItem[] }>(`/api/v1/calendar/events?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`, { accessToken })
-      .then((r) => setItems(r.events.filter((e) => e.kind !== "task_due" && new Date(e.endsAt) > new Date() && !(e.kind === "meeting" && e.myResponse === "declined")).slice(0, 4)))
+      .then((r) => setItems(r.events.filter((e) => e.kind !== "task_due" && new Date(e.endsAt) > new Date() && !(isMeeting(e) && e.myResponse === "declined")).slice(0, 4)))
       .catch(() => setItems([]));
   }, [accessToken, arrivals]);
 
@@ -44,7 +44,7 @@ export function UpcomingWidget() {
                   <strong>{sameDay(s, today) ? "Today" : shortDayFmt.format(s)}</strong>
                   <span>{timeFmt.format(s)}</span>
                 </span>
-                <Link href={it.kind === "meeting" ? `/calendar?event=${it.id}` : "/calendar"} className="upcoming-title">{it.title}</Link>
+                <Link href={isMeeting(it) ? `/calendar?event=${it.id}` : "/calendar"} className="upcoming-title">{it.title}</Link>
                 {it.kind !== "task_due" && it.joinUrl && (
                   <a className={`btn btn-sm${live ? "" : " btn-secondary"}`} href={it.joinUrl} target="_blank" rel="noreferrer"><Video size={14} /> Join</a>
                 )}

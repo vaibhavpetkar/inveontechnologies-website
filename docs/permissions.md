@@ -40,6 +40,14 @@ Refunds, employee termination, salary/stipend changes, and certificate revocatio
 | Leave a group or channel | Any member (not #announcements). When the last group admin leaves, the longest-standing member becomes admin |
 | @mention | Only people who can open that chat get the alert |
 
+## Live classes
+
+| Action | Who |
+| --- | --- |
+| Schedule a live class for a course (once or weekly) | Managers, HR and admins |
+| Change or cancel a class, or the rest of a weekly series | The person who scheduled it; admins |
+| See a course's classes and join them | Everyone enrolled in the course (their invite is added automatically, also when they enroll later) |
+
 ## GitHub issues on tasks
 
 | Action | Who |

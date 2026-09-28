@@ -26,6 +26,7 @@ import {
   type Colleague,
   type Meeting,
   type ProviderInfo,
+  isMeeting,
 } from "../lib/calendar";
 
 type View = "month" | "week" | "agenda";
@@ -230,7 +231,7 @@ export default function Calendar() {
 }
 
 function Chip({ item, onPick, compact }: { item: CalendarItem; onPick: (i: CalendarItem) => void; compact?: boolean }) {
-  const declined = item.kind === "meeting" && item.myResponse === "declined";
+  const declined = isMeeting(item) && item.myResponse === "declined";
   return (
     <motion.button
       layout
@@ -338,7 +339,7 @@ function WeekView({ start, items, onPick, onNew }: { start: Date; items: Calenda
                 const e = new Date(item.endsAt);
                 const top = ((s.getHours() * 60 + s.getMinutes()) / 60) * HOUR_PX;
                 const height = Math.max(22, ((+e - +s) / 3_600_000) * HOUR_PX - 2);
-                const declined = item.kind === "meeting" && item.myResponse === "declined";
+                const declined = isMeeting(item) && item.myResponse === "declined";
                 return (
                   <motion.button
                     key={item.id}
@@ -412,7 +413,7 @@ function AgendaView({ items, onPick, onNew }: { items: CalendarItem[]; onPick: (
                     <strong>{it.title}</strong>
                     <span className="muted-small">
                       {KIND_META[it.kind].label}
-                      {it.kind === "meeting" && it.attendees.length > 1 ? ` · ${it.attendees.length} people` : ""}
+                      {isMeeting(it) && it.attendees.length > 1 ? ` · ${it.attendees.length} people` : ""}
                       {it.kind !== "task_due" ? ` · ${durationLabel(it)}` : ""}
                     </span>
                   </span>

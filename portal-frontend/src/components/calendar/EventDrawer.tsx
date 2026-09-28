@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { Link } from "wouter";
 import { motion } from "framer-motion";
-import { ArrowRight, CalendarPlus, Clock, Download, MapPin, Pencil, Users, Video, X, XCircle } from "lucide-react";
+import { ArrowRight, BookOpen, CalendarPlus, Clock, Download, MapPin, Pencil, Users, Video, X, XCircle } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { API_BASE, apiFetch, ApiError } from "../../lib/api";
-import { dayFmt, isLive, KIND_META, PROVIDER_META, RSVP_META, timeRange, type CalendarItem, type Meeting, type Rsvp } from "../../lib/calendar";
+import { dayFmt, isLive, KIND_META, PROVIDER_META, RSVP_META, timeRange, type CalendarItem, type Meeting, isMeeting, type Rsvp } from "../../lib/calendar";
 import { useToast } from "../Toast";
 import { Avatar } from "../Avatar";
 
@@ -22,15 +22,15 @@ export function EventDrawer({ item, onClose, onEdit, onChanged }: Props) {
   const { user, accessToken } = useAuth();
   const toast = useToast();
   const [busy, setBusy] = useState(false);
-  const [response, setResponse] = useState<Rsvp | null>(item.kind === "meeting" ? item.myResponse : null);
+  const [response, setResponse] = useState<Rsvp | null>(isMeeting(item) ? item.myResponse : null);
   const start = new Date(item.startsAt);
   const live = isLive(item);
   const ended = item.kind !== "task_due" && new Date(item.endsAt) < new Date();
   // Show my own answer straight away in the people list too.
-  const attendees = item.kind === "meeting" ? item.attendees.map((a) => (a.id === user?.id && response ? { ...a, response } : a)) : [];
+  const attendees = isMeeting(item) ? item.attendees.map((a) => (a.id === user?.id && response ? { ...a, response } : a)) : [];
 
   async function respond(r: Rsvp) {
-    if (item.kind !== "meeting") return;
+    if (!isMeeting(item)) return;
     const previous = response;
     setResponse(r);
     try {
@@ -42,12 +42,28 @@ export function EventDrawer({ item, onClose, onEdit, onChanged }: Props) {
     }
   }
 
+  const noun = item.kind === "class" ? "class" : "meeting";
+
+  async function cancelSeries() {
+    if (!isMeeting(item) || !item.seriesId || !window.confirm("Cancel this and every later class in the series? Everyone is told by email.")) return;
+    setBusy(true);
+    try {
+      const r = await apiFetch<{ cancelled: number }>(`/api/v1/courses/classes/series/${item.seriesId}/cancel`, { method: "POST", accessToken });
+      toast(`Cancelled ${r.cancelled} ${r.cancelled === 1 ? "class" : "classes"}`);
+      onChanged();
+      onClose();
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "Couldn't cancel the classes.", "error");
+      setBusy(false);
+    }
+  }
+
   async function cancel() {
-    if (item.kind !== "meeting" || !window.confirm("Cancel this meeting for everyone? They'll be told by email.")) return;
+    if (!isMeeting(item) || !window.confirm(`Cancel this ${noun} for everyone? They'll be told by email.`)) return;
     setBusy(true);
     try {
       await apiFetch(`/api/v1/calendar/events/${item.id}/cancel`, { method: "POST", accessToken });
-      toast("Meeting cancelled");
+      toast(item.kind === "class" ? "Class cancelled" : "Meeting cancelled");
       onChanged();
       onClose();
     } catch (err) {
@@ -97,22 +113,25 @@ export function EventDrawer({ item, onClose, onEdit, onChanged }: Props) {
 
         <ul className="event-facts">
           <li><Clock size={17} /><span><strong>{dayFmt.format(start)}</strong><span className="muted-small">{timeRange(item)}</span></span></li>
-          {item.kind === "meeting" && item.provider !== "none" && linkUrl && (
+          {isMeeting(item) && item.provider !== "none" && linkUrl && (
             <li><Video size={17} /><span><strong>{item.provider === "manual" ? "Video call" : PROVIDER_META[item.provider].label}</strong><a className="muted-small event-link" href={linkUrl} target="_blank" rel="noreferrer">{linkUrl.replace(/^https?:\/\//, "")}</a></span></li>
           )}
-          {item.kind === "meeting" && item.location && <li><MapPin size={17} /><span><strong>{item.location}</strong></span></li>}
-          {item.kind === "meeting" && item.organizer && <li><CalendarPlus size={17} /><span><strong>{item.organizer.name}</strong><span className="muted-small">Organiser</span></span></li>}
+          {isMeeting(item) && item.location && <li><MapPin size={17} /><span><strong>{item.location}</strong></span></li>}
+          {isMeeting(item) && item.course && (
+            <li><BookOpen size={17} /><span><Link href={`/courses/${item.course.id}`} className="event-course"><strong>{item.course.title}</strong></Link><span className="muted-small">Course</span></span></li>
+          )}
+          {isMeeting(item) && item.organizer && <li><CalendarPlus size={17} /><span><strong>{item.organizer.name}</strong><span className="muted-small">{item.kind === "class" ? "Teacher" : "Organiser"}</span></span></li>}
         </ul>
 
         {joinUrl && (
           <motion.a className={`btn join-btn${live ? " live" : ""}`} href={joinUrl} target="_blank" rel="noreferrer" whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }}>
-            <Video size={18} /> {live ? "Join now" : "Join meeting"}
+            <Video size={18} /> {live ? "Join now" : item.kind === "class" ? "Join class" : "Join meeting"}
           </motion.a>
         )}
 
-        {ended && <p className="muted-small">This meeting has ended.</p>}
+        {ended && <p className="muted-small">This {noun} has ended.</p>}
 
-        {item.kind === "meeting" && response && !ended && item.organizer?.id !== user?.id && (
+        {isMeeting(item) && response && !ended && item.organizer?.id !== user?.id && (
           <div className="rsvp">
             <span className="muted-small">Going?</span>
             <div className="segmented">
@@ -126,9 +145,9 @@ export function EventDrawer({ item, onClose, onEdit, onChanged }: Props) {
           </div>
         )}
 
-        {item.kind === "meeting" && item.description && <p className="event-desc">{item.description}</p>}
+        {isMeeting(item) && item.description && <p className="event-desc">{item.description}</p>}
 
-        {item.kind === "meeting" && (
+        {isMeeting(item) && (
           <section className="event-people">
             <h3><Users size={16} /> {attendees.length} {attendees.length === 1 ? "person" : "people"}</h3>
             <ul>
@@ -144,11 +163,12 @@ export function EventDrawer({ item, onClose, onEdit, onChanged }: Props) {
         )}
 
         <div className="drawer-actions">
-          {item.kind === "meeting" ? (
+          {isMeeting(item) ? (
             <>
               <button className="btn btn-secondary" onClick={downloadIcs}><Download size={16} /> Add to my calendar</button>
               {item.canEdit && !ended && <button className="btn btn-secondary" onClick={() => onEdit(item)}><Pencil size={16} /> Edit</button>}
-              {item.canEdit && !ended && <button className="btn btn-danger" disabled={busy} onClick={cancel}><XCircle size={16} /> Cancel meeting</button>}
+              {item.canEdit && !ended && <button className="btn btn-danger" disabled={busy} onClick={cancel}><XCircle size={16} /> Cancel {noun}</button>}
+              {item.canEdit && !ended && item.seriesId && <button className="btn btn-secondary" disabled={busy} onClick={cancelSeries}>Cancel all upcoming</button>}
             </>
           ) : (
             <Link href={item.link} className="btn btn-secondary">{item.kind === "task_due" ? "Open task" : "Open application"} <ArrowRight size={16} /></Link>
