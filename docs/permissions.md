@@ -39,3 +39,12 @@ Refunds, employee termination, salary/stipend changes, and certificate revocatio
 | Rename a group, add or remove people, make admins | Group admins (the creator starts as admin) |
 | Leave a group or channel | Any member (not #announcements). When the last group admin leaves, the longest-standing member becomes admin |
 | @mention | Only people who can open that chat get the alert |
+
+## GitHub issues on tasks
+
+| Action | Who |
+| --- | --- |
+| Open a GitHub issue for a task, or link an existing one | The task's creator, its assignee, project leads, managers, HR and admins |
+| Unlink an issue | The task's creator, project leads, managers, HR and admins |
+| Import a repo's open issues as tasks | Managers, HR and admins; project owners and leads into their project |
+| Sync | Automatic: closing the issue finishes the task, reopening puts it back in progress, and approving or cancelling the task closes the issue |

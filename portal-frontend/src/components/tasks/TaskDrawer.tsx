@@ -8,6 +8,8 @@ import { allowedMoves, formatDue, isOverdue, MOVE_LABELS, PRIORITY_META, STATUS_
 import type { DirectoryUser } from "../../lib/useDirectory";
 import { Avatar } from "../Avatar";
 import { useToast } from "../Toast";
+import { GithubPanel } from "./GithubPanel";
+import { CAN_ASSIGN_OTHERS } from "../../lib/tasks";
 
 interface Props {
   taskId: string;
@@ -175,6 +177,16 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged }: Props) 
 
             {task.description && <p className="drawer-description">{task.description}</p>}
 
+            <GithubPanel
+              task={task}
+              canEdit={!!user && (task.createdBy === user.id || CAN_ASSIGN_OTHERS.includes(user.role))}
+              onUpdated={(t) => {
+                setTask(t);
+                load();
+                onChanged();
+              }}
+            />
+
             {moves.length > 0 && (
               <div className="drawer-actions">
                 {moves.map((to) => (
@@ -246,7 +258,7 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged }: Props) 
                     <li key={ev.id}>
                       <span className="activity-dot" />
                       <div>
-                        <strong>{name(ev.actorUserId)}</strong> {describeEvent(ev)}
+                        <strong>{ev.action === "github_sync" ? "GitHub" : name(ev.actorUserId)}</strong> {describeEvent(ev)}
                         {ev.note && <div className="activity-note">“{ev.note}”</div>}
                         <div className="muted-small">{timeAgo(ev.createdAt)}</div>
                       </div>
@@ -269,12 +281,15 @@ function describeEvent(ev: TaskEvent): string {
     case "create_from_recurrence":
       return "created the task";
     case "status_change":
+    case "github_sync":
       return `moved it to ${ev.toStatus ? STATUS_META[ev.toStatus].label.toLowerCase() : "a new status"}`;
     case "comment":
       return "commented";
     case "attachment_added":
       return "added an attachment";
     default:
+      if (ev.action === "github_link") return "linked a GitHub issue";
+      if (ev.action === "github_unlink") return "unlinked the GitHub issue";
       return ev.action.replace(/_/g, " ");
   }
 }

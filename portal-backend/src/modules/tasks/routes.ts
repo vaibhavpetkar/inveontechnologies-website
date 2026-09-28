@@ -27,6 +27,7 @@ import { formatWhen } from "../shared/format.js";
 import { isAssigneeTransitionAllowed, isReviewerTransitionAllowed, type TaskStatus } from "./state-machine.js";
 import { canAccessProject, canManageProject } from "../projects/routes.js";
 import type { Env } from "../shared/env.js";
+import { pushTaskStatusToGithub } from "../github/push.js";
 
 const PRIVILEGED_ROLES = ["hr", "admin", "super_admin"] as const;
 const MANAGER_LIKE_ROLES = ["manager", "hr", "admin", "super_admin"] as const;
@@ -80,7 +81,7 @@ function addInterval(date: Date, frequency: "daily" | "weekly" | "monthly"): Dat
 const TASK_ROLES = ["intern", "employee", ...MANAGER_LIKE_ROLES] as const;
 
 /** Creator, a privileged role, or someone who can manage the task's project. */
-async function canEditTask(db: Database, userId: string, role: string, task: typeof tasks.$inferSelect): Promise<boolean> {
+export async function canEditTask(db: Database, userId: string, role: string, task: typeof tasks.$inferSelect): Promise<boolean> {
   if (PRIVILEGED_ROLES.includes(role as (typeof PRIVILEGED_ROLES)[number])) return true;
   if (task.createdBy === userId) return true;
   return task.projectId ? canManageProject(db, userId, role, task.projectId) : false;
@@ -107,7 +108,7 @@ async function assertCanAssign(db: Database, user: { sub: string; role: string }
   }
 }
 
-async function canAccessTask(db: Database, userId: string, role: string, task: typeof tasks.$inferSelect): Promise<boolean> {
+export async function canAccessTask(db: Database, userId: string, role: string, task: typeof tasks.$inferSelect): Promise<boolean> {
   if (PRIVILEGED_ROLES.includes(role as (typeof PRIVILEGED_ROLES)[number])) return true;
   if (task.assigneeId === userId || task.createdBy === userId) return true;
   if (task.projectId) return canAccessProject(db, userId, role, task.projectId);
@@ -189,6 +190,7 @@ export function tasksRouter(db: Database, env: Env) {
     });
 
     await notifyTransition(db, task, body.toStatus, req.user!.sub, body.note);
+    await pushTaskStatusToGithub(env, task, body.toStatus);
 
     res.json({ message: `Task moved to ${body.toStatus}.` });
   });

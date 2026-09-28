@@ -47,6 +47,15 @@ const envSchema = z.object({
   CASHFREE_ENV: z.enum(["sandbox", "production"]).default("sandbox"),
   // Test-only override of the Cashfree API base URL.
   CASHFREE_API_BASE: z.string().optional(),
+  // GitHub issues <-> tasks. A fine-grained token with Issues read/write on
+  // the Inveon repos; leave unset to hide the GitHub buttons.
+  GITHUB_TOKEN: z.string().optional(),
+  // Secret set on the repo/org webhook (issues events) so closes sync back.
+  GITHUB_WEBHOOK_SECRET: z.string().optional(),
+  // Repo for issues from tasks that aren't in a project with its own repo, e.g. "inveon/internship-tasks".
+  GITHUB_DEFAULT_REPO: z.string().regex(/^[\w.-]+\/[\w.-]+$/).optional(),
+  // Test-only override of the GitHub API base URL.
+  GITHUB_API_BASE: z.string().optional(),
   // Require candidates to verify their email before applying. Off by
   // default so accounts created before email sending was configured aren't
   // locked out; switch on once SMTP is working.

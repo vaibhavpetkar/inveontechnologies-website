@@ -42,6 +42,7 @@ import { calendarRouter, registerCalendarSchedules } from "./modules/calendar/ro
 import { startJobWorker } from "./modules/shared/jobs.js";
 import { chatRouter } from "./modules/chat/inbox-routes.js";
 import { cashfreeWebhookRouter, programRouter, registerProgramSchedules } from "./modules/payments/routes.js";
+import { githubRouter, githubWebhookRouter, registerGithubSchedules } from "./modules/github/routes.js";
 
 const env = loadEnv();
 const { db, pool } = createDb(env);
@@ -50,6 +51,7 @@ configureNotifications({ appUrl: env.PORTAL_APP_URL });
 registerReminderSchedules(db);
 registerCalendarSchedules(db);
 registerProgramSchedules(db);
+registerGithubSchedules(db, env);
 const app = express();
 // Behind nginx (and Cloudflare in front of that) — trust exactly one hop
 // so req.ip and X-Forwarded-For-based rate limiting resolve to the real
@@ -98,6 +100,7 @@ app.use((req, res, next) => {
 
 // Payment webhooks verify a signature over the raw body, so they parse it themselves.
 app.use("/api/v1/payments", cashfreeWebhookRouter(db, env));
+app.use("/api/v1/github", githubWebhookRouter(db, env));
 app.use(express.json());
 app.use(cookieParser());
 
@@ -150,6 +153,7 @@ app.use("/api/v1/users", usersRouter(db, env));
 app.use("/api/v1/notifications", notificationsRouter(db, env));
 app.use("/api/v1/calendar", calendarRouter(db, env));
 app.use("/api/v1/program", programRouter(db, env));
+app.use("/api/v1/github", githubRouter(db, env));
 
 // Future feature routes mount here:
 // app.use("/api/v1/employees", employeesRouter(db, env));

@@ -1,6 +1,6 @@
 import { forwardRef } from "react";
 import { motion } from "framer-motion";
-import { CalendarClock, Clock, MessageSquare } from "lucide-react";
+import { CalendarClock, Clock, Github, MessageSquare } from "lucide-react";
 import { formatDue, isOverdue, PRIORITY_META, type Task } from "../../lib/tasks";
 import type { DirectoryUser } from "../../lib/useDirectory";
 import { Avatar } from "../Avatar";
@@ -66,6 +66,11 @@ export const TaskCard = forwardRef<HTMLDivElement, Props>(function TaskCard({ ta
           {Number(task.actualHours) > 0 && (
             <span>
               <Clock size={14} /> {Number(task.actualHours)}h{task.estimateHours ? ` / ${Number(task.estimateHours)}h` : ""}
+            </span>
+          )}
+          {task.githubIssueNumber && (
+            <span className={`gh-chip ${task.githubIssueState ?? "open"}`} title={`GitHub issue ${task.githubRepo}#${task.githubIssueNumber}`}>
+              <Github size={13} /> #{task.githubIssueNumber}
             </span>
           )}
           {task.description && (

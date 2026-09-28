@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useRoute } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, CheckCircle2, CircleDot, Eye, Plus, Search } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleDot, Eye, Github, Plus, Search } from "lucide-react";
 import { DashboardShell } from "../components/DashboardShell";
 import { AnimatedNumber } from "../components/AnimatedNumber";
 import { TaskCard } from "../components/tasks/TaskCard";
 import { TaskDrawer } from "../components/tasks/TaskDrawer";
 import { NewTaskDialog } from "../components/tasks/NewTaskDialog";
+import { ImportIssuesDialog } from "../components/tasks/ImportIssuesDialog";
+import { useGithubStatus } from "../lib/github";
 import { useToast } from "../components/Toast";
 import { useAuth } from "../context/AuthContext";
 import { useNotifications } from "../context/NotificationsContext";
@@ -31,6 +33,8 @@ export default function Tasks() {
   const [search, setSearch] = useState("");
   const [showCancelled, setShowCancelled] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const { status: github } = useGithubStatus(accessToken);
   const [dragging, setDragging] = useState<Task | null>(null);
   const [overColumn, setOverColumn] = useState<TaskStatus | null>(null);
 
@@ -125,9 +129,16 @@ export default function Tasks() {
           <h1>{isStaff ? "Tasks" : "My tasks"}</h1>
           <p>{isStaff ? "Assign work, follow progress and review what's submitted." : "Everything assigned to you, from to-do to done."}</p>
         </div>
-        <motion.button className="btn" onClick={() => setCreating(true)} whileTap={{ scale: 0.96 }}>
-          <Plus size={18} /> {isStaff ? "Assign task" : "New task"}
-        </motion.button>
+        <div className="page-head-actions">
+          {isStaff && github?.enabled && (
+            <motion.button className="btn btn-secondary" onClick={() => setImporting(true)} whileTap={{ scale: 0.96 }}>
+              <Github size={17} /> Import issues
+            </motion.button>
+          )}
+          <motion.button className="btn" onClick={() => setCreating(true)} whileTap={{ scale: 0.96 }}>
+            <Plus size={18} /> {isStaff ? "Assign task" : "New task"}
+          </motion.button>
+        </div>
       </div>
 
       <div className="stat-grid">
@@ -252,6 +263,17 @@ export default function Tasks() {
         {openId && <TaskDrawer key={openId} taskId={openId} byId={byId} onClose={() => navigate("/tasks")} onMove={move} onChanged={load} />}
       </AnimatePresence>
       <AnimatePresence>
+        {importing && (
+          <ImportIssuesDialog
+            people={people}
+            defaultRepo={github?.defaultRepo ?? null}
+            onClose={() => setImporting(false)}
+            onImported={(n) => {
+              toast(`Imported ${n} ${n === 1 ? "issue" : "issues"}`);
+              load();
+            }}
+          />
+        )}
         {creating && (
           <NewTaskDialog
             people={people}

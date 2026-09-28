@@ -1784,3 +1784,24 @@ a.outline-lesson:hover { background: var(--surface); }
   .chat-bubble { max-width: 85%; }
   .chat-msg-action { opacity: 0.6; }
 }
+
+/* --- GitHub issues on tasks --- */
+
+.page-head-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.gh-panel { margin: 1.1rem 0; padding: 0.85rem 1rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.gh-panel h3 { display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; font-weight: 600; margin: 0 0 0.6rem; }
+.gh-issue { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+.gh-state { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.15rem 0.55rem; border-radius: 999px; font-size: 0.76rem; font-weight: 600; color: #fff; }
+.gh-state.open { background: #1f883d; }
+.gh-state.closed { background: #8250df; }
+.gh-issue-link { display: inline-flex; align-items: center; gap: 0.25rem; font-weight: 600; color: var(--ink); text-decoration: none; font-size: 0.92rem; }
+.gh-issue-link:hover { color: var(--primary); text-decoration: underline; }
+.gh-issue-actions { margin-left: auto; display: flex; gap: 0.1rem; }
+.gh-buttons { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.gh-link-form { display: flex; gap: 0.4rem; }
+.gh-link-form input { flex: 1; min-width: 0; padding: 0.4rem 0.65rem; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 0.88rem; background: var(--paper); }
+.gh-handle { margin-top: 0.7rem; padding-top: 0.7rem; border-top: 1px dashed var(--line); }
+.dash-body .gh-hint { margin: 0.5rem 0 0; font-size: 0.78rem; line-height: 1.45; }
+.gh-chip { display: inline-flex; align-items: center; gap: 0.2rem; font-weight: 600; }
+.gh-chip.open { color: #1f883d; }
+.gh-chip.closed { color: #8250df; }

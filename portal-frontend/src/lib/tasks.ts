@@ -16,6 +16,11 @@ export interface Task {
   actualHours: string;
   dueDate: string | null;
   createdBy: string;
+  githubRepo?: string | null;
+  githubIssueNumber?: number | null;
+  githubIssueUrl?: string | null;
+  githubIssueState?: "open" | "closed" | null;
+  githubSyncedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }

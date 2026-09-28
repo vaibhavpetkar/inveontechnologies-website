@@ -219,6 +219,7 @@ export function programRouter(db: Database, env: Env) {
       .returning();
     // Keep the profile in step with what they just told us.
     await db.update(candidateProfiles).set({ fullName: body.fullName, phone: body.phone }).where(eq(candidateProfiles.userId, enrollment.userId));
+    if (body.githubUsername) await db.update(users).set({ githubUsername: body.githubUsername }).where(eq(users.id, enrollment.userId));
     if (first) {
       await notifyHiringTeam(db, enrollment.opportunityId, enrollment.userId, {
         kind: "program.joining_submitted",
