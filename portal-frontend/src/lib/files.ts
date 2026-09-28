@@ -24,7 +24,7 @@ export const ACCEPT: Record<FilePurpose, string> = {
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 /** Calls fetch with the access token, refreshing it once on a 401 like apiFetch does. */
-async function authedFetch(path: string, accessToken: string | null, init: RequestInit = {}) {
+export async function authedFetch(path: string, accessToken: string | null, init: RequestInit = {}) {
   const go = (token: string | null) => fetch(`${API_BASE}${path}`, { ...init, credentials: "include", headers: { ...(init.headers ?? {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
   let res = await go(accessToken);
   if (res.status === 401 && accessToken) {
