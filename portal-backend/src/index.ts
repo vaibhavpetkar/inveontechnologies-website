@@ -44,6 +44,7 @@ import { chatRouter } from "./modules/chat/inbox-routes.js";
 import { cashfreeWebhookRouter, programRouter, registerProgramSchedules } from "./modules/payments/routes.js";
 import { githubRouter, githubWebhookRouter, registerGithubSchedules } from "./modules/github/routes.js";
 import { payrollRouter, registerPayrollSchedules } from "./modules/payroll/routes.js";
+import { filesRouter } from "./modules/files/routes.js";
 
 const env = loadEnv();
 const { db, pool } = createDb(env);
@@ -103,6 +104,8 @@ app.use((req, res, next) => {
 // Payment webhooks verify a signature over the raw body, so they parse it themselves.
 app.use("/api/v1/payments", cashfreeWebhookRouter(db, env));
 app.use("/api/v1/github", githubWebhookRouter(db, env));
+// Uploads send the raw file as the body.
+app.use("/api/v1/files", filesRouter(db, env));
 app.use(express.json());
 app.use(cookieParser());
 

@@ -40,6 +40,18 @@ Refunds, employee termination, salary/stipend changes, and certificate revocatio
 | Leave a group or channel | Any member (not #announcements). When the last group admin leaves, the longest-standing member becomes admin |
 | @mention | Only people who can open that chat get the alert |
 
+## Files
+
+Files are stored on the server (the `portal-uploads` volume, `PORTAL_UPLOAD_DIR`), never on a public URL. Uploads are checked by extension and by content, up to 10 MB each.
+
+| File | Who can open it |
+| --- | --- |
+| Resume | The candidate, HR and admins, and staff who can view one of their applications |
+| Requested application document | The candidate, whoever can view that application (the hiring team), HR and admins |
+| Employee document | The employee, HR and admins |
+| Task file | Anyone who can open the task. The person who added it, HR and admins can remove it |
+| Chat file | Members of that chat |
+
 ## GitHub issues on tasks
 
 | Action | Who |

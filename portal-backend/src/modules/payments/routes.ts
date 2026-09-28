@@ -3,6 +3,7 @@ import { z } from "zod";
 import { and, asc, desc, eq, gt, inArray, isNull } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
 import {
+  documentRequests,
   applications,
   assessmentAttempts,
   assessments,
@@ -23,6 +24,7 @@ import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import type { Env } from "../shared/env.js";
+import { fileForUrl, publicFile } from "../files/service.js";
 import { logger } from "../shared/logger.js";
 import { PIPELINE_ROLES, assertCanManageApplication, canViewApplication, getApplicationOr404, isRecruitmentAdmin } from "../applications/access.js";
 import { notifyHiringTeam } from "../assessments/exams.js";
@@ -108,13 +110,18 @@ export function programRouter(db: Database, env: Env) {
       : [];
 
     const person = await db
-      .select({ email: users.email, fullName: candidateProfiles.fullName, phone: candidateProfiles.phone })
+      .select({ email: users.email, fullName: candidateProfiles.fullName, phone: candidateProfiles.phone, resumeUrl: candidateProfiles.resumeUrl })
       .from(users)
       .leftJoin(candidateProfiles, eq(candidateProfiles.userId, users.id))
       .where(eq(users.id, application.userId));
 
+    const resume = await fileForUrl(db, person[0]?.resumeUrl);
+    const documentRows = await db.query.documentRequests.findMany({ where: eq(documentRequests.applicationId, application.id), orderBy: asc(documentRequests.createdAt) });
+    const documents = await Promise.all(documentRows.map(async (d) => ({ ...d, file: await fileForUrl(db, d.fileUrl).then((f) => (f ? publicFile(f) : null)) })));
+
     res.json({
-      candidate: person[0] ?? null,
+      candidate: person[0] ? { email: person[0].email, fullName: person[0].fullName, phone: person[0].phone, resume: resume ? publicFile(resume) : null } : null,
+      documents,
       application: { id: application.id, status: application.status, businessId: application.businessId, createdAt: application.createdAt, userId: application.userId },
       opportunity: opportunity && {
         id: opportunity.id,

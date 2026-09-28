@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { BadgeCheck, CalendarPlus, Check, ClipboardCheck, CreditCard, FileText, Mail, MessagesSquare, Phone, UserPlus, Video, X } from "lucide-react";
+import { BadgeCheck, CalendarPlus, Check, ClipboardCheck, CreditCard, FileText, FolderOpen, Mail, MessagesSquare, Phone, UserPlus, Video, X } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../Toast";
 import { apiFetch, ApiError } from "../../lib/api";
@@ -8,6 +8,8 @@ import { nextSlot, toLocalInput, type Colleague, type ProviderInfo } from "../..
 import { ENROLLMENT_LABELS, formatDateTime, rupees, SLOT_LABELS, timeLeft, type Journey } from "../../lib/journey";
 import { Avatar } from "../Avatar";
 import { EventDialog } from "../calendar/EventDialog";
+import { FileChip } from "../files/FileChip";
+import { DocumentRequests } from "../files/DocumentRequests";
 
 interface Props {
   applicationId: string;
@@ -84,6 +86,7 @@ export function ApplicantDrawer({ applicationId, opportunityTitle, onClose, onCh
               <a href={`mailto:${data.candidate?.email}`}><Mail size={14} /> {data.candidate?.email}</a>
               {data.candidate?.phone && <a href={`tel:${data.candidate.phone}`}><Phone size={14} /> {data.candidate.phone}</a>}
             </div>
+            {data.candidate?.resume ? <FileChip file={data.candidate.resume} /> : <p className="muted-small">No resume uploaded.</p>}
 
             <section>
               <h3><ClipboardCheck size={16} /> Exam</h3>
@@ -195,6 +198,11 @@ export function ApplicantDrawer({ applicationId, opportunityTitle, onClose, onCh
                 )}
               </section>
             )}
+
+            <section>
+              <h3><FolderOpen size={16} /> Documents</h3>
+              <DocumentRequests applicationId={applicationId} documents={data.documents} mode="staff" onChanged={load} />
+            </section>
 
             {e && ["trial", "paid", "waived"].includes(e.status) && (
               <section>

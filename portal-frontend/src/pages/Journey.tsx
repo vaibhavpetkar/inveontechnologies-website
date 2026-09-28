@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation, useParams, useSearch } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  FolderOpen,
   ArrowLeft,
   CalendarClock,
   Check,
@@ -20,6 +21,7 @@ import {
 import { DashboardShell } from "../components/DashboardShell";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../components/Toast";
+import { DocumentRequests } from "../components/files/DocumentRequests";
 import { apiFetch, ApiError } from "../lib/api";
 import { formatDateTime, openCashfreeCheckout, rupees, SLOT_LABELS, timeLeft, type Journey as JourneyData, type JoiningDetails, type SlotKey } from "../lib/journey";
 
@@ -266,6 +268,14 @@ export default function Journey() {
           )}
         </motion.div>
       </AnimatePresence>
+
+      {!stopped && data.documents.length > 0 && (
+        <section className="panel journey-panel">
+          <h2><FolderOpen size={20} /> Documents</h2>
+          <p>{data.documents.some((d) => d.status === "requested" || d.status === "rejected") ? "The team has asked for these. Upload each one as a PDF or a photo." : "Thanks, the team has what they asked for."}</p>
+          <DocumentRequests applicationId={data.application.id} documents={data.documents} mode="candidate" onChanged={() => load().catch(() => undefined)} />
+        </section>
+      )}
     </DashboardShell>
   );
 }

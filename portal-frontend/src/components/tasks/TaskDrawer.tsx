@@ -9,6 +9,7 @@ import type { DirectoryUser } from "../../lib/useDirectory";
 import { Avatar } from "../Avatar";
 import { useToast } from "../Toast";
 import { GithubPanel } from "./GithubPanel";
+import { AttachmentsPanel } from "./AttachmentsPanel";
 import { CAN_ASSIGN_OTHERS } from "../../lib/tasks";
 
 interface Props {
@@ -186,6 +187,8 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged }: Props) 
                 onChanged();
               }}
             />
+
+            <AttachmentsPanel taskId={task.id} onChanged={() => load()} />
 
             {moves.length > 0 && (
               <div className="drawer-actions">

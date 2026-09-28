@@ -60,6 +60,12 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     return;
   }
 
+  // body-parser: a request body over the route's limit (e.g. an upload over 10 MB).
+  if (typeof err === "object" && err !== null && (err as { type?: unknown }).type === "entity.too.large") {
+    res.status(413).json({ error: { code: "FILE_TOO_LARGE", message: "That's too large. Files can be up to 10 MB.", requestId } });
+    return;
+  }
+
   // Postgres errors caused by client input (a malformed uuid in a path
   // param, a reference to a row that doesn't exist, a unique clash no
   // route-specific handler caught) are the caller's fault, not a 500.

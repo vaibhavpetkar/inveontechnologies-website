@@ -7,6 +7,8 @@ import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import type { Env } from "../shared/env.js";
+import { claimFile } from "../files/service.js";
+import { notify } from "../notifications/service.js";
 import { PIPELINE_ROLES, assertCanManageApplication, canViewApplication, getApplicationOr404 } from "../applications/access.js";
 
 
@@ -26,6 +28,16 @@ export function documentsRouter(db: Database, env: Env) {
       .values({ applicationId: req.params.applicationId, documentName: body.documentName, note: body.note, requestedBy: req.user!.sub })
       .returning();
 
+    const application = await getApplicationOr404(db, req.params.applicationId);
+    await notify(db, {
+      userIds: [application.userId],
+      actorUserId: req.user!.sub,
+      kind: "document.requested",
+      title: `Please upload: ${body.documentName}`,
+      body: body.note ?? "Upload it from your application page.",
+      link: `/journey/${application.id}`,
+      email: true,
+    });
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "document_request.create", entityType: "document_request", entityId: created.id, ipAddress: req.ip });
     res.status(201).json({ documentRequest: created });
   });
@@ -48,6 +60,7 @@ export function documentsRouter(db: Database, env: Env) {
     if (doc.status !== "requested" && doc.status !== "rejected") {
       throw new AppError("INVALID_STATE", `Cannot upload against a document request in status "${doc.status}"`, 400);
     }
+    await claimFile(db, body.fileUrl, req.user!.sub, "application_document");
 
     const [updated] = await db
       .update(documentRequests)
@@ -55,6 +68,14 @@ export function documentsRouter(db: Database, env: Env) {
       .where(eq(documentRequests.id, doc.id))
       .returning();
 
+    await notify(db, {
+      userIds: [doc.requestedBy],
+      actorUserId: req.user!.sub,
+      kind: "document.uploaded",
+      title: `${doc.documentName} uploaded`,
+      body: "It's ready to check.",
+      link: `/opportunities/${application.opportunityId}?applicant=${application.id}`,
+    });
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "document_request.upload", entityType: "document_request", entityId: doc.id, ipAddress: req.ip });
     res.json({ documentRequest: updated });
   });
@@ -63,7 +84,8 @@ export function documentsRouter(db: Database, env: Env) {
     const body = verifySchema.parse(req.body);
     const doc = await db.query.documentRequests.findFirst({ where: eq(documentRequests.id, req.params.id) });
     if (!doc) throw new NotFoundError("Document request not found");
-    await assertCanManageApplication(db, req, await getApplicationOr404(db, doc.applicationId));
+    const application = await getApplicationOr404(db, doc.applicationId);
+    await assertCanManageApplication(db, req, application);
     if (doc.status !== "uploaded") {
       throw new AppError("INVALID_STATE", `Cannot verify a document request in status "${doc.status}"`, 400);
     }
@@ -74,6 +96,17 @@ export function documentsRouter(db: Database, env: Env) {
       .where(eq(documentRequests.id, doc.id))
       .returning();
 
+    if (!body.approve) {
+      await notify(db, {
+        userIds: [application.userId],
+        actorUserId: req.user!.sub,
+        kind: "document.rejected",
+        title: `Please upload ${doc.documentName} again`,
+        body: body.note ?? "The file you sent couldn't be accepted.",
+        link: `/journey/${application.id}`,
+        email: true,
+      });
+    }
     await writeAuditLog(db, {
       actorUserId: req.user!.sub,
       action: body.approve ? "document_request.verify" : "document_request.reject",

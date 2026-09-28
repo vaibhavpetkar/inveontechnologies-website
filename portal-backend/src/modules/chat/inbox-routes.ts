@@ -139,7 +139,7 @@ export function chatRouter(db: Database, env: Env) {
         members: (r.members as { id: string; name: string; email: string; role: string }[] | undefined) ?? null,
         unread: r.unread as number,
         mentions: r.mentions as number,
-        last: r.last_at ? { body: r.last_deleted ? "Message deleted" : (r.last_body as string), authorId: r.last_author_id as string, at: r.last_at } : null,
+        last: r.last_at ? { body: r.last_deleted ? "Message deleted" : (r.last_body as string) || "Sent a file", authorId: r.last_author_id as string, at: r.last_at } : null,
         sortAt: (r.last_at ?? r.created_at ?? "1970-01-01") as string,
       }))
       .sort((a, b) => new Date(b.sortAt).getTime() - new Date(a.sortAt).getTime());

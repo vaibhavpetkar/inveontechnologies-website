@@ -39,6 +39,9 @@ const envSchema = z.object({
   PORTAL_ZOOM_CLIENT_SECRET: z.string().optional(),
   // The Zoom user that hosts the meetings ("me" = the app's owner).
   PORTAL_ZOOM_USER: z.string().default("me"),
+  // Where uploaded files (resumes, documents, attachments) are kept. In
+  // Docker this is the portal_uploads volume mounted at /app/uploads.
+  PORTAL_UPLOAD_DIR: z.string().default("uploads"),
   // Cashfree payments for program fees (same account as the Events site).
   // Leave the app id unset to hide "Pay now"; candidates can still start
   // the free trial and staff can mark a payment received by hand.

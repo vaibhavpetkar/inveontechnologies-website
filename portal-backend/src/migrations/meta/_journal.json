@@ -148,6 +148,13 @@
       "when": 1790546294800,
       "tag": "0020_true_black_bolt",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790619207277,
+      "tag": "0021_conscious_silver_centurion",
+      "breakpoints": true
     }
   ]
 }
