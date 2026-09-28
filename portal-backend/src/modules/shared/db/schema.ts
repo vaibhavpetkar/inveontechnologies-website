@@ -28,6 +28,8 @@ export const users = pgTable("users", {
   lastSeenAt: timestamp("last_seen_at", { withTimezone: true }), // heartbeat-driven presence, see chat/presence-routes.ts
   // Display name for staff accounts (candidates keep theirs on candidate_profiles).
   fullName: text("full_name"),
+  // Used to assign linked GitHub issues and to match issue assignees back to people.
+  githubUsername: text("github_username"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -135,6 +137,10 @@ export const opportunities = pgTable("opportunities", {
   kind: opportunityKindEnum("kind").notNull().default("job"),
   durationMonths: integer("duration_months"),
   stipendAmount: numeric("stipend_amount", { precision: 10, scale: 2 }), // per month, INR
+  // One-off program fee in INR, asked for after the HR round (pay now or
+  // start a free trial). Null or 0 = no fee, the step is skipped.
+  programFee: numeric("program_fee", { precision: 10, scale: 2 }),
+  trialHours: integer("trial_hours").notNull().default(24),
   startDate: timestamp("start_date", { withTimezone: true }),
   location: text("location"),
   publishedAt: timestamp("published_at", { withTimezone: true }),
@@ -273,6 +279,13 @@ export const assessments = pgTable("assessments", {
   durationMinutes: integer("duration_minutes").notNull(),
   // Percentage (0-100) of total points required to pass.
   passingScorePercent: integer("passing_score_percent").notNull().default(60),
+  // The language or track this exam covers ("JavaScript", "Python"). An
+  // opening can carry one exam per language; the candidate picks one.
+  language: text("language"),
+  // How many times a candidate may sit this exam for one application.
+  maxAttempts: integer("max_attempts").notNull().default(1),
+  // Inactive exams are hidden from candidates but keep their history.
+  isActive: boolean("is_active").notNull().default(true),
   createdBy: uuid("created_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -291,8 +304,11 @@ export const assessmentQuestions = pgTable("assessment_questions", {
 
 export const assessmentAttempts = pgTable("assessment_attempts", {
   id: uuid("id").primaryKey().defaultRandom(),
-  applicationId: uuid("application_id").notNull().unique().references(() => applications.id, { onDelete: "cascade" }),
+  // Several attempts per application: retries of one exam, or a switch to
+  // another language's exam. attemptNumber counts per (application, exam).
+  applicationId: uuid("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
   assessmentId: uuid("assessment_id").notNull().references(() => assessments.id, { onDelete: "cascade" }),
+  attemptNumber: integer("attempt_number").notNull().default(1),
   status: assessmentAttemptStatusEnum("status").notNull().default("not_started"),
   startedAt: timestamp("started_at", { withTimezone: true }),
   expiresAt: timestamp("expires_at", { withTimezone: true }),
@@ -772,6 +788,7 @@ export const projects = pgTable("projects", {
   description: text("description"),
   status: projectStatusEnum("status").notNull().default("planning"),
   ownerId: uuid("owner_id").notNull().references(() => users.id), // the manager accountable for the project
+  githubRepo: text("github_repo"), // "owner/name": new task issues go here and its issues can be imported
   createdBy: uuid("created_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -842,9 +859,15 @@ export const tasks = pgTable("tasks", {
   actualHours: numeric("actual_hours", { precision: 6, scale: 2 }).notNull().default("0"),
   dueDate: timestamp("due_date", { withTimezone: true }),
   createdBy: uuid("created_by").notNull().references(() => users.id),
+  // Linked GitHub issue (see modules/github). Closing the issue finishes the task and vice versa.
+  githubRepo: text("github_repo"),
+  githubIssueNumber: integer("github_issue_number"),
+  githubIssueUrl: text("github_issue_url"),
+  githubIssueState: text("github_issue_state", { enum: ["open", "closed"] }),
+  githubSyncedAt: timestamp("github_synced_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => ({ uniqGithubIssue: unique("tasks_github_issue_unique").on(t.githubRepo, t.githubIssueNumber) }));
 
 export const taskRecurrences = pgTable("task_recurrences", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -971,6 +994,10 @@ export const channelBans = pgTable(
 
 export const privateConversations = pgTable("private_conversations", {
   id: uuid("id").primaryKey().defaultRandom(),
+  // Group chats have a title and admins; a direct message has neither.
+  isGroup: boolean("is_group").notNull().default(false),
+  title: text("title"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -979,6 +1006,8 @@ export const conversationParticipants = pgTable(
   {
     conversationId: uuid("conversation_id").notNull().references(() => privateConversations.id, { onDelete: "cascade" }),
     userId: uuid("user_id").notNull().references(() => users.id),
+    isAdmin: boolean("is_admin").notNull().default(false),
+    joinedAt: timestamp("joined_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({ pk: primaryKey({ columns: [t.conversationId, t.userId] }) }),
 );
@@ -1220,3 +1249,136 @@ export const calendarEventAttendees = pgTable(
     byUser: index("calendar_event_attendees_user_idx").on(t.userId),
   }),
 );
+
+
+/**
+ * After a candidate passes the HR round they get a program enrollment: pay
+ * the opening's program fee (Cashfree) or start a free trial first. Once
+ * paid (or on trial) they fill the joining form, and staff book their
+ * sessions on the calendar.
+ */
+export const programEnrollmentStatusEnum = pgEnum("program_enrollment_status", [
+  "awaiting_choice", // HR passed; candidate hasn't chosen pay or trial yet
+  "trial", // free trial running until trialEndsAt
+  "trial_expired",
+  "paid",
+  "waived", // no fee, or staff waived it
+  "cancelled",
+]);
+
+export const programEnrollments = pgTable("program_enrollments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  applicationId: uuid("application_id").notNull().unique().references(() => applications.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  opportunityId: uuid("opportunity_id").notNull().references(() => opportunities.id, { onDelete: "cascade" }),
+  status: programEnrollmentStatusEnum("status").notNull().default("awaiting_choice"),
+  amount: numeric("amount", { precision: 10, scale: 2 }).notNull().default("0"),
+  trialHours: integer("trial_hours").notNull().default(24),
+  trialStartedAt: timestamp("trial_started_at", { withTimezone: true }),
+  trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
+  paidAt: timestamp("paid_at", { withTimezone: true }),
+  paymentNote: text("payment_note"),
+  joiningDetails: jsonb("joining_details"),
+  joiningSubmittedAt: timestamp("joining_submitted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const paymentOrderStatusEnum = pgEnum("payment_order_status", ["created", "paid", "failed", "dropped"]);
+
+export const paymentOrders = pgTable(
+  "payment_orders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    enrollmentId: uuid("enrollment_id").notNull().references(() => programEnrollments.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    // Our order id, also Cashfree's order_id.
+    orderId: text("order_id").notNull().unique(),
+    amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
+    currency: text("currency").notNull().default("INR"),
+    status: paymentOrderStatusEnum("status").notNull().default("created"),
+    paymentSessionId: text("payment_session_id"),
+    gatewayPaymentId: text("gateway_payment_id"),
+    lastEvent: jsonb("last_event"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    byEnrollment: index("payment_orders_enrollment_idx").on(t.enrollmentId),
+  }),
+);
+
+// --- Payroll and completion certificates (candidate journey, step 9) ---
+//
+// A salary structure is a dated list of monthly components; the one in force
+// on the 1st of a month drives that month's payslip. Payslips are generated
+// as drafts (by HR or the monthly job), can be adjusted for loss-of-pay days
+// while in draft, and become visible to the employee once published. A
+// published slip is never edited.
+
+export interface SalaryComponent {
+  name: string;
+  amount: number; // monthly, in rupees
+  kind: "earning" | "deduction";
+}
+
+export const salaryStructures = pgTable(
+  "salary_structures",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    employeeId: uuid("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+    effectiveFrom: timestamp("effective_from", { withTimezone: true }).notNull(),
+    components: jsonb("components").$type<SalaryComponent[]>().notNull(),
+    createdBy: uuid("created_by").notNull().references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ byEmployee: index("salary_structures_employee_idx").on(t.employeeId, t.effectiveFrom) }),
+);
+
+export const payslipStatusEnum = pgEnum("payslip_status", ["draft", "published"]);
+
+export const payslips = pgTable(
+  "payslips",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    employeeId: uuid("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+    period: text("period").notNull(), // "2026-09"
+    status: payslipStatusEnum("status").notNull().default("draft"),
+    daysInMonth: integer("days_in_month").notNull(),
+    payableDays: numeric("payable_days", { precision: 5, scale: 1 }).notNull(), // after joining date and loss of pay
+    lopDays: numeric("lop_days", { precision: 5, scale: 1 }).notNull().default("0"),
+    earnings: jsonb("earnings").$type<{ name: string; amount: number }[]>().notNull(),
+    deductions: jsonb("deductions").$type<{ name: string; amount: number }[]>().notNull(),
+    gross: numeric("gross", { precision: 12, scale: 2 }).notNull(),
+    totalDeductions: numeric("total_deductions", { precision: 12, scale: 2 }).notNull(),
+    net: numeric("net", { precision: 12, scale: 2 }).notNull(),
+    note: text("note"),
+    generatedBy: uuid("generated_by").references(() => users.id), // null = the monthly job
+    generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+    publishedBy: uuid("published_by").references(() => users.id),
+    publishedAt: timestamp("published_at", { withTimezone: true }),
+  },
+  (t) => ({ uniqPeriod: unique("payslips_employee_period_unique").on(t.employeeId, t.period) }),
+);
+
+export const employmentCertificateKindEnum = pgEnum("employment_certificate_kind", ["internship_completion", "experience"]);
+
+/** Internship completion and experience certificates, verified on the same public /verify page as course certificates. */
+export const employmentCertificates = pgTable("employment_certificates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  businessId: text("business_id").unique(),
+  seqNumber: integer("seq_number").generatedAlwaysAsIdentity(),
+  verificationCode: text("verification_code").notNull().unique(),
+  employeeId: uuid("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  kind: employmentCertificateKindEnum("kind").notNull(),
+  roleTitle: text("role_title").notNull(),
+  fromDate: timestamp("from_date", { withTimezone: true }).notNull(),
+  toDate: timestamp("to_date", { withTimezone: true }).notNull(),
+  snapshotContent: text("snapshot_content").notNull(),
+  status: certificateStatusEnum("status").notNull().default("issued"),
+  issuedBy: uuid("issued_by").references(() => users.id), // null = issued automatically
+  issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  revokeReason: text("revoke_reason"),
+});

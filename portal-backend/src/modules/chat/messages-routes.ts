@@ -19,6 +19,9 @@ import { getChannelMembership, isChannelModerator } from "./communities-routes.j
 import { isConversationParticipant } from "./conversations-routes.js";
 import { scanAttachmentStub, MAX_ATTACHMENT_BYTES, ALLOWED_MIME_TYPES } from "./attachments.js";
 import type { Env } from "../shared/env.js";
+import { assertChatEligible, usersWithAccess } from "./inbox-routes.js";
+import { notify } from "../notifications/service.js";
+import { candidateProfiles, conversationParticipants, privateConversations, users } from "../shared/db/schema.js";
 
 const PRIVILEGED_ROLES = ["hr", "admin", "super_admin"] as const;
 
@@ -71,6 +74,7 @@ export function messagesRouter(db: Database, env: Env) {
       throw new AppError("INVALID_TARGET", "Provide exactly one of channelId or conversationId, not both or neither", 400);
     }
     await assertCanAccessTarget(db, req.user!.sub, req.user!.role, body.channelId, body.conversationId);
+    await assertChatEligible(db, req.user!.sub);
 
     if (body.channelId) {
       const membership = await getChannelMembership(db, body.channelId, req.user!.sub);
@@ -91,18 +95,22 @@ export function messagesRouter(db: Database, env: Env) {
       if (!parent) throw new NotFoundError("Message being replied to not found");
     }
 
+    // Only people who can open this chat can be mentioned in it.
+    const mentioned = (await usersWithAccess(db, body, body.mentionedUserIds)).filter((id) => id !== req.user!.sub);
+
     const message = await db.transaction(async (tx) => {
       const [created] = await tx
         .insert(messages)
         .values({ channelId: body.channelId, conversationId: body.conversationId, authorId: req.user!.sub, body: body.body, replyToMessageId: body.replyToMessageId })
         .returning();
       await tx.insert(messageRevisions).values({ messageId: created.id, body: body.body, revisionType: "original" });
-      if (body.mentionedUserIds.length > 0) {
-        await tx.insert(messageMentions).values(body.mentionedUserIds.map((mentionedUserId) => ({ messageId: created.id, mentionedUserId })));
+      if (mentioned.length > 0) {
+        await tx.insert(messageMentions).values(mentioned.map((mentionedUserId) => ({ messageId: created.id, mentionedUserId })));
       }
       return created;
     });
 
+    await notifyChat(db, message, mentioned).catch(() => undefined);
     res.status(201).json({ message });
   });
 
@@ -255,4 +263,40 @@ export function messagesRouter(db: Database, env: Env) {
   });
 
   return router;
+}
+
+
+/**
+ * In-app alerts: every @mention, and new messages in DMs and groups (at
+ * most one alert per chat every ten minutes, so a busy chat doesn't flood
+ * the bell). Channel messages only alert on @mentions.
+ */
+async function notifyChat(db: Database, message: typeof messages.$inferSelect, mentioned: string[]) {
+  const author = await db.query.users.findFirst({ where: eq(users.id, message.authorId), columns: { email: true, fullName: true } });
+  const profile = await db.query.candidateProfiles.findFirst({ where: eq(candidateProfiles.userId, message.authorId), columns: { fullName: true } });
+  const who = author?.fullName || profile?.fullName || author?.email.split("@")[0] || "Someone";
+  const snippet = message.body.length > 140 ? `${message.body.slice(0, 137)}…` : message.body;
+
+  let where = "";
+  let link = "";
+  let others: string[] = [];
+  if (message.channelId) {
+    const channel = await db.query.channels.findFirst({ where: eq(channels.id, message.channelId) });
+    where = ` in #${channel?.name ?? "channel"}`;
+    link = `/chat/channel/${message.channelId}`;
+  } else if (message.conversationId) {
+    const conv = await db.query.privateConversations.findFirst({ where: eq(privateConversations.id, message.conversationId) });
+    where = conv?.isGroup ? ` in ${conv.title}` : "";
+    link = `/chat/${conv?.isGroup ? "group" : "dm"}/${message.conversationId}`;
+    const members = await db.query.conversationParticipants.findMany({ where: eq(conversationParticipants.conversationId, message.conversationId) });
+    others = members.map((m) => m.userId).filter((id) => id !== message.authorId && !mentioned.includes(id));
+  }
+
+  if (mentioned.length) {
+    await notify(db, { userIds: mentioned, actorUserId: message.authorId, kind: "chat.mention", title: `${who} mentioned you${where}`, body: snippet, link });
+  }
+  const bucket = Math.floor(Date.now() / (10 * 60 * 1000));
+  for (const userId of others) {
+    await notify(db, { userIds: [userId], actorUserId: message.authorId, kind: "chat.message", title: `${who}${where}`, body: snippet, link, dedupeKey: `chat:${message.conversationId}:${userId}:${bucket}` });
+  }
 }

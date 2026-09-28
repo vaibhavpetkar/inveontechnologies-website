@@ -3,7 +3,7 @@ import { z } from "zod";
 import { randomBytes } from "node:crypto";
 import { and, eq, ne } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
-import { certificateTemplates, certificates, courses, courseEnrollments, users, auditLogs, candidateProfiles } from "../shared/db/schema.js";
+import { certificateTemplates, certificates, courses, courseEnrollments, users, auditLogs, candidateProfiles, employmentCertificates } from "../shared/db/schema.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { renderCertificatePdf } from "./pdf.js";
@@ -251,6 +251,23 @@ export function certificatesRouter(db: Database, env: Env) {
   router.get("/verify/:verificationCode", async (req, res) => {
     const certificate = await db.query.certificates.findFirst({ where: eq(certificates.verificationCode, req.params.verificationCode) });
     if (!certificate) {
+      const employment = await employmentCertificateFor(db, req.params.verificationCode);
+      if (employment) {
+        const { cert, recipientName } = employment;
+        res.json({
+          valid: cert.status === "issued",
+          status: cert.status,
+          businessId: cert.businessId,
+          recipientName,
+          courseTitle: `${EMPLOYMENT_HEADINGS[cert.kind]}: ${cert.roleTitle}`,
+          kind: cert.kind,
+          fromDate: cert.fromDate,
+          toDate: cert.toDate,
+          issuedAt: cert.issuedAt,
+          revokedAt: cert.revokedAt,
+        });
+        return;
+      }
       res.status(404).json({ valid: false, message: "No certificate found for this verification code" });
       return;
     }
@@ -280,7 +297,26 @@ export function certificatesRouter(db: Database, env: Env) {
   // secret, and the PDF shows nothing the verify page doesn't.
   router.get("/verify/:verificationCode/pdf", async (req, res) => {
     const certificate = await db.query.certificates.findFirst({ where: eq(certificates.verificationCode, req.params.verificationCode) });
-    if (!certificate) throw new NotFoundError("No certificate found for this verification code");
+    if (!certificate) {
+      const employment = await employmentCertificateFor(db, req.params.verificationCode);
+      if (!employment) throw new NotFoundError("No certificate found for this verification code");
+      const { cert, recipientName } = employment;
+      if (cert.status !== "issued") throw new AppError("CERTIFICATE_REVOKED", "This certificate has been revoked", 410);
+      const pdf = await renderCertificatePdf({
+        heading: EMPLOYMENT_HEADINGS[cert.kind],
+        completedLine: cert.kind === "internship_completion" ? "has successfully completed an internship as" : "has worked with Inveon Technologies as",
+        recipientName: recipientName ?? "Certificate holder",
+        courseTitle: cert.roleTitle,
+        body: `From ${longDate(cert.fromDate)} to ${longDate(cert.toDate)}. We thank them for their contribution and wish them every success.`,
+        issuedAt: cert.issuedAt,
+        certificateId: cert.businessId ?? cert.id.slice(0, 8).toUpperCase(),
+        verifyUrl: `${env.PORTAL_APP_URL}/verify/${cert.verificationCode}`,
+      });
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `${req.query.download ? "attachment" : "inline"}; filename="${cert.kind === "internship_completion" ? "internship" : "experience"}-certificate.pdf"`);
+      res.send(Buffer.from(pdf));
+      return;
+    }
     if (certificate.status !== "issued") throw new AppError("CERTIFICATE_REVOKED", "This certificate has been revoked", 410);
     const [user, profile, course] = await Promise.all([
       db.query.users.findFirst({ where: eq(users.id, certificate.userId), columns: { fullName: true } }),
@@ -302,4 +338,19 @@ export function certificatesRouter(db: Database, env: Env) {
   });
 
   return router;
+}
+
+const longDate = (d: Date) => new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Kolkata" }).format(d);
+
+const EMPLOYMENT_HEADINGS = { internship_completion: "Internship Completion Certificate", experience: "Experience Certificate" } as const;
+
+/** Internship and experience certificates share the public /verify page with course certificates. */
+async function employmentCertificateFor(db: Database, code: string) {
+  const cert = await db.query.employmentCertificates.findFirst({ where: eq(employmentCertificates.verificationCode, code) });
+  if (!cert) return null;
+  const [user, profile] = await Promise.all([
+    db.query.users.findFirst({ where: eq(users.id, cert.userId), columns: { fullName: true } }),
+    db.query.candidateProfiles.findFirst({ where: eq(candidateProfiles.userId, cert.userId) }),
+  ]);
+  return { cert, recipientName: user?.fullName ?? profile?.fullName ?? null };
 }

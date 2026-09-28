@@ -9,6 +9,8 @@ export interface Opportunity {
   kind: OpportunityKind;
   durationMonths: number | null;
   stipendAmount: string | null;
+  programFee?: string | null;
+  trialHours?: number;
   startDate: string | null;
   location: string | null;
   eligibility: Record<string, unknown>;

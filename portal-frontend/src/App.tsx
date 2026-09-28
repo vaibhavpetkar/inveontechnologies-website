@@ -13,6 +13,7 @@ import OpportunityEditor from "./pages/OpportunityEditor";
 import Profile from "./pages/Profile";
 import Assessments from "./pages/Assessments";
 import TakeAssessment from "./pages/TakeAssessment";
+import Journey from "./pages/Journey";
 import Courses from "./pages/Courses";
 import CourseDetail from "./pages/CourseDetail";
 import CourseBuilder from "./pages/CourseBuilder";
@@ -24,6 +25,9 @@ import CertificateVerify from "./pages/CertificateVerify";
 import Tasks from "./pages/Tasks";
 import People from "./pages/People";
 import Calendar from "./pages/Calendar";
+import Chat from "./pages/Chat";
+import Payroll from "./pages/Payroll";
+import Payslips from "./pages/Payslips";
 import { MotionConfig } from "framer-motion";
 import { ToastProvider } from "./components/Toast";
 import { NotificationsProvider } from "./context/NotificationsContext";
@@ -61,6 +65,7 @@ function AppRoutes() {
       <Route path="/profile"><Protected><Profile /></Protected></Route>
       <Route path="/assessments"><Protected><Assessments /></Protected></Route>
       <Route path="/assessments/:applicationId"><Protected><TakeAssessment /></Protected></Route>
+      <Route path="/journey/:applicationId"><Protected><Journey /></Protected></Route>
       <Route path="/courses"><Protected><Courses /></Protected></Route>
       <Route path="/courses/:id/edit"><Protected><CourseBuilder /></Protected></Route>
       <Route path="/courses/:id"><Protected><CourseDetail /></Protected></Route>
@@ -72,6 +77,9 @@ function AppRoutes() {
       {/* One route for the board and an open task, so the board stays mounted under the drawer */}
       <Route path="/tasks/:id?"><Protected><Tasks /></Protected></Route>
       <Route path="/people/:id?"><Protected><People /></Protected></Route>
+      <Route path="/chat/:kind?/:id?"><Protected><Chat /></Protected></Route>
+      <Route path="/payroll"><Protected><Payroll /></Protected></Route>
+      <Route path="/payslips"><Protected><Payslips /></Protected></Route>
       <Route path="/calendar"><Protected><Calendar /></Protected></Route>
 
       <Route><div className="page-loading">Page not found.</div></Route>

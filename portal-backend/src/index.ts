@@ -10,6 +10,7 @@ import { errorHandler } from "./modules/shared/errors.js";
 import { createDb } from "./modules/shared/db/client.js";
 import { authRouter } from "./modules/auth/routes.js";
 import { opportunitiesRouter } from "./modules/opportunities/routes.js";
+import { publicOpeningsRouter } from "./modules/opportunities/public-routes.js";
 import { profileRouter } from "./modules/profile/routes.js";
 import { applicationsRouter } from "./modules/applications/routes.js";
 import { assessmentsRouter } from "./modules/assessments/routes.js";
@@ -39,6 +40,10 @@ import { configureNotifications } from "./modules/notifications/service.js";
 import { registerReminderSchedules } from "./modules/notifications/reminders.js";
 import { calendarRouter, registerCalendarSchedules } from "./modules/calendar/routes.js";
 import { startJobWorker } from "./modules/shared/jobs.js";
+import { chatRouter } from "./modules/chat/inbox-routes.js";
+import { cashfreeWebhookRouter, programRouter, registerProgramSchedules } from "./modules/payments/routes.js";
+import { githubRouter, githubWebhookRouter, registerGithubSchedules } from "./modules/github/routes.js";
+import { payrollRouter, registerPayrollSchedules } from "./modules/payroll/routes.js";
 
 const env = loadEnv();
 const { db, pool } = createDb(env);
@@ -46,6 +51,9 @@ configureMailer(env);
 configureNotifications({ appUrl: env.PORTAL_APP_URL });
 registerReminderSchedules(db);
 registerCalendarSchedules(db);
+registerProgramSchedules(db);
+registerGithubSchedules(db, env);
+registerPayrollSchedules(db, env);
 const app = express();
 // Behind nginx (and Cloudflare in front of that) — trust exactly one hop
 // so req.ip and X-Forwarded-For-based rate limiting resolve to the real
@@ -67,6 +75,18 @@ app.use(
 );
 
 app.use((req, res, next) => {
+  // Public read-only feeds (the careers page's openings list) are open to
+  // any origin, without credentials.
+  if (req.path.startsWith("/api/v1/public/")) {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET,OPTIONS");
+    if (req.method === "OPTIONS") {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+    return;
+  }
   // CORS. Credentialed (cookies for refresh token) so origin must be
   // explicit — never "*" when credentials are allowed.
   res.setHeader("Access-Control-Allow-Origin", env.PORTAL_CORS_ORIGIN);
@@ -80,6 +100,9 @@ app.use((req, res, next) => {
   next();
 });
 
+// Payment webhooks verify a signature over the raw body, so they parse it themselves.
+app.use("/api/v1/payments", cashfreeWebhookRouter(db, env));
+app.use("/api/v1/github", githubWebhookRouter(db, env));
 app.use(express.json());
 app.use(cookieParser());
 
@@ -98,6 +121,7 @@ app.get("/api/v1/health/ready", async (_req, res) => {
 
 app.use("/api/v1/auth", authRouter(db, env));
 app.use("/api/v1/opportunities", opportunitiesRouter(db, env));
+app.use("/api/v1/public", publicOpeningsRouter(db, env));
 app.use("/api/v1/profile", profileRouter(db, env));
 app.use("/api/v1/applications", applicationsRouter(db, env));
 app.use("/api/v1/assessments", assessmentsRouter(db, env));
@@ -122,6 +146,7 @@ app.use("/api/v1/communities", communitiesRouter(db, env));
 app.use("/api/v1/conversations", conversationsRouter(db, env));
 app.use("/api/v1/messages", messagesRouter(db, env));
 app.use("/api/v1/presence", presenceRouter(db, env));
+app.use("/api/v1/chat", chatRouter(db, env));
 app.use("/api/v1/reports", reportsRouter(db, env));
 app.use("/api/v1/feature-flags", featureFlagsRouter(db, env));
 app.use("/api/v1/notification-preferences", notificationPreferencesRouter(db, env));
@@ -129,6 +154,9 @@ app.use("/api/v1/bulk", bulkActionsRouter(db, env));
 app.use("/api/v1/users", usersRouter(db, env));
 app.use("/api/v1/notifications", notificationsRouter(db, env));
 app.use("/api/v1/calendar", calendarRouter(db, env));
+app.use("/api/v1/program", programRouter(db, env));
+app.use("/api/v1/github", githubRouter(db, env));
+app.use("/api/v1/payroll", payrollRouter(db, env));
 
 // Future feature routes mount here:
 // app.use("/api/v1/employees", employeesRouter(db, env));

@@ -13,6 +13,7 @@ import type { Env } from "../shared/env.js";
 import { PIPELINE_ROLES, assertCanManageApplication, canViewApplication, isRecruitmentAdmin } from "./access.js";
 import { enrollInOpportunityCourses } from "../courses/programs.js";
 import { notifyApplicationStatus } from "../notifications/recruitment.js";
+import { inviteToExamsOnApply } from "../assessments/exams.js";
 
 const applySchema = z.object({}).optional(); // no body fields needed yet — reserved for a future cover-note field
 
@@ -106,7 +107,11 @@ export function applicationsRouter(db: Database, env: Env) {
       ipAddress: req.ip,
     });
 
-    res.status(201).json({ application, eligibilityWarning: eligibility.eligible ? null : eligibility.reasons });
+    // Openings with an exam send the candidate straight to it.
+    const invited = await inviteToExamsOnApply(db, application.id, opportunityId, req.user!.sub);
+    if (invited) application = { ...application, status: "assessment_invited" };
+
+    res.status(201).json({ application, examRequired: invited, eligibilityWarning: eligibility.eligible ? null : eligibility.reasons });
   });
 
   // --- Candidate: my applications ---

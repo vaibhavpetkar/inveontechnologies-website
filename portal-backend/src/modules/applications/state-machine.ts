@@ -55,14 +55,17 @@ export function isCandidateTransitionAllowed(from: ApplicationStatus, to: Applic
 }
 
 /**
- * The single system-triggered transition: an assessment attempt resolving
- * (candidate submits, or lazy expiry finalizes it) moves the application
- * from assessment_invited to assessment_completed automatically. Not an
- * admin action and not a candidate action — kept as its own explicit
- * function rather than folded into either table above so it's obvious at
- * the call site (assessments/attempt-routes.ts) that this is a distinct
- * kind of transition, not a privilege check that was forgotten.
+ * System-triggered transitions — never an admin or candidate action:
+ * - submitted -> assessment_invited: the candidate applied to an opening
+ *   that has an exam, so they're sent straight to it.
+ * - assessment_invited -> assessment_completed: the candidate passed, or
+ *   has no attempts left on any exam (see assessments/attempt-routes.ts).
  */
 export function isSystemTransitionAllowed(from: ApplicationStatus, to: ApplicationStatus): boolean {
-  return from === "assessment_invited" && to === "assessment_completed";
+  return (
+    (from === "submitted" && to === "assessment_invited") ||
+    (from === "assessment_invited" && to === "assessment_completed") ||
+    // Passing the HR round (interview feedback "pass") shortlists the candidate.
+    ((from === "under_review" || from === "assessment_completed") && to === "shortlisted")
+  );
 }

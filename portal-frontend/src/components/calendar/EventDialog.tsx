@@ -14,13 +14,16 @@ interface Props {
   providers: ProviderInfo[];
   onClose: () => void;
   onSaved: (meeting: Meeting) => void;
+  /** Prefill a new meeting (e.g. a candidate's session from the applicants panel). */
+  initialTitle?: string;
+  initialInvited?: string[];
 }
 
 const DURATIONS = [15, 30, 45, 60, 90, 120];
 const PROVIDER_ORDER: Provider[] = ["google_meet", "zoom", "manual", "none"];
 
 /** Schedule a meeting or change one: time, people, and where to meet. */
-export function EventDialog({ existing, day, people, providers, onClose, onSaved }: Props) {
+export function EventDialog({ existing, day, people, providers, onClose, onSaved, initialTitle, initialInvited }: Props) {
   const { user, accessToken } = useAuth();
   const configured = useMemo(() => new Map(providers.map((p) => [p.name, p.configured])), [providers]);
   const defaultProvider: Provider = existing?.provider ?? (configured.get("google_meet") ? "google_meet" : configured.get("zoom") ? "zoom" : "manual");
@@ -28,7 +31,7 @@ export function EventDialog({ existing, day, people, providers, onClose, onSaved
   const initialStart = existing ? new Date(existing.startsAt) : nextSlot(day);
   const initialMinutes = existing ? Math.round((new Date(existing.endsAt).getTime() - new Date(existing.startsAt).getTime()) / 60000) : 30;
   const [form, setForm] = useState({
-    title: existing?.title ?? "",
+    title: existing?.title ?? initialTitle ?? "",
     start: toLocalInput(initialStart),
     minutes: initialMinutes,
     provider: defaultProvider,
@@ -36,7 +39,7 @@ export function EventDialog({ existing, day, people, providers, onClose, onSaved
     location: existing?.location ?? "",
     description: existing?.description ?? "",
   });
-  const [invited, setInvited] = useState<string[]>(existing ? existing.attendees.map((a) => a.id).filter((id) => id !== existing.organizer?.id) : []);
+  const [invited, setInvited] = useState<string[]>(existing ? existing.attendees.map((a) => a.id).filter((id) => id !== existing.organizer?.id) : initialInvited ?? []);
   const [query, setQuery] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);

@@ -7,6 +7,9 @@ export interface CertificatePdfInput {
   issuedAt: Date;
   certificateId: string; // e.g. CERT-2026-00012
   verifyUrl: string;
+  /** Defaults to "Certificate of Completion" / "has successfully completed" for courses. */
+  heading?: string;
+  completedLine?: string;
 }
 
 const NAVY = rgb(0.043, 0.071, 0.125);
@@ -17,7 +20,7 @@ const GOLD = rgb(0.851, 0.467, 0.024);
 
 // The standard PDF fonts only cover Latin-1; replace anything else so a
 // name in another script never breaks generation.
-function safe(text: string) {
+export function safe(text: string) {
   return text.replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, "-").replace(/[^\x20-\x7e\xa0-\xff]/g, "?");
 }
 
@@ -34,7 +37,7 @@ function fitSize(font: PDFFont, text: string, max: number, maxWidth: number, min
   return size;
 }
 
-function wrap(text: string, font: PDFFont, size: number, maxWidth: number) {
+export function wrap(text: string, font: PDFFont, size: number, maxWidth: number) {
   const lines: string[] = [];
   for (const para of safe(text).split(/\n+/)) {
     let line = "";
@@ -79,7 +82,7 @@ export async function renderCertificatePdf(input: CertificatePdfInput): Promise<
   centered(page, "IN", height - 84, sansBold, 15, rgb(1, 1, 1));
   centered(page, "INVEON TECHNOLOGIES", height - 118, sansBold, 11, MUTED);
 
-  centered(page, "Certificate of Completion", height - 170, serif, 38);
+  centered(page, input.heading ?? "Certificate of Completion", height - 170, serif, fitSize(serif, input.heading ?? "Certificate of Completion", 38, width - 160));
   centered(page, "This is to certify that", height - 212, serifItalic, 15, MUTED);
 
   const nameSize = fitSize(serif, input.recipientName, 40, width - 200);
@@ -87,7 +90,7 @@ export async function renderCertificatePdf(input: CertificatePdfInput): Promise<
   const nameWidth = Math.min(width - 200, serif.widthOfTextAtSize(safe(input.recipientName), nameSize) + 60);
   page.drawLine({ start: { x: (width - nameWidth) / 2, y: height - 274 }, end: { x: (width + nameWidth) / 2, y: height - 274 }, thickness: 0.8, color: GOLD });
 
-  centered(page, "has successfully completed", height - 304, serifItalic, 15, MUTED);
+  centered(page, input.completedLine ?? "has successfully completed", height - 304, serifItalic, 15, MUTED);
   const courseSize = fitSize(sansBold, input.courseTitle, 24, width - 200);
   centered(page, input.courseTitle, height - 338, sansBold, courseSize);
 

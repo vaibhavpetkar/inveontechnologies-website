@@ -3,6 +3,7 @@ import { z } from "zod";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
 import { courses, opportunities, opportunityCourses, opportunitySkills, skills, users } from "../shared/db/schema.js";
+import { examsForOpportunity } from "../assessments/exams.js";
 import { optionalAuth, requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
@@ -31,6 +32,9 @@ const createOpportunitySchema = z.object({
   kind: z.enum(["job", "internship", "program"]).optional(),
   durationMonths: z.number().int().min(1).max(60).nullable().optional(),
   stipendAmount: z.number().min(0).max(10_000_000).nullable().optional(),
+  // Fee asked for after the HR round, and how long the free trial lasts.
+  programFee: z.number().min(0).max(10_000_000).nullable().optional(),
+  trialHours: z.number().int().min(0).max(24 * 30).optional(),
   startDate: z.string().datetime({ offset: true }).nullable().optional(),
   location: z.string().trim().max(200).nullable().optional(),
   courseIds: z.array(z.string().uuid()).max(30).optional(),
@@ -42,6 +46,8 @@ const programFields = (body: z.infer<typeof updateOpportunitySchema>) => ({
   ...(body.kind ? { kind: body.kind } : {}),
   ...(body.durationMonths !== undefined ? { durationMonths: body.durationMonths } : {}),
   ...(body.stipendAmount !== undefined ? { stipendAmount: body.stipendAmount === null ? null : String(body.stipendAmount) } : {}),
+  ...(body.programFee !== undefined ? { programFee: body.programFee === null ? null : String(body.programFee) } : {}),
+  ...(body.trialHours !== undefined ? { trialHours: body.trialHours } : {}),
   ...(body.startDate !== undefined ? { startDate: body.startDate ? new Date(body.startDate) : null } : {}),
   ...(body.location !== undefined ? { location: body.location || null } : {}),
 });
@@ -178,7 +184,10 @@ export function opportunitiesRouter(db: Database, env: Env) {
     // Applicants only see courses that are live.
     const visibleCourses = isPrivileged ? courseLinks : courseLinks.filter((c) => c.status === "published");
 
-    res.json({ opportunity, skills: skillLinks.map((s) => s.skill), courses: visibleCourses });
+    // The exam(s) a candidate will sit after applying — no questions, just what to expect.
+    const exams = (await examsForOpportunity(db, opportunity.id)).map(({ description: _d, ...e }) => e);
+
+    res.json({ opportunity, skills: skillLinks.map((s) => s.skill), courses: visibleCourses, exams });
   });
 
   // --- Privileged: create/edit/publish/archive ---

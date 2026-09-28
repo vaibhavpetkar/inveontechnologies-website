@@ -28,6 +28,8 @@ export default function OpportunityEditor() {
     startDate: "",
     durationMonths: "",
     stipendAmount: "",
+    programFee: "",
+    trialHours: "24",
     skills: "",
   });
   const [courseIds, setCourseIds] = useState<string[]>([]);
@@ -53,6 +55,8 @@ export default function OpportunityEditor() {
           startDate: o.startDate ? o.startDate.slice(0, 10) : "",
           durationMonths: o.durationMonths ? String(o.durationMonths) : "",
           stipendAmount: o.stipendAmount !== null ? String(Number(o.stipendAmount)) : "",
+          programFee: o.programFee !== null && o.programFee !== undefined ? String(Number(o.programFee)) : "",
+          trialHours: String(o.trialHours ?? 24),
           skills: skills.map((s) => s.name).join(", "),
         });
         setCourseIds(courses.map((c) => c.id));
@@ -76,6 +80,8 @@ export default function OpportunityEditor() {
       startDate: form.startDate ? new Date(`${form.startDate}T09:00:00`).toISOString() : null,
       durationMonths: form.durationMonths ? Number(form.durationMonths) : null,
       stipendAmount: form.stipendAmount !== "" ? Number(form.stipendAmount) : null,
+      programFee: form.programFee !== "" && Number(form.programFee) > 0 ? Number(form.programFee) : null,
+      trialHours: form.trialHours !== "" ? Number(form.trialHours) : 24,
       skillNames: form.skills.split(",").map((s) => s.trim()).filter(Boolean),
       courseIds,
     };
@@ -159,6 +165,19 @@ export default function OpportunityEditor() {
                 <label htmlFor="op-skills">Skills (comma separated)</label>
                 <input id="op-skills" value={form.skills} onChange={(e) => setForm({ ...form, skills: e.target.value })} placeholder="React, TypeScript, SQL" />
               </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label htmlFor="op-fee">Program fee (₹)</label>
+                <input id="op-fee" type="number" min={0} step={100} value={form.programFee} onChange={(e) => setForm({ ...form, programFee: e.target.value })} placeholder="Leave empty for no fee" />
+              </div>
+              <div className="field">
+                <label htmlFor="op-trial">Free trial (hours)</label>
+                <input id="op-trial" type="number" min={0} max={720} value={form.trialHours} onChange={(e) => setForm({ ...form, trialHours: e.target.value })} disabled={!(Number(form.programFee) > 0)} />
+              </div>
+              <p className="muted-small field-note">
+                Asked for after the HR round. Candidates pay online with Cashfree or start the free trial first; 0 hours means no trial.
+              </p>
             </div>
           </section>
 

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
 import { assessments, assessmentQuestions, applications, opportunities, assessmentAttempts, applicationEvents, users } from "../shared/db/schema.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
@@ -27,8 +27,27 @@ const createAssessmentSchema = z.object({
   description: z.string().max(2000).optional(),
   durationMinutes: z.number().int().min(1).max(300),
   passingScorePercent: z.number().int().min(0).max(100).default(60),
+  language: z.string().trim().max(60).nullable().optional(),
+  maxAttempts: z.number().int().min(1).max(10).default(1),
   questions: z.array(questionSchema).min(1),
 });
+
+const updateAssessmentSchema = createAssessmentSchema.omit({ opportunityId: true }).extend({
+  isActive: z.boolean().optional(),
+  // Questions can only be replaced while nobody has sat the exam.
+  questions: z.array(questionSchema).min(1).optional(),
+});
+
+function assertAnswerKeys(questions: z.infer<typeof questionSchema>[]) {
+  // Every correctOptionId must exist among that question's own options —
+  // catches a typo'd answer key at save time rather than silently scoring
+  // everyone as wrong later.
+  for (const q of questions) {
+    if (!q.options.some((o) => o.id === q.correctOptionId)) {
+      throw new AppError("INVALID_QUESTION", `correctOptionId "${q.correctOptionId}" is not among the given options`, 400);
+    }
+  }
+}
 
 const inviteSchema = z.object({ assessmentId: z.string().uuid() });
 
@@ -41,14 +60,7 @@ export function assessmentsRouter(db: Database, env: Env) {
     const opportunity = await db.query.opportunities.findFirst({ where: eq(opportunities.id, body.opportunityId) });
     if (!opportunity) throw new NotFoundError("Opportunity not found");
 
-    // Every option id referenced as correctOptionId must exist among that
-    // question's own options — catches a typo'd answer key at creation
-    // time rather than silently scoring everyone as wrong later.
-    for (const q of body.questions) {
-      if (!q.options.some((o) => o.id === q.correctOptionId)) {
-        throw new AppError("INVALID_QUESTION", `correctOptionId "${q.correctOptionId}" is not among the given options`, 400);
-      }
-    }
+    assertAnswerKeys(body.questions);
 
     const result = await db.transaction(async (tx) => {
       const [assessment] = await tx
@@ -59,6 +71,8 @@ export function assessmentsRouter(db: Database, env: Env) {
           description: body.description,
           durationMinutes: body.durationMinutes,
           passingScorePercent: body.passingScorePercent,
+          language: body.language || null,
+          maxAttempts: body.maxAttempts,
           createdBy: req.user!.sub,
         })
         .returning();
@@ -96,8 +110,72 @@ export function assessmentsRouter(db: Database, env: Env) {
 
   router.get("/", requireAuth(env), requireRole(...PRIVILEGED_ROLES), async (req, res) => {
     const opportunityId = z.string().uuid().parse(req.query.opportunityId);
-    const rows = await db.query.assessments.findMany({ where: eq(assessments.opportunityId, opportunityId) });
-    res.json({ assessments: rows });
+    const rows = await db
+      .select({
+        assessment: assessments,
+        questionCount: sql<number>`(select count(*)::int from assessment_questions q where q.assessment_id = "assessments"."id")`,
+        attemptCount: sql<number>`(select count(*)::int from assessment_attempts t where t.assessment_id = "assessments"."id")`,
+        passCount: sql<number>`(select count(*)::int from assessment_attempts t where t.assessment_id = "assessments"."id" and t.passed = true)`,
+      })
+      .from(assessments)
+      .where(eq(assessments.opportunityId, opportunityId))
+      .orderBy(assessments.createdAt);
+    res.json({ assessments: rows.map((r) => ({ ...r.assessment, questionCount: r.questionCount, attemptCount: r.attemptCount, passCount: r.passCount })) });
+  });
+
+  router.put("/:id", requireAuth(env), requireRole(...PRIVILEGED_ROLES), async (req, res) => {
+    const body = updateAssessmentSchema.parse(req.body);
+    const assessment = await db.query.assessments.findFirst({ where: eq(assessments.id, req.params.id) });
+    if (!assessment) throw new NotFoundError("Assessment not found");
+
+    if (body.questions) {
+      assertAnswerKeys(body.questions);
+      const taken = await db.query.assessmentAttempts.findFirst({ where: eq(assessmentAttempts.assessmentId, assessment.id), columns: { id: true } });
+      if (taken) {
+        throw new AppError("EXAM_IN_USE", "Candidates have already sat this exam, so its questions can't change. Switch it off and create a new one.", 409);
+      }
+    }
+
+    const updated = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(assessments)
+        .set({
+          title: body.title,
+          description: body.description ?? null,
+          durationMinutes: body.durationMinutes,
+          passingScorePercent: body.passingScorePercent,
+          language: body.language || null,
+          maxAttempts: body.maxAttempts,
+          ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(assessments.id, assessment.id))
+        .returning();
+      if (body.questions) {
+        await tx.delete(assessmentQuestions).where(eq(assessmentQuestions.assessmentId, assessment.id));
+        await tx.insert(assessmentQuestions).values(
+          body.questions.map((q, i) => ({ assessmentId: assessment.id, questionText: q.questionText, options: q.options, correctOptionId: q.correctOptionId, points: q.points, orderIndex: i })),
+        );
+      }
+      return row;
+    });
+
+    await writeAuditLog(db, { actorUserId: req.user!.sub, action: "assessment.update", entityType: "assessment", entityId: assessment.id, ipAddress: req.ip });
+    res.json({ assessment: updated });
+  });
+
+  // Deletes an exam nobody has sat; otherwise switches it off to keep the results.
+  router.delete("/:id", requireAuth(env), requireRole(...PRIVILEGED_ROLES), async (req, res) => {
+    const assessment = await db.query.assessments.findFirst({ where: eq(assessments.id, req.params.id) });
+    if (!assessment) throw new NotFoundError("Assessment not found");
+    const taken = await db.query.assessmentAttempts.findFirst({ where: eq(assessmentAttempts.assessmentId, assessment.id), columns: { id: true } });
+    if (taken) {
+      await db.update(assessments).set({ isActive: false, updatedAt: new Date() }).where(eq(assessments.id, assessment.id));
+    } else {
+      await db.delete(assessments).where(eq(assessments.id, assessment.id));
+    }
+    await writeAuditLog(db, { actorUserId: req.user!.sub, action: taken ? "assessment.deactivate" : "assessment.delete", entityType: "assessment", entityId: assessment.id, ipAddress: req.ip });
+    res.json({ deleted: !taken, deactivated: !!taken });
   });
 
   // --- Invite an application to take an assessment ---
@@ -119,9 +197,11 @@ export function assessmentsRouter(db: Database, env: Env) {
       throw new AppError("MISMATCHED_OPPORTUNITY", "This assessment belongs to a different opportunity", 400);
     }
 
-    const existingAttempt = await db.query.assessmentAttempts.findFirst({ where: eq(assessmentAttempts.applicationId, application.id) });
+    const existingAttempt = await db.query.assessmentAttempts.findFirst({
+      where: and(eq(assessmentAttempts.applicationId, application.id), inArray(assessmentAttempts.status, ["not_started", "in_progress"])),
+    });
     if (existingAttempt) {
-      throw new AppError("ATTEMPT_EXISTS", "This application already has an assessment attempt", 409);
+      throw new AppError("ATTEMPT_EXISTS", "This application already has an open assessment attempt", 409);
     }
 
     const attempt = await db.transaction(async (tx) => {

@@ -39,6 +39,25 @@ const envSchema = z.object({
   PORTAL_ZOOM_CLIENT_SECRET: z.string().optional(),
   // The Zoom user that hosts the meetings ("me" = the app's owner).
   PORTAL_ZOOM_USER: z.string().default("me"),
+  // Cashfree payments for program fees (same account as the Events site).
+  // Leave the app id unset to hide "Pay now"; candidates can still start
+  // the free trial and staff can mark a payment received by hand.
+  CASHFREE_APP_ID: z.string().optional(),
+  CASHFREE_SECRET_KEY: z.string().optional(),
+  CASHFREE_ENV: z.enum(["sandbox", "production"]).default("sandbox"),
+  // Test-only override of the Cashfree API base URL.
+  CASHFREE_API_BASE: z.string().optional(),
+  // GitHub issues <-> tasks. A fine-grained token with Issues read/write on
+  // the Inveon repos; leave unset to hide the GitHub buttons.
+  GITHUB_TOKEN: z.string().optional(),
+  // Secret set on the repo/org webhook (issues events) so closes sync back.
+  GITHUB_WEBHOOK_SECRET: z.string().optional(),
+  // Repo for issues from tasks that aren't in a project with its own repo, e.g. "inveon/internship-tasks".
+  GITHUB_DEFAULT_REPO: z.string().regex(/^[\w.-]+\/[\w.-]+$/).optional(),
+  // Test-only override of the GitHub API base URL.
+  GITHUB_API_BASE: z.string().optional(),
+  // Day of the month (India time) from which the payroll job drafts that month's payslips for HR to review.
+  PAYROLL_DRAFT_DAY: z.coerce.number().int().min(1).max(28).default(25),
   // Require candidates to verify their email before applying. Off by
   // default so accounts created before email sending was configured aren't
   // locked out; switch on once SMTP is working.

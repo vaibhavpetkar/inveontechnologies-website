@@ -30,12 +30,12 @@ export default function Assessments() {
 
   return (
     <DashboardShell>
-      <h1>Your assessments</h1>
-      <p>Assessments you've been invited to take.</p>
+      <h1>Your exams</h1>
+      <p>Exams for the openings you've applied to.</p>
 
       {error && <div className="error-banner" style={{ marginTop: "1rem" }}>{error}</div>}
       {!error && apps === null && <p className="empty">Loading…</p>}
-      {apps?.length === 0 && <p className="empty">No assessments yet. You'll see one here when a reviewer invites you.</p>}
+      {apps?.length === 0 && <p className="empty">No exams yet. You'll see one here after you apply to an opening that has an exam.</p>}
 
       <div className="stack">
         {apps?.map((a) => (
@@ -46,9 +46,9 @@ export default function Assessments() {
                 <div className="card-meta">{a.businessId}</div>
               </div>
               {a.status === "assessment_invited" ? (
-                <Link href={`/assessments/${a.id}`} className="btn">Start</Link>
+                <Link href={`/assessments/${a.id}`} className="btn">Take exam</Link>
               ) : (
-                <span className="badge badge-good">Completed</span>
+                <Link href={`/assessments/${a.id}`} className="btn btn-secondary">See result</Link>
               )}
             </div>
           </div>

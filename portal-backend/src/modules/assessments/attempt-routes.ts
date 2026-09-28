@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
 import {
   assessmentAttempts,
@@ -13,8 +13,8 @@ import { requireAuth } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import { scoreAttempt } from "./scoring.js";
-import { isSystemTransitionAllowed, type ApplicationStatus } from "../applications/state-machine.js";
-import { applyApplicationTransition } from "../applications/transition-helper.js";
+import type { ApplicationStatus } from "../applications/state-machine.js";
+import { attemptsUsedByExam, examsForOpportunity, resolveAfterAttempt } from "./exams.js";
 import type { Env } from "../shared/env.js";
 import { canStaffAccessApplication } from "../applications/access.js";
 
@@ -53,6 +53,7 @@ async function resolveExpiryIfNeeded(db: Database, attempt: typeof assessmentAtt
   const assessment = await db.query.assessments.findFirst({ where: eq(assessments.id, attempt.assessmentId) });
   const result = scoreAttempt(questions, [], assessment?.passingScorePercent ?? 60);
 
+  let finalizedHere = false;
   const [updated] = await db.transaction(async (tx) => {
     // Conditional on still being in_progress, so a concurrent submit/expiry
     // can't both finalize the attempt (and collide on the answers' unique key).
@@ -74,25 +75,13 @@ async function resolveExpiryIfNeeded(db: Database, attempt: typeof assessmentAtt
         pointsAwarded: a.pointsAwarded,
       })),
     );
-
-    const application = await tx.query.applications.findFirst({ where: eq(applications.id, attempt.applicationId) });
-    if (application && isSystemTransitionAllowed(application.status as ApplicationStatus, "assessment_completed")) {
-      await tx
-        .update(applications)
-        .set({ status: "assessment_completed", updatedAt: new Date() })
-        .where(eq(applications.id, application.id));
-      const { applicationEvents } = await import("../shared/db/schema.js");
-      await tx.insert(applicationEvents).values({
-        applicationId: application.id,
-        fromStatus: "assessment_invited",
-        toStatus: "assessment_completed",
-        actorUserId: null,
-        note: `Assessment attempt expired without submission (scored ${result.scorePercent}%)`,
-      });
-    }
+    finalizedHere = true;
     return [row];
   });
 
+  if (finalizedHere) {
+    await resolveAfterAttempt(db, { applicationId: attempt.applicationId, assessmentId: attempt.assessmentId, scorePercent: result.scorePercent, passed: result.passed, actorUserId: null });
+  }
   return updated;
 }
 
@@ -115,12 +104,10 @@ export function attemptRouter(db: Database, env: Env) {
   }
 
   /**
-   * Look up the attempt belonging to an application. Without this a
-   * candidate has no way to reach their own assessment: every other
-   * attempt route is keyed by attempt id, and that id was previously
-   * only ever surfaced in the invite email — which is stubbed and never
-   * actually sent (Phase 9 doesn't exist). Registered BEFORE "/:id" so
-   * the literal "by-application" segment isn't captured as an id.
+   * Everything the exam page needs for one application: the exams the
+   * candidate can pick from (one per language), attempts used and left on
+   * each, and every attempt so far with the newest first. Registered
+   * before "/:id" so "by-application" isn't captured as an id.
    */
   router.get("/by-application/:applicationId", requireAuth(env), async (req, res) => {
     const application = await db.query.applications.findFirst({ where: eq(applications.id, req.params.applicationId) });
@@ -130,10 +117,86 @@ export function attemptRouter(db: Database, env: Env) {
       throw new ForbiddenError();
     }
 
-    const attempt = await db.query.assessmentAttempts.findFirst({ where: eq(assessmentAttempts.applicationId, application.id) });
-    if (!attempt) throw new NotFoundError("No assessment attempt exists for this application");
+    let attempts = await db.query.assessmentAttempts.findMany({
+      where: eq(assessmentAttempts.applicationId, application.id),
+      orderBy: [desc(assessmentAttempts.createdAt)],
+    });
+    // Finalize a timed-out attempt before reporting on it.
+    const stale = attempts.find((a) => a.status === "in_progress");
+    if (stale) {
+      const resolved = await resolveExpiryIfNeeded(db, stale);
+      if (resolved.status !== stale.status) {
+        attempts = attempts.map((a) => (a.id === stale.id ? resolved : a));
+      }
+    }
+    const current = await db.query.applications.findFirst({ where: eq(applications.id, application.id) });
 
-    res.json({ attempt });
+    const exams = await examsForOpportunity(db, application.opportunityId);
+    const used = await attemptsUsedByExam(db, application.id);
+    // Exams that were attempted but later switched off still need a name.
+    const knownIds = new Set(exams.map((e) => e.id));
+    const extraIds = [...new Set(attempts.map((a) => a.assessmentId))].filter((id) => !knownIds.has(id));
+    const extra = extraIds.length
+      ? await db.query.assessments.findMany({ where: inArray(assessments.id, extraIds), columns: { id: true, title: true, language: true } })
+      : [];
+    const names = new Map([...exams, ...extra].map((e) => [e.id, { title: e.title, language: e.language }]));
+
+    res.json({
+      applicationStatus: current?.status ?? application.status,
+      exams: exams.map((e) => ({ ...e, attemptsUsed: used.get(e.id) ?? 0, attemptsLeft: Math.max(0, e.maxAttempts - (used.get(e.id) ?? 0)) })),
+      attempts: attempts.map((a) => ({ ...a, examTitle: names.get(a.assessmentId)?.title ?? "Exam", language: names.get(a.assessmentId)?.language ?? null })),
+      // Kept for older clients that expect a single attempt.
+      attempt: attempts[0] ?? null,
+    });
+  });
+
+  /**
+   * The candidate picks which exam (language) to sit. Creates a fresh
+   * attempt when they have attempts left, or hands back the one they
+   * already opened and haven't finished.
+   */
+  router.post("/by-application/:applicationId/choose", requireAuth(env), async (req, res) => {
+    const { assessmentId } = z.object({ assessmentId: z.string().uuid() }).parse(req.body);
+    const application = await db.query.applications.findFirst({ where: eq(applications.id, req.params.applicationId) });
+    if (!application) throw new NotFoundError("Application not found");
+    if (application.userId !== req.user!.sub) throw new ForbiddenError();
+    if ((application.status as ApplicationStatus) !== "assessment_invited") {
+      throw new AppError("NOT_INVITED", "This application isn't waiting on an exam", 400);
+    }
+
+    const exams = await examsForOpportunity(db, application.opportunityId);
+    const exam = exams.find((e) => e.id === assessmentId);
+    if (!exam) throw new NotFoundError("Exam not found for this opening");
+
+    const open = await db.query.assessmentAttempts.findFirst({
+      where: and(eq(assessmentAttempts.applicationId, application.id), inArray(assessmentAttempts.status, ["not_started", "in_progress"])),
+    });
+    if (open) {
+      const resolved = await resolveExpiryIfNeeded(db, open);
+      if (resolved.status === "in_progress") {
+        throw new AppError("ATTEMPT_IN_PROGRESS", "Finish the exam you've already started first", 409);
+      }
+      if (resolved.status === "not_started") {
+        if (resolved.assessmentId === exam.id) {
+          res.json({ attempt: resolved });
+          return;
+        }
+        // Switching language before starting: drop the unused attempt so it doesn't count.
+        await db.delete(assessmentAttempts).where(and(eq(assessmentAttempts.id, resolved.id), eq(assessmentAttempts.status, "not_started")));
+      }
+    }
+
+    const used = (await attemptsUsedByExam(db, application.id)).get(exam.id) ?? 0;
+    if (used >= exam.maxAttempts) {
+      throw new AppError("NO_ATTEMPTS_LEFT", `You've used all ${exam.maxAttempts} attempt${exam.maxAttempts === 1 ? "" : "s"} for this exam`, 409);
+    }
+
+    const [attempt] = await db
+      .insert(assessmentAttempts)
+      .values({ applicationId: application.id, assessmentId: exam.id, attemptNumber: used + 1 })
+      .returning();
+    await writeAuditLog(db, { actorUserId: req.user!.sub, action: "assessment_attempt.choose", entityType: "assessment_attempt", entityId: attempt.id, metadata: { assessmentId: exam.id, attemptNumber: used + 1 }, ipAddress: req.ip });
+    res.status(201).json({ attempt });
   });
 
   router.post("/:id/start", requireAuth(env), async (req, res) => {
@@ -219,15 +282,7 @@ export function attemptRouter(db: Database, env: Env) {
       return row;
     });
 
-    if (isSystemTransitionAllowed(application.status as ApplicationStatus, "assessment_completed")) {
-      await applyApplicationTransition(db, {
-        applicationId: application.id,
-        from: "assessment_invited",
-        to: "assessment_completed",
-        actorUserId: req.user!.sub,
-        note: `Assessment submitted — scored ${result.scorePercent}% (${result.passed ? "pass" : "fail"})`,
-      });
-    }
+    await resolveAfterAttempt(db, { applicationId: application.id, assessmentId: attempt.assessmentId, scorePercent: result.scorePercent, passed: result.passed, actorUserId: req.user!.sub });
 
     await writeAuditLog(db, {
       actorUserId: req.user!.sub,
