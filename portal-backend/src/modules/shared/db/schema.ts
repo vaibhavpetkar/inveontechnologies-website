@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, boolean, jsonb, pgEnum, integer, primaryKey, unique, numeric, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, boolean, jsonb, pgEnum, integer, primaryKey, unique, numeric, index, date } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 /**
@@ -1387,3 +1387,94 @@ export const employmentCertificates = pgTable("employment_certificates", {
   revokedAt: timestamp("revoked_at", { withTimezone: true }),
   revokeReason: text("revoke_reason"),
 });
+
+export const filePurposeEnum = pgEnum("file_purpose", ["resume", "application_document", "employee_document", "task_attachment", "chat_attachment"]);
+
+/**
+ * Uploaded files. The bytes live in storage (a Docker volume on the server,
+ * see modules/files/storage.ts); this row is the metadata. Places that hold a
+ * file keep its URL, /api/v1/files/<id>, in their existing file_url column,
+ * and who may download it follows from where it is attached.
+ */
+export const storedFiles = pgTable(
+  "stored_files",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    uploadedBy: uuid("uploaded_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+    purpose: filePurposeEnum("purpose").notNull(),
+    originalName: text("original_name").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    sha256: text("sha256").notNull(),
+    storageKey: text("storage_key").notNull().unique(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ byUploader: index("stored_files_uploaded_by_idx").on(t.uploadedBy) }),
+);
+
+// --- Attendance and leave ---
+
+export const leaveTypeEnum = pgEnum("leave_type", ["casual", "sick", "earned", "unpaid"]);
+export const leaveStatusEnum = pgEnum("leave_status", ["pending", "approved", "rejected", "cancelled"]);
+export const attendanceStatusEnum = pgEnum("attendance_status", ["present", "half_day", "absent"]);
+export const workModeEnum = pgEnum("work_mode", ["office", "remote"]);
+
+/** Paid leave days a year by employee type (calendar year, no carry forward). Unpaid leave has no limit. */
+export const leavePolicies = pgTable(
+  "leave_policies",
+  {
+    employeeType: employeeTypeEnum("employee_type").notNull(),
+    leaveType: leaveTypeEnum("leave_type").notNull(),
+    daysPerYear: numeric("days_per_year", { precision: 4, scale: 1 }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.employeeType, t.leaveType] }) }),
+);
+
+export const holidays = pgTable("holidays", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  date: date("date", { mode: "string" }).notNull().unique(),
+  name: text("name").notNull(),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const leaveRequests = pgTable(
+  "leave_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    employeeId: uuid("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+    leaveType: leaveTypeEnum("leave_type").notNull(),
+    startDate: date("start_date", { mode: "string" }).notNull(),
+    endDate: date("end_date", { mode: "string" }).notNull(),
+    halfDay: boolean("half_day").notNull().default(false),
+    days: numeric("days", { precision: 4, scale: 1 }).notNull(), // working days, holidays and weekends excluded
+    reason: text("reason").notNull(),
+    status: leaveStatusEnum("status").notNull().default("pending"),
+    decidedBy: uuid("decided_by").references(() => users.id, { onDelete: "set null" }),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    decisionNote: text("decision_note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ byEmployee: index("leave_requests_employee_idx").on(t.employeeId, t.startDate) }),
+);
+
+/** One row per person per day they checked in, or HR marked. */
+export const attendanceRecords = pgTable(
+  "attendance_records",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    employeeId: uuid("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+    date: date("date", { mode: "string" }).notNull(),
+    status: attendanceStatusEnum("status").notNull().default("present"),
+    workMode: workModeEnum("work_mode"),
+    checkInAt: timestamp("check_in_at", { withTimezone: true }),
+    checkOutAt: timestamp("check_out_at", { withTimezone: true }),
+    note: text("note"),
+    markedBy: uuid("marked_by").references(() => users.id, { onDelete: "set null" }), // null = the person checked in themselves
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ uniqDay: unique("attendance_employee_date_unique").on(t.employeeId, t.date) }),
+);

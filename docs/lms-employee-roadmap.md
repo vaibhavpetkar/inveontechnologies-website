@@ -84,7 +84,13 @@ Each phase is one or two PRs, shippable on its own, and ends with the feature us
 **Built (live classes):** staff schedule a live class (or a weekly run of up to 26) from a course page. Everyone learning the course gets a calendar invite, and people who enroll later are added to the classes still to come. Classes show on the calendar in green with a link back to the course, and a course page lists the next ones with a Join button. A weekly series can be cancelled in one go.
 
 ### Phase F — Deferred items (only if wanted)
-Cashfree payments (decision #10 / Phase 5), attendance and leave, payroll, XLSX/PDF report exports, real file storage for resumes/documents/attachments (every file field is still a placeholder URL — this becomes urgent once people upload documents during onboarding, so it may move up into Phase C).
+Cashfree payments (decision #10 / Phase 5), attendance and leave, payroll, XLSX/PDF report exports, real file storage for resumes/documents/attachments.
+
+**Built (report exports):** a Reports page for HR and admins with 12 reports (now showing names and titles instead of ids, and adding attendance, leave and payroll), date presets, a preview, and downloads as Excel (.xlsx, written without extra libraries), PDF (landscape table with page numbers) or CSV.
+
+**Built (attendance and leave):** people check in and out (office or remote) from the Attendance page, see their month and their leave balance, and ask for casual, sick, earned or unpaid leave. Their manager (or HR) approves it from Leave requests, with notifications and emails each way. Staff see the team's day and can mark someone present, half day or absent. HR keeps the holiday list and the paid leave each employee type gets (defaults: full time 12 casual, 6 sick, 15 earned; interns 6 casual, 3 sick). Unpaid leave and absences flow into payroll as loss-of-pay days.
+
+**Built (file storage):** uploads go to a Docker volume on the server (`PORTAL_UPLOAD_DIR`, decision below) through `POST /api/v1/files`, and are served by `GET /api/v1/files/:id` only to people allowed to see them (docs/permissions.md). Candidates add a resume on their profile and upload requested documents from their journey page; the hiring team asks for, accepts or sends back documents from the applicant drawer, with notifications and emails each way. Tasks have a Files panel and chat messages can carry up to 5 files, with image previews.
 
 ## 4. First PR to open
 
@@ -101,7 +107,7 @@ Why this first: it's pure upside on APIs that are already built and tested, it s
 
 1. **Meeting provider for Phase E** — Google Meet, Zoom, or both. Recommendation: Google Meet first, since it also syncs to Google Calendar; Zoom as a second adapter.
 2. **Internship enrollment model** — is an internship always "apply and get selected", or can some programs be open self-enroll (possibly paid)? Default assumed here: both, controlled by a per-program `enrollmentMode` flag.
-3. **File storage** — where uploaded documents should live (S3-compatible bucket, or a volume on the VPS). Needed before Phase C ships document uploads.
+3. **File storage** — decided: a Docker volume on the server (`portal-uploads`). The storage code sits behind a small interface (`files/storage.ts`) so an S3-compatible bucket can replace it later.
 
 ## 6. Branching
 

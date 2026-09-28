@@ -1,3 +1,4 @@
+import type { StoredFile } from "./files";
 export type EnrollmentStatus = "awaiting_choice" | "trial" | "trial_expired" | "paid" | "waived" | "cancelled";
 
 export interface JoiningDetails {
@@ -65,8 +66,20 @@ export interface Session {
   location: string | null;
 }
 
+export interface DocumentRequest {
+  id: string;
+  documentName: string;
+  status: "requested" | "uploaded" | "verified" | "rejected";
+  fileUrl: string | null;
+  file: StoredFile | null;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Journey {
-  candidate: { email: string; fullName: string | null; phone: string | null } | null;
+  candidate: { email: string; fullName: string | null; phone: string | null; resume: StoredFile | null } | null;
+  documents: DocumentRequest[];
   application: { id: string; status: string; businessId: string | null; createdAt: string; userId: string };
   opportunity: { id: string; title: string; kind: string; programFee: number | null; trialHours: number } | null;
   exam: { id: string; status: string; scorePercent: number | null; passed: boolean | null; submittedAt: string | null; language: string | null; title: string }[];

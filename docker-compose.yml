@@ -65,6 +65,10 @@ services:
     environment:
       NODE_ENV: production
       PORTAL_PORT: 4000
+      PORTAL_UPLOAD_DIR: /app/uploads
+    volumes:
+      # Resumes, documents and attachments. Keep this volume in backups.
+      - portal-uploads:/app/uploads
     networks:
       - crm_network
       - portal_internal
@@ -165,6 +169,7 @@ volumes:
   certbot-conf:
   certbot-www:
   portal-postgres-data:
+  portal-uploads:
   events-postgres-data:
   events-web-static:
   events-uploads:

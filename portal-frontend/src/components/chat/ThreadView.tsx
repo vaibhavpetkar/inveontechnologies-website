@@ -1,11 +1,15 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, Hash, Info, Megaphone, SendHorizontal, Trash2, Users } from "lucide-react";
+import { ArrowLeft, Hash, Info, Megaphone, Paperclip, SendHorizontal, Trash2, Users } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { apiFetch, ApiError } from "../../lib/api";
 import { dayLabel, splitMentions, targetFor, type ChatMessage, type ChatPerson, type ThreadInfo, type ThreadKind } from "../../lib/chat";
 import { Avatar } from "../Avatar";
 import { ThreadInfoDrawer } from "./ThreadInfoDrawer";
+import { ChatAttachments } from "./ChatAttachments";
+import { UploadButton } from "../files/UploadButton";
+import { FileChip } from "../files/FileChip";
+import type { StoredFile } from "../../lib/files";
 
 interface Props {
   kind: ThreadKind;
@@ -28,6 +32,7 @@ export function ThreadView({ kind, id, people, inboxTitle, onBack, onChanged, on
   const [error, setError] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [pending, setPending] = useState<StoredFile[]>([]);
   const [showInfo, setShowInfo] = useState(false);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
@@ -142,16 +147,17 @@ export function ThreadView({ kind, id, people, inboxTitle, onBack, onChanged, on
 
   async function send() {
     const body = text.trim();
-    if (!body || sending) return;
+    if ((!body && pending.length === 0) || sending) return;
     setSending(true);
     setError(null);
     const mentionedUserIds = [...mentioned.current.values()].filter((p) => body.includes(`@${p.name}`)).map((p) => p.id);
     try {
-      const r = await apiFetch<{ message: ChatMessage }>("/api/v1/messages", { method: "POST", body: { ...target, body, mentionedUserIds }, accessToken });
+      const r = await apiFetch<{ message: ChatMessage }>("/api/v1/messages", { method: "POST", body: { ...target, body, mentionedUserIds, fileUrls: pending.map((f) => f.url) }, accessToken });
       stickToBottom.current = true;
       setMessages((m) => mergeMessages(m ?? [], [r.message]));
       markRead(r.message.seqNumber);
       setText("");
+      setPending([]);
       mentioned.current.clear();
       requestAnimationFrame(autosize);
     } catch (err) {
@@ -232,9 +238,12 @@ export function ThreadView({ kind, id, people, inboxTitle, onBack, onChanged, on
                   {!mine && showNames && (grouped ? <span className="chat-avatar-space" /> : <Avatar email={author?.email ?? m.authorId} name={author?.name} size={30} />)}
                   <div className={`chat-bubble${deleted ? " deleted" : ""}`}>
                     {!mine && showNames && !grouped && <span className="chat-author">{author?.name ?? "Someone"}</span>}
-                    <span className="chat-text">
-                      {deleted ? "This message was deleted" : splitMentions(m.body, [...peopleById.values()]).map((p, j) => (p.mention ? <span key={j} className={`chat-mention${p.mention.id === user?.id ? " me" : ""}`}>{p.text}</span> : <Fragment key={j}>{p.text}</Fragment>))}
-                    </span>
+                    {!deleted && m.attachments && m.attachments.length > 0 && <ChatAttachments items={m.attachments} />}
+                    {(deleted || m.body) && (
+                      <span className="chat-text">
+                        {deleted ? "This message was deleted" : splitMentions(m.body, [...peopleById.values()]).map((p, j) => (p.mention ? <span key={j} className={`chat-mention${p.mention.id === user?.id ? " me" : ""}`}>{p.text}</span> : <Fragment key={j}>{p.text}</Fragment>))}
+                      </span>
+                    )}
                     <span className="chat-meta">
                       {m.editedAt && !deleted && "edited · "}
                       {new Date(m.createdAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
@@ -268,6 +277,25 @@ export function ThreadView({ kind, id, people, inboxTitle, onBack, onChanged, on
           <p className="chat-readonly"><Megaphone size={15} /> Only admins can post in #{info.title}.</p>
         ) : (
           <>
+            {pending.length > 0 && (
+              <div className="chat-pending">
+                {pending.map((f) => (
+                  <FileChip key={f.id} file={f} onRemove={() => setPending((list) => list.filter((x) => x.id !== f.id))} removeLabel="Don't send" />
+                ))}
+              </div>
+            )}
+            <UploadButton
+              purpose="chat_attachment"
+              className="chat-attach"
+              label=""
+              title="Attach a file"
+              icon={<Paperclip size={19} />}
+              disabled={pending.length >= 5}
+              onUploaded={(f) => {
+                setPending((list) => [...list, f]);
+                input.current?.focus();
+              }}
+            />
             <textarea
               ref={input}
               rows={1}
@@ -278,7 +306,7 @@ export function ThreadView({ kind, id, people, inboxTitle, onBack, onChanged, on
               onKeyDown={onKeyDown}
               maxLength={10000}
             />
-            <motion.button className="chat-send" aria-label="Send" onClick={send} disabled={!text.trim() || sending} whileTap={{ scale: 0.9 }}>
+            <motion.button className="chat-send" aria-label="Send" onClick={send} disabled={(!text.trim() && pending.length === 0) || sending} whileTap={{ scale: 0.9 }}>
               <SendHorizontal size={19} />
             </motion.button>
           </>

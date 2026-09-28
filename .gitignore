@@ -130,3 +130,6 @@ test-results/
 .vercel/
 .netlify/
 firebase-debug.log*
+
+# Uploaded files in local development
+portal-backend/uploads/

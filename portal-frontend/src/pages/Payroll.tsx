@@ -162,6 +162,7 @@ export default function Payroll() {
                 </span>
                 <span role="cell" data-label="LOP days">
                   {r.slipStatus === "draft" ? (
+                    <>
                     <input
                       className="lop-input"
                       type="number"
@@ -174,6 +175,22 @@ export default function Payroll() {
                       onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
                       aria-label={`Loss of pay days for ${r.name}`}
                     />
+                    {r.leaveLopDays !== undefined && r.leaveLopDays !== Number(lop[r.slipId!] ?? 0) && (
+                      <button
+                        className="link-button lop-hint"
+                        title="Unpaid leave and absences this month"
+                        onClick={() => {
+                          setLop((l) => ({ ...l, [r.slipId!]: String(r.leaveLopDays) }));
+                          act(async () => {
+                            await apiFetch(`/api/v1/payroll/slips/${r.slipId}`, { method: "PATCH", body: { lopDays: r.leaveLopDays }, accessToken });
+                            return `Updated ${r.name.split(" ")[0]}'s slip`;
+                          });
+                        }}
+                      >
+                        Use {r.leaveLopDays} from attendance
+                      </button>
+                    )}
+                    </>
                   ) : (
                     <span className="muted-small">{r.slipId ? Number(r.lopDays) : "–"}</span>
                   )}
