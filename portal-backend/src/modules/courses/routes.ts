@@ -17,6 +17,7 @@ import type { Env } from "../shared/env.js";
 import { logger } from "../shared/logger.js";
 import { notify } from "../notifications/service.js";
 import { issueCertificateRow } from "../certificates/routes.js";
+import { joinUpcomingClasses } from "./classes.js";
 
 const PRIVILEGED_ROLES = ["hr", "admin", "super_admin"] as const;
 
@@ -246,6 +247,7 @@ export function coursesRouter(db: Database, env: Env) {
     }
 
     await ensureProgressRows(db, enrollment.id, course.id);
+    await joinUpcomingClasses(db, course.id, req.user!.sub);
     await writeAuditLog(db, {
       actorUserId: req.user!.sub,
       action: "course.enroll",

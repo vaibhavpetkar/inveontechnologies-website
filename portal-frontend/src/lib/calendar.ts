@@ -12,7 +12,10 @@ export interface Attendee {
 
 export interface Meeting {
   id: string;
-  kind: "meeting";
+  /** A "class" is a live class for a course; otherwise it behaves like any meeting. */
+  kind: "meeting" | "class";
+  course?: { id: string; title: string } | null;
+  seriesId?: string | null;
   title: string;
   description: string | null;
   location: string | null;
@@ -51,6 +54,9 @@ export interface TaskDue {
 
 export type CalendarItem = Meeting | Interview | TaskDue;
 
+/** Meetings and live classes: things with attendees, answers and an organiser. */
+export const isMeeting = (item: CalendarItem): item is Meeting => item.kind === "meeting" || item.kind === "class";
+
 export interface ProviderInfo {
   name: Provider;
   label: string;
@@ -66,6 +72,7 @@ export interface Colleague {
 
 export const KIND_META: Record<CalendarItem["kind"], { label: string; tone: string }> = {
   meeting: { label: "Meeting", tone: "blue" },
+  class: { label: "Live class", tone: "green" },
   interview: { label: "Interview", tone: "violet" },
   task_due: { label: "Task due", tone: "amber" },
 };

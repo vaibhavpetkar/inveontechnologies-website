@@ -9,6 +9,7 @@ import { notifyHiringTeam } from "../assessments/exams.js";
 import { ensureProgressRows } from "../courses/routes.js";
 import { formatWhen } from "../shared/format.js";
 import { logger } from "../shared/logger.js";
+import { joinUpcomingClasses } from "../courses/classes.js";
 
 export type ProgramEnrollment = typeof programEnrollments.$inferSelect;
 
@@ -114,6 +115,7 @@ export async function startProgram(db: Database, enrollment: ProgramEnrollment, 
         })
         .returning();
       if (row) await ensureProgressRows(db, row.id, course.id);
+      await joinUpcomingClasses(db, course.id, enrollment.userId);
     }
   } catch (err) {
     logger.error({ err, enrollmentId: enrollment.id }, "Could not enroll program courses");

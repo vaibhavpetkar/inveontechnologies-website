@@ -8,6 +8,7 @@ import { useAuth } from "../context/AuthContext";
 import { API_BASE, apiFetch, ApiError } from "../lib/api";
 import { AUTHOR_ROLES, coverFor, minutesLabel, priceLabel, TYPE_META } from "../lib/lms";
 import { useCourse } from "../lib/useCourse";
+import { LiveClasses } from "../components/courses/LiveClasses";
 
 export default function CourseDetail() {
   const [, params] = useRoute("/courses/:id");
@@ -167,6 +168,7 @@ export default function CourseDetail() {
               })}
             </div>
           )}
+          <LiveClasses courseId={course.id} courseTitle={course.title} />
         </aside>
       </div>
     </DashboardShell>
