@@ -369,7 +369,7 @@ export default function TakeAssessment() {
                   : `You needed ${exam?.passingScorePercent ?? stage.exam?.passingScorePercent ?? 0}% to pass.${left.length ? " You can try again." : " You've used all your attempts, so the team will review your application."}`}
               </p>
               <div className="exam-ready-actions">
-                <Link href="/candidate" className="btn btn-secondary">My applications</Link>
+                <Link href={passed ? `/journey/${applicationId}` : "/candidate"} className={passed ? "btn" : "btn btn-secondary"}>{passed ? "See next steps" : "My applications"}</Link>
                 {!passed && left.length > 0 && <button className="btn" onClick={() => setStage({ kind: "pick" })}><RotateCcw size={16} /> Try again</button>}
               </div>
             </motion.div>

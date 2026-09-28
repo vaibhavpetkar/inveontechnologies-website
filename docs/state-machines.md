@@ -22,7 +22,7 @@ stateDiagram-v2
     Submitted --> AssessmentInvited: system — the opening has an active exam, so applying invites straight away
     UnderReview --> AssessmentInvited: invite to assessment (dedicated endpoint)
     AssessmentInvited --> AssessmentCompleted: system — a passing attempt, or the last attempt on every exam is used up
-    AssessmentCompleted --> Shortlisted: admin approval
+    AssessmentCompleted --> Shortlisted: admin approval, or system — HR round feedback "pass"
     AssessmentCompleted --> Rejected: admin reject
     UnderReview --> Shortlisted: admin approval (assessment optional)
     UnderReview --> Rejected: reject directly
@@ -39,7 +39,7 @@ stateDiagram-v2
 **Implemented in `applications/state-machine.ts`** as three explicit transition tables — admin, candidate, and system — rather than one shared table, because each has a different actor and different validity rules:
 - **Admin transitions** (`isAdminTransitionAllowed`): used by the generic `/applications/:id/transition` endpoint. Notably this table does *not* allow moving directly into `AssessmentInvited` or `AssessmentCompleted` from that generic endpoint — those have side effects (creating an attempt; requiring a resolved score) that the generic endpoint doesn't know how to produce.
 - **Candidate transitions** (`isCandidateTransitionAllowed`): only ever `-> Withdrawn`, from any non-terminal state.
-- **System transitions** (`isSystemTransitionAllowed`): two, both in `assessments/exams.ts`. `Submitted -> AssessmentInvited` fires when a candidate applies to an opening that has at least one active exam with questions. `AssessmentInvited -> AssessmentCompleted` fires after a scored attempt (submitted or lazily expired) when the attempt passed, or when it failed and no exam on the opening has attempts left. A failed attempt with retries remaining leaves the application in `AssessmentInvited`. Kept separate from the admin table so it's obvious at the call site that this isn't a privilege-checked action.
+- **System transitions** (`isSystemTransitionAllowed`): three. The first two live in `assessments/exams.ts`; the third, `UnderReview/AssessmentCompleted -> Shortlisted`, fires in `payments/enrollments.ts` when an interviewer records "pass" on the HR round. That same step creates the candidate's program enrollment (pay the opening's program fee through Cashfree, or start the free trial; no fee means straight to the joining form). `Submitted -> AssessmentInvited` fires when a candidate applies to an opening that has at least one active exam with questions. `AssessmentInvited -> AssessmentCompleted` fires after a scored attempt (submitted or lazily expired) when the attempt passed, or when it failed and no exam on the opening has attempts left. A failed attempt with retries remaining leaves the application in `AssessmentInvited`. Kept separate from the admin table so it's obvious at the call site that this isn't a privilege-checked action.
 - **Language exams**: an opening can have several exams (one per language or track), each with its own pass mark and `max_attempts`. The candidate picks one, and passing any one is enough. Attempts are numbered per application (`attempt_number`); an exam with attempts on record can't have its questions edited, and deleting it switches it off instead.
 
 ## Assessment attempt
@@ -60,3 +60,22 @@ stateDiagram-v2
 1. Transitions are enforced **server-side only** — the API rejects any transition not in this table, regardless of what the client sends.
 2. Every transition writes an audit log entry (`actor`, `from`, `to`, `timestamp`, `reason` where applicable).
 3. Terminal states (`Archived`, `Rejected`, `Selected`, `Withdrawn`, `Scored`) are not re-openable through normal API calls — only through an explicit, audited admin override, if that's ever needed.
+
+
+## Program enrollment (after the HR round)
+
+```mermaid
+stateDiagram-v2
+    [*] --> AwaitingChoice: HR pass, opening has a fee
+    [*] --> Waived: HR pass, no fee
+    AwaitingChoice --> Trial: candidate starts the free trial (once)
+    AwaitingChoice --> Paid: Cashfree payment, or staff "Mark paid"
+    Trial --> TrialExpired: trial_ends_at passes (lazy on read + 5-minute sweep)
+    Trial --> Paid
+    TrialExpired --> Paid
+    AwaitingChoice --> Waived: staff waive
+    Trial --> Waived
+    TrialExpired --> Waived
+```
+
+Implemented in `payments/`. During a trial the opening's courses are enrolled with `payment_status = pending` and `payment_due_at = trial_ends_at`, so the LMS's existing overdue check pauses them when the trial ends; paying or waiving clears it. A payment is confirmed either by Cashfree's webhook (signature checked over the raw body) or by the return page calling `/program/enrollments/:id/verify`, which reads the order from Cashfree; both are idempotent. The joining form is open once the candidate is on trial, paid or waived.

@@ -95,7 +95,7 @@ export async function resolveAfterAttempt(
       kind: "assessment.passed",
       title: "Candidate passed the exam",
       body: (who, opp) => `${who} scored ${params.scorePercent}% on the ${label} for ${opp}. Schedule their HR round.`,
-      link: `/admin?application=${application.id}`,
+      link: `/opportunities/${application.opportunityId}?applicant=${application.id}`,
     });
     return;
   }

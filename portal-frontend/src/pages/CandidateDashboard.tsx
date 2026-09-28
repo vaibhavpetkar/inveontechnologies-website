@@ -84,12 +84,13 @@ export default function CandidateDashboard() {
 
             {app.status === "assessment_invited" && (
               <div className="notice notice-warn">
-                You've been invited to take an assessment.{" "}
-                <Link href="/assessments" style={{ fontWeight: 600 }}>Go to assessments →</Link>
+                Your exam is ready.{" "}
+                <Link href={`/assessments/${app.id}`} style={{ fontWeight: 600 }}>Take the exam →</Link>
               </div>
             )}
 
-            <div style={{ marginTop: "0.9rem", display: "flex", gap: "0.5rem" }}>
+            <div style={{ marginTop: "0.9rem", display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              {!["rejected", "withdrawn"].includes(app.status) && <Link href={`/journey/${app.id}`} className="btn">See next steps</Link>}
               <button className="btn btn-secondary" onClick={() => toggleTimeline(app.id)}>
                 {expanded === app.id ? "Hide history" : "View history"}
               </button>

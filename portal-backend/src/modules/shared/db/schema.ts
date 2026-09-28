@@ -135,6 +135,10 @@ export const opportunities = pgTable("opportunities", {
   kind: opportunityKindEnum("kind").notNull().default("job"),
   durationMonths: integer("duration_months"),
   stipendAmount: numeric("stipend_amount", { precision: 10, scale: 2 }), // per month, INR
+  // One-off program fee in INR, asked for after the HR round (pay now or
+  // start a free trial). Null or 0 = no fee, the step is skipped.
+  programFee: numeric("program_fee", { precision: 10, scale: 2 }),
+  trialHours: integer("trial_hours").notNull().default(24),
   startDate: timestamp("start_date", { withTimezone: true }),
   location: text("location"),
   publishedAt: timestamp("published_at", { withTimezone: true }),
@@ -1228,5 +1232,63 @@ export const calendarEventAttendees = pgTable(
   (t) => ({
     pk: primaryKey({ columns: [t.eventId, t.userId] }),
     byUser: index("calendar_event_attendees_user_idx").on(t.userId),
+  }),
+);
+
+
+/**
+ * After a candidate passes the HR round they get a program enrollment: pay
+ * the opening's program fee (Cashfree) or start a free trial first. Once
+ * paid (or on trial) they fill the joining form, and staff book their
+ * sessions on the calendar.
+ */
+export const programEnrollmentStatusEnum = pgEnum("program_enrollment_status", [
+  "awaiting_choice", // HR passed; candidate hasn't chosen pay or trial yet
+  "trial", // free trial running until trialEndsAt
+  "trial_expired",
+  "paid",
+  "waived", // no fee, or staff waived it
+  "cancelled",
+]);
+
+export const programEnrollments = pgTable("program_enrollments", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  applicationId: uuid("application_id").notNull().unique().references(() => applications.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  opportunityId: uuid("opportunity_id").notNull().references(() => opportunities.id, { onDelete: "cascade" }),
+  status: programEnrollmentStatusEnum("status").notNull().default("awaiting_choice"),
+  amount: numeric("amount", { precision: 10, scale: 2 }).notNull().default("0"),
+  trialHours: integer("trial_hours").notNull().default(24),
+  trialStartedAt: timestamp("trial_started_at", { withTimezone: true }),
+  trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
+  paidAt: timestamp("paid_at", { withTimezone: true }),
+  paymentNote: text("payment_note"),
+  joiningDetails: jsonb("joining_details"),
+  joiningSubmittedAt: timestamp("joining_submitted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const paymentOrderStatusEnum = pgEnum("payment_order_status", ["created", "paid", "failed", "dropped"]);
+
+export const paymentOrders = pgTable(
+  "payment_orders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    enrollmentId: uuid("enrollment_id").notNull().references(() => programEnrollments.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    // Our order id, also Cashfree's order_id.
+    orderId: text("order_id").notNull().unique(),
+    amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
+    currency: text("currency").notNull().default("INR"),
+    status: paymentOrderStatusEnum("status").notNull().default("created"),
+    paymentSessionId: text("payment_session_id"),
+    gatewayPaymentId: text("gateway_payment_id"),
+    lastEvent: jsonb("last_event"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    byEnrollment: index("payment_orders_enrollment_idx").on(t.enrollmentId),
   }),
 );

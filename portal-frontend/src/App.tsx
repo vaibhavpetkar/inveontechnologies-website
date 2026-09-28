@@ -13,6 +13,7 @@ import OpportunityEditor from "./pages/OpportunityEditor";
 import Profile from "./pages/Profile";
 import Assessments from "./pages/Assessments";
 import TakeAssessment from "./pages/TakeAssessment";
+import Journey from "./pages/Journey";
 import Courses from "./pages/Courses";
 import CourseDetail from "./pages/CourseDetail";
 import CourseBuilder from "./pages/CourseBuilder";
@@ -61,6 +62,7 @@ function AppRoutes() {
       <Route path="/profile"><Protected><Profile /></Protected></Route>
       <Route path="/assessments"><Protected><Assessments /></Protected></Route>
       <Route path="/assessments/:applicationId"><Protected><TakeAssessment /></Protected></Route>
+      <Route path="/journey/:applicationId"><Protected><Journey /></Protected></Route>
       <Route path="/courses"><Protected><Courses /></Protected></Route>
       <Route path="/courses/:id/edit"><Protected><CourseBuilder /></Protected></Route>
       <Route path="/courses/:id"><Protected><CourseDetail /></Protected></Route>

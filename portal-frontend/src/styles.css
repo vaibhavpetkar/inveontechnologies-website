@@ -1541,3 +1541,110 @@ a.outline-lesson:hover { background: var(--surface); }
   .exam-row-stats { order: 3; }
   .exams-panel-head { flex-direction: column; }
 }
+
+/* ---- Journey: HR round, pay or trial, joining form, sessions ---- */
+.field-note { align-self: center; margin: 0; }
+.journey-head { margin: 0.4rem 0 1.2rem; }
+.journey-head h1 { margin: 0.15rem 0 0; }
+.journey-steps { list-style: none; margin: 0 0 1.4rem; padding: 0; display: flex; gap: 0.4rem; counter-reset: none; overflow-x: auto; }
+.journey-step { flex: 1 1 0; min-width: 104px; display: flex; flex-direction: column; align-items: center; gap: 0.45rem; position: relative; text-align: center; font-size: 0.82rem; color: var(--muted); }
+.journey-step::before { content: ""; position: absolute; top: 18px; left: calc(-50% + 22px); right: calc(50% + 22px); height: 2px; background: var(--line); }
+.journey-step:first-child::before { display: none; }
+.journey-step.done::before, .journey-step.current::before { background: var(--primary); }
+.journey-dot { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--surface); border: 2px solid var(--line); color: var(--muted); position: relative; z-index: 1; transition: all 0.2s; }
+.journey-step.done .journey-dot { background: var(--primary); border-color: var(--primary); color: #fff; }
+.journey-step.current .journey-dot { border-color: var(--primary); color: var(--primary); background: var(--paper); box-shadow: 0 0 0 5px rgba(37, 99, 235, 0.14); }
+.journey-step.stopped .journey-dot { border-color: var(--danger); color: var(--danger); }
+.journey-step.current .journey-label { color: var(--ink); font-weight: 600; }
+.journey-label em { display: block; font-style: normal; font-size: 0.72rem; color: var(--primary); }
+.journey-body { display: grid; gap: 1rem; }
+.journey-panel h2 { display: flex; align-items: center; gap: 0.5rem; font-size: 1.15rem; margin: 0 0 0.4rem; }
+.journey-panel > p { margin: 0 0 1rem; max-width: 62ch; }
+.journey-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 1rem; }
+.trial-banner { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding: 0.7rem 0.9rem; border-radius: 12px; background: rgba(245, 158, 11, 0.12); color: #92400e; margin-bottom: 1rem; }
+.trial-banner span { color: var(--muted); font-size: 0.88rem; }
+.pay-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.9rem; }
+.pay-card { display: flex; flex-direction: column; gap: 0.5rem; padding: 1.2rem; border-radius: 16px; border: 1px solid var(--line); background: var(--paper); }
+.pay-card.primary { border-color: rgba(37, 99, 235, 0.45); background: linear-gradient(160deg, rgba(37, 99, 235, 0.07), transparent 60%), var(--paper); box-shadow: var(--shadow-sm, 0 2px 8px rgba(15, 23, 42, 0.06)); }
+.pay-card > strong { font-family: var(--font-display, inherit); font-size: 1.6rem; color: var(--ink); }
+.pay-card .btn { margin-top: auto; justify-content: center; }
+.pay-card-icon { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: rgba(37, 99, 235, 0.1); color: var(--primary); }
+.secure-note { display: flex; align-items: center; gap: 0.35rem; margin: 0.9rem 0 0; }
+.joining-form fieldset { border: 0; padding: 0; margin: 0 0 1rem; }
+.joining-form legend { font-weight: 600; font-size: 0.92rem; margin-bottom: 0.5rem; color: var(--ink); }
+.field-label { display: block; font-size: 0.85rem; font-weight: 500; margin-bottom: 0.35rem; }
+.slot-picks { display: flex; flex-wrap: wrap; gap: 0.45rem; }
+.slot-picks button { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.45rem 0.85rem; border-radius: 999px; border: 1px solid var(--line); background: var(--paper); font: inherit; font-size: 0.86rem; cursor: pointer; transition: all 0.15s; }
+.slot-picks button.on { border-color: var(--primary); background: rgba(37, 99, 235, 0.1); color: var(--primary-dark, var(--primary)); font-weight: 600; }
+.session-list { list-style: none; margin: 0.4rem 0 0; padding: 0; display: grid; gap: 0.5rem; }
+.session-list li { display: flex; align-items: center; gap: 0.9rem; padding: 0.7rem 0.9rem; border: 1px solid var(--line); border-radius: 12px; }
+.session-list li.live { border-color: var(--primary); background: rgba(37, 99, 235, 0.05); }
+.session-when { display: flex; flex-direction: column; align-items: center; min-width: 58px; padding-right: 0.8rem; border-right: 1px solid var(--line); }
+.session-when strong { font-size: 0.95rem; }
+.session-when span { font-size: 0.78rem; color: var(--muted); }
+.session-what { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.session-list .btn { margin-left: auto; }
+
+/* Staff: applicants on an opening */
+.applicants-panel { margin-top: 1.5rem; }
+.seg-tabs { display: flex; gap: 0.3rem; flex-wrap: wrap; margin: 0.2rem 0 0.9rem; }
+.seg-tabs button { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.35rem 0.75rem; border-radius: 999px; border: 1px solid var(--line); background: var(--paper); font: inherit; font-size: 0.84rem; cursor: pointer; color: var(--muted); }
+.seg-tabs button span { font-size: 0.75rem; background: var(--surface); border-radius: 999px; padding: 0 0.4rem; }
+.seg-tabs button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.seg-tabs button.on span { background: rgba(255, 255, 255, 0.18); }
+.applicant-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
+.applicant-row { width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 0.8rem; padding: 0.6rem 0.8rem; border-radius: 12px; border: 1px solid var(--line); background: var(--paper); font: inherit; text-align: left; cursor: pointer; transition: border-color 0.15s, transform 0.15s; }
+.applicant-row:hover { border-color: rgba(37, 99, 235, 0.45); transform: translateY(-1px); }
+.applicant-who { display: flex; flex-direction: column; min-width: 0; }
+.applicant-who strong, .applicant-who span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.score-pill { display: inline-block; font-size: 0.76rem; font-weight: 600; padding: 0.12rem 0.5rem; border-radius: 999px; background: var(--surface); color: var(--muted); margin-left: 0.35rem; text-transform: capitalize; }
+.score-pill.good { background: rgba(34, 197, 94, 0.14); color: #15803d; }
+.score-pill.bad { background: var(--danger-surface); color: var(--danger); }
+.next-pill { font-size: 0.76rem; font-weight: 600; padding: 0.2rem 0.6rem; border-radius: 999px; white-space: nowrap; }
+.next-pill.warn { background: rgba(245, 158, 11, 0.15); color: #b45309; }
+.next-pill.good { background: rgba(34, 197, 94, 0.14); color: #15803d; }
+.next-pill.muted { background: var(--surface); color: var(--muted); }
+.applicant-drawer { width: min(520px, 100vw); }
+.applicant-title { display: flex; flex-direction: column; min-width: 0; }
+.applicant-title .drawer-title { margin: 0; }
+.applicant-sections { display: grid; gap: 1.1rem; }
+.applicant-sections section { border-top: 1px solid var(--line); padding-top: 0.9rem; }
+.applicant-sections h3 { display: flex; align-items: center; gap: 0.4rem; font-size: 0.95rem; margin: 0 0 0.6rem; }
+.applicant-contact { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; font-size: 0.88rem; }
+.applicant-contact a { display: inline-flex; align-items: center; gap: 0.3rem; color: var(--primary); text-decoration: none; }
+.mini-list { list-style: none; margin: 0 0 0.6rem; padding: 0; display: grid; gap: 0.35rem; }
+.mini-list li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; font-size: 0.9rem; }
+.interview-item > span:first-child { flex: 1; min-width: 0; }
+.interview-feedback { display: block; margin-top: 0.15rem; }
+.mini-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
+.inline-form { width: 100%; display: grid; gap: 0.5rem; padding: 0.8rem; margin-top: 0.4rem; border-radius: 12px; background: var(--surface); overflow: hidden; }
+.inline-form .field { margin: 0; }
+.decision-picks { display: flex; gap: 0.4rem; }
+.decision-picks button { flex: 1; padding: 0.45rem; border-radius: 10px; border: 1px solid var(--line); background: var(--paper); font: inherit; font-weight: 600; cursor: pointer; }
+.decision-picks button.pass.on { background: #16a34a; border-color: #16a34a; color: #fff; }
+.decision-picks button.hold.on { background: #d97706; border-color: #d97706; color: #fff; }
+.decision-picks button.fail.on { background: var(--danger); border-color: var(--danger); color: #fff; }
+.fee-status { display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 0.5rem; }
+.joining-dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 0.9rem; margin: 0; font-size: 0.88rem; }
+.joining-dl dt { color: var(--muted); }
+.joining-dl dd { margin: 0; overflow-wrap: anywhere; }
+.applicant-stage { border-top: 1px solid var(--line); padding-top: 0.9rem; }
+
+@media (max-width: 700px) {
+  .journey-step { min-width: 76px; font-size: 0.74rem; }
+  .journey-step::before { left: calc(-50% + 20px); right: calc(50% + 20px); }
+  .applicant-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .applicant-exam { display: none; }
+  .session-list li { flex-wrap: wrap; }
+}
+.journey-panel .secure-note { max-width: none; }
+.pay-options:has(> .pay-card:only-child) { grid-template-columns: minmax(0, 420px); }
+.trial-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 0.8rem; }
+.trial-strip .trial-banner { margin: 0; flex: 1 1 320px; }
+@media (max-width: 560px) {
+  .journey-steps { gap: 0.1rem; overflow: visible; }
+  .journey-step { min-width: 0; font-size: 0.68rem; gap: 0.3rem; }
+  .journey-dot { width: 30px; height: 30px; }
+  .journey-dot svg { width: 14px; height: 14px; }
+  .journey-step::before { top: 15px; left: calc(-50% + 17px); right: calc(50% + 17px); }
+}

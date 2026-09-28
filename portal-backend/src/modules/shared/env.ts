@@ -39,6 +39,14 @@ const envSchema = z.object({
   PORTAL_ZOOM_CLIENT_SECRET: z.string().optional(),
   // The Zoom user that hosts the meetings ("me" = the app's owner).
   PORTAL_ZOOM_USER: z.string().default("me"),
+  // Cashfree payments for program fees (same account as the Events site).
+  // Leave the app id unset to hide "Pay now"; candidates can still start
+  // the free trial and staff can mark a payment received by hand.
+  CASHFREE_APP_ID: z.string().optional(),
+  CASHFREE_SECRET_KEY: z.string().optional(),
+  CASHFREE_ENV: z.enum(["sandbox", "production"]).default("sandbox"),
+  // Test-only override of the Cashfree API base URL.
+  CASHFREE_API_BASE: z.string().optional(),
   // Require candidates to verify their email before applying. Off by
   // default so accounts created before email sending was configured aren't
   // locked out; switch on once SMTP is working.

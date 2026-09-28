@@ -11,6 +11,7 @@ import { PIPELINE_ROLES, assertCanManageApplication, canStaffAccessApplication, 
 import { notifyCandidate } from "../notifications/recruitment.js";
 import { formatWhen } from "../shared/format.js";
 import { notify } from "../notifications/service.js";
+import { onHrRoundPassed } from "../payments/enrollments.js";
 
 const TERMINAL_APPLICATION_STATUSES = ["rejected", "withdrawn"] as const;
 
@@ -188,7 +189,9 @@ export function interviewsRouter(db: Database, env: Env) {
       metadata: { decision: body.decision },
       ipAddress: req.ip,
     });
-    res.json({ interview: updated });
+    // A pass moves the candidate on: shortlisted, then pay or start a trial.
+    const enrollment = body.decision === "pass" ? await onHrRoundPassed(db, interview.applicationId, req.user!.sub) : null;
+    res.json({ interview: updated, enrollment });
   });
 
   return router;
