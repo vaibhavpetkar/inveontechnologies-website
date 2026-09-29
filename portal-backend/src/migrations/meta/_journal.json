@@ -176,6 +176,13 @@
       "when": 1790700973869,
       "tag": "0024_curly_masked_marvel",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1790701520711,
+      "tag": "0025_graceful_supreme_intelligence",
+      "breakpoints": true
     }
   ]
 }

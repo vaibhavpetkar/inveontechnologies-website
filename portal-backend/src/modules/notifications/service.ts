@@ -18,6 +18,9 @@ bus.setMaxListeners(0);
 
 let appUrl = "";
 /** Called once at startup: email bodies link back to the portal. */
+/** The portal's base URL for links in emails ("" until configured). */
+export const portalUrl = () => appUrl;
+
 export function configureNotifications(options: { appUrl: string }) {
   appUrl = options.appUrl.replace(/\/$/, "");
 }
