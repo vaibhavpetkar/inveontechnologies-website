@@ -988,7 +988,7 @@ button {
 .notif-empty { display: grid; place-items: center; gap: 0.4rem; padding: 2.2rem 1rem; color: var(--muted); }
 .notif-empty p { margin: 0; font-size: 0.9rem; }
 .notif-more { display: block; margin: 0.3rem auto 0.4rem; }
-.notif-foot { border-top: 1px solid var(--line); padding: 0.7rem 1rem; font-size: 0.82rem; }
+.notif-foot { border-top: 1px solid var(--line); padding: 0.7rem 1rem; font-size: 0.82rem; display: grid; gap: 0.45rem; }
 @media (max-width: 720px) {
   .notif-panel { position: fixed; right: 12px; left: 12px; width: auto; top: 64px; }
 }

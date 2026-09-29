@@ -1149,8 +1149,25 @@ export const notificationPreferences = pgTable("notification_preferences", {
   userId: uuid("user_id").primaryKey().references(() => users.id),
   emailEnabled: boolean("email_enabled").notNull().default(true),
   inAppEnabled: boolean("in_app_enabled").notNull().default(true),
+  // The morning summary email (only sent when emailEnabled is on too).
+  digestEnabled: boolean("digest_enabled").notNull().default(true),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * One row per person per (IST) day the morning digest went out. Inserting
+ * the row is how a sender claims that person's digest, so two backend
+ * processes never both send it.
+ */
+export const digestSends = pgTable(
+  "digest_sends",
+  {
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    sentOn: date("sent_on").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.userId, t.sentOn] }) }),
+);
 
 /**
  * Notifications and background jobs (roadmap phase B).

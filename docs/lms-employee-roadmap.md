@@ -47,7 +47,9 @@ Each phase is one or two PRs, shippable on its own, and ends with the feature us
 - **Job runner** (`pg-boss` on the existing Postgres — no new service): task due reminders, recurring task generation, assessment/offer/payment expiry sweeps, daily digest.
 - Replace every `[NOTIFICATION STUB]` log with a real `notify()` call.
 
-**Built:** `notifications` + `jobs` tables, `notify()` in `modules/notifications/service.ts`, SSE at `GET /api/v1/notifications/stream`, bell dropdown in the top bar. The job runner is a small queue on the `jobs` table (`modules/shared/jobs.ts`, `FOR UPDATE SKIP LOCKED`) instead of pg-boss: it needs no extra schema and its email log is readable at `GET /reports/email-jobs`. Periodic work: task due/overdue reminders and recurring-task generation. Assessment/offer expiry stays lazy (checked on read) and the daily digest is not built.
+**Built:** `notifications` + `jobs` tables, `notify()` in `modules/notifications/service.ts`, SSE at `GET /api/v1/notifications/stream`, bell dropdown in the top bar. The job runner is a small queue on the `jobs` table (`modules/shared/jobs.ts`, `FOR UPDATE SKIP LOCKED`) instead of pg-boss: it needs no extra schema and its email log is readable at `GET /reports/email-jobs`. Periodic work: task due/overdue reminders and recurring-task generation. Assessment/offer expiry stays lazy (checked on read).
+
+**Built (daily digest):** from 8 AM IST everyone gets one morning email with what's on today (meetings, live classes, interviews, tasks due, exams closing), overdue tasks, leave requests waiting on them (managers and HR) and unread notifications from the last day. Nobody gets an empty one. It can be turned off from the notifications menu, and it's never sent twice in a day (`digest_sends`).
 
 ### Phase C — Automatic onboarding + employee management UI
 - On **offer accepted**: create the employee record, apply an onboarding **checklist template** for the employee type, and email a welcome message with a set-password link — no HR click needed. HR can still review and activate.
