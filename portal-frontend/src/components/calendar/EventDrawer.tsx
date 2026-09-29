@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { ArrowRight, BookOpen, CalendarPlus, Clock, Download, MapPin, Pencil, Users, Video, X, XCircle } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { API_BASE, apiFetch, ApiError } from "../../lib/api";
-import { dayFmt, isLive, KIND_META, PROVIDER_META, RSVP_META, timeRange, type CalendarItem, type Meeting, isMeeting, type Rsvp } from "../../lib/calendar";
+import { dayFmt, isLive, KIND_META, PROVIDER_META, RSVP_META, timeRange, type CalendarItem, type Meeting, isMarker, isMeeting, type Rsvp } from "../../lib/calendar";
 import { useToast } from "../Toast";
 import { Avatar } from "../Avatar";
 
@@ -25,7 +25,7 @@ export function EventDrawer({ item, onClose, onEdit, onChanged }: Props) {
   const [response, setResponse] = useState<Rsvp | null>(isMeeting(item) ? item.myResponse : null);
   const start = new Date(item.startsAt);
   const live = isLive(item);
-  const ended = item.kind !== "task_due" && new Date(item.endsAt) < new Date();
+  const ended = !isMarker(item) && new Date(item.endsAt) < new Date();
   // Show my own answer straight away in the people list too.
   const attendees = isMeeting(item) ? item.attendees.map((a) => (a.id === user?.id && response ? { ...a, response } : a)) : [];
 
@@ -87,8 +87,8 @@ export function EventDrawer({ item, onClose, onEdit, onChanged }: Props) {
     }
   }
 
-  const joinUrl = item.kind === "task_due" || ended ? null : item.joinUrl;
-  const linkUrl = item.kind === "task_due" ? null : item.joinUrl;
+  const joinUrl = isMarker(item) || ended ? null : item.joinUrl;
+  const linkUrl = isMarker(item) ? null : item.joinUrl;
   const meta = KIND_META[item.kind];
 
   return (
@@ -171,7 +171,7 @@ export function EventDrawer({ item, onClose, onEdit, onChanged }: Props) {
               {item.canEdit && !ended && item.seriesId && <button className="btn btn-secondary" disabled={busy} onClick={cancelSeries}>Cancel all upcoming</button>}
             </>
           ) : (
-            <Link href={item.link} className="btn btn-secondary">{item.kind === "task_due" ? "Open task" : "Open application"} <ArrowRight size={16} /></Link>
+            <Link href={item.link} className="btn btn-secondary">{item.kind === "task_due" ? "Open task" : item.kind === "exam" ? (item.link.startsWith("/assessments") ? "Go to the exam" : "Open the opening") : "Open application"} <ArrowRight size={16} /></Link>
           )}
         </div>
       </motion.aside>

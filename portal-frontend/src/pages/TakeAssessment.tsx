@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useRoute } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, CheckCircle2, Clock, FileQuestion, Languages, RotateCcw, ShieldCheck, Target, Timer, Trophy, XCircle } from "lucide-react";
+import { ArrowLeft, CalendarClock, CheckCircle2, Clock, FileQuestion, Languages, RotateCcw, ShieldCheck, Target, Timer, Trophy, XCircle } from "lucide-react";
 import { DashboardShell } from "../components/DashboardShell";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/api";
@@ -9,7 +9,17 @@ import { useToast } from "../components/Toast";
 
 interface Question { id: string; questionText: string; options: { id: string; text: string }[]; points: number }
 interface Attempt { id: string; assessmentId: string; attemptNumber: number; status: string; expiresAt: string | null; startedAt: string | null; submittedAt: string | null; scorePercent: number | null; passed: boolean | null; createdAt: string; examTitle?: string; language?: string | null }
-interface Exam { id: string; title: string; description: string | null; language: string | null; durationMinutes: number; passingScorePercent: number; maxAttempts: number; questionCount: number; attemptsUsed: number; attemptsLeft: number }
+interface Exam { id: string; title: string; description: string | null; language: string | null; durationMinutes: number; passingScorePercent: number; maxAttempts: number; questionCount: number; attemptsUsed: number; attemptsLeft: number; opensAt: string | null; closesAt: string | null; window: "open" | "upcoming" | "closed" }
+
+const whenFmt = new Intl.DateTimeFormat(undefined, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+
+/** "Opens Mon 6 Oct, 10:00", "Closes …" or "Closed …" for an exam with a window; null otherwise. */
+function windowLabel(e: Exam): string | null {
+  if (e.window === "upcoming" && e.opensAt) return `Opens ${whenFmt.format(new Date(e.opensAt))}`;
+  if (e.window === "closed" && e.closesAt) return `Closed ${whenFmt.format(new Date(e.closesAt))}`;
+  if (e.closesAt) return `Closes ${whenFmt.format(new Date(e.closesAt))}`;
+  return null;
+}
 interface Summary { applicationStatus: string; exams: Exam[]; attempts: Attempt[] }
 
 // Answers are mirrored to sessionStorage so a reload mid-attempt doesn't wipe
@@ -198,7 +208,7 @@ export default function TakeAssessment() {
   if (!summary || stage.kind === "loading") return <DashboardShell>{back}<div className="skeleton" style={{ height: 320 }} /></DashboardShell>;
 
   const passedAttempt = summary.attempts.find((a) => a.passed);
-  const anyLeft = summary.exams.some((e) => e.attemptsLeft > 0);
+  const anyLeft = summary.exams.some((e) => e.attemptsLeft > 0 && e.window !== "closed");
 
   return (
     <DashboardShell>
@@ -244,7 +254,7 @@ export default function TakeAssessment() {
                   <motion.button
                     key={e.id}
                     className="exam-pick"
-                    disabled={busy || e.attemptsLeft === 0 || summary.applicationStatus !== "assessment_invited"}
+                    disabled={busy || e.attemptsLeft === 0 || e.window !== "open" || summary.applicationStatus !== "assessment_invited"}
                     onClick={() => choose(e)}
                     initial={{ opacity: 0, y: 12 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -260,6 +270,9 @@ export default function TakeAssessment() {
                       <span><FileQuestion size={14} /> {e.questionCount} questions</span>
                       <span><Target size={14} /> Pass {e.passingScorePercent}%</span>
                     </span>
+                    {windowLabel(e) && (
+                      <span className={`exam-window ${e.window}`}><CalendarClock size={14} /> {windowLabel(e)}</span>
+                    )}
                     <span className={`exam-attempts${e.attemptsLeft === 0 ? " none" : ""}`}>
                       {e.attemptsLeft === 0 ? "No attempts left" : `${e.attemptsLeft} of ${e.maxAttempts} attempt${e.maxAttempts === 1 ? "" : "s"} left`}
                     </span>
@@ -299,6 +312,9 @@ export default function TakeAssessment() {
               <li><ShieldCheck size={16} /> The timer starts when you press Start and can't be paused.</li>
               <li><ShieldCheck size={16} /> Your answers are saved as you go, so a dropped connection won't lose them.</li>
               <li><ShieldCheck size={16} /> When time runs out, whatever you've answered is submitted for you.</li>
+              {stage.exam.closesAt && new Date(stage.exam.closesAt).getTime() < Date.now() + stage.exam.durationMinutes * 60_000 && (
+                <li className="exam-rule-warn"><CalendarClock size={16} /> The exam closes {whenFmt.format(new Date(stage.exam.closesAt))}, so you'll have less than the full {stage.exam.durationMinutes} minutes.</li>
+              )}
             </ul>
             <div className="exam-ready-actions">
               <button className="btn btn-secondary" onClick={() => setStage({ kind: "pick" })} disabled={busy}>Pick another</button>
@@ -352,7 +368,7 @@ export default function TakeAssessment() {
         {stage.kind === "result" && (() => {
           const passed = !!stage.attempt.passed;
           const exam = summary.exams.find((e) => e.id === stage.attempt.assessmentId);
-          const left = summary.exams.filter((e) => e.attemptsLeft > 0);
+          const left = summary.exams.filter((e) => e.attemptsLeft > 0 && e.window !== "closed");
           return (
             <motion.div key="result" className={`exam-result ${passed ? "pass" : "fail"}`} initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0 }}>
               <motion.div className="exam-score" initial={{ scale: 0.6 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 260, damping: 16 }}>

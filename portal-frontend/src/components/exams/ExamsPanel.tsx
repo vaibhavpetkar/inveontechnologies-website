@@ -61,7 +61,7 @@ export function ExamsPanel({ opportunityId }: { opportunityId: string }) {
               <span className="exam-lang">{e.language ?? "General"}</span>
               <span className="exam-row-main">
                 <strong>{e.title}</strong>
-                <span className="muted-small"><Clock size={12} /> {e.durationMinutes} min · {e.questionCount} questions · pass {e.passingScorePercent}% · {e.maxAttempts} attempt{e.maxAttempts === 1 ? "" : "s"}{e.isActive ? "" : " · off"}</span>
+                <span className="muted-small"><Clock size={12} /> {e.durationMinutes} min · {e.questionCount} questions · pass {e.passingScorePercent}% · {e.maxAttempts} attempt{e.maxAttempts === 1 ? "" : "s"}{windowText(e)}{e.isActive ? "" : " · off"}</span>
               </span>
               <span className="exam-row-stats" title="Passed / attempts">{e.passCount}/{e.attemptCount} passed</span>
               <button className="icon-button" aria-label="Edit exam" onClick={() => setEditing(e)}><Pencil size={15} /></button>
@@ -79,4 +79,14 @@ export function ExamsPanel({ opportunityId }: { opportunityId: string }) {
       </AnimatePresence>
     </section>
   );
+}
+
+const shortFmt = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+
+/** " · 6 Oct, 10:00 – 8 Oct, 18:00" for an exam with a window. */
+function windowText(e: ExamRow): string {
+  if (!e.opensAt && !e.closesAt) return "";
+  if (!e.opensAt) return ` · closes ${shortFmt.format(new Date(e.closesAt!))}`;
+  if (!e.closesAt) return ` · opens ${shortFmt.format(new Date(e.opensAt))}`;
+  return ` · ${shortFmt.format(new Date(e.opensAt))} – ${shortFmt.format(new Date(e.closesAt))}`;
 }

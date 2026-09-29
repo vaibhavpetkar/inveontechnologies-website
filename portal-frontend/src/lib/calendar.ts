@@ -52,7 +52,21 @@ export interface TaskDue {
   link: string;
 }
 
-export type CalendarItem = Meeting | Interview | TaskDue;
+/** When an exam window opens or closes. A point in time, like a task deadline. */
+export interface ExamMark {
+  id: string;
+  kind: "exam";
+  edge: "opens" | "closes";
+  title: string;
+  startsAt: string;
+  endsAt: string;
+  link: string;
+}
+
+export type CalendarItem = Meeting | Interview | TaskDue | ExamMark;
+
+/** Deadlines and exam windows: points in time with no duration or join link. */
+export const isMarker = (item: CalendarItem): item is TaskDue | ExamMark => item.kind === "task_due" || item.kind === "exam";
 
 /** Meetings and live classes: things with attendees, answers and an organiser. */
 export const isMeeting = (item: CalendarItem): item is Meeting => item.kind === "meeting" || item.kind === "class";
@@ -75,6 +89,7 @@ export const KIND_META: Record<CalendarItem["kind"], { label: string; tone: stri
   class: { label: "Live class", tone: "green" },
   interview: { label: "Interview", tone: "violet" },
   task_due: { label: "Task due", tone: "amber" },
+  exam: { label: "Exam", tone: "rose" },
 };
 
 export const PROVIDER_META: Record<Provider, { label: string; short: string }> = {
@@ -132,6 +147,7 @@ export const monthFmt = new Intl.DateTimeFormat("en-IN", { month: "long", year: 
 export function timeRange(item: CalendarItem) {
   const s = new Date(item.startsAt);
   if (item.kind === "task_due") return `Due ${timeFmt.format(s)}`;
+  if (item.kind === "exam") return `${item.edge === "opens" ? "Opens" : "Closes"} at ${timeFmt.format(s)}`;
   return `${timeFmt.format(s)} – ${timeFmt.format(new Date(item.endsAt))}`;
 }
 
@@ -153,5 +169,5 @@ export function nextSlot(day?: Date) {
 }
 
 export function isLive(item: CalendarItem, now = new Date()) {
-  return item.kind !== "task_due" && new Date(item.startsAt).getTime() - 10 * 60_000 <= now.getTime() && new Date(item.endsAt) > now;
+  return !isMarker(item) && new Date(item.startsAt).getTime() - 10 * 60_000 <= now.getTime() && new Date(item.endsAt) > now;
 }
