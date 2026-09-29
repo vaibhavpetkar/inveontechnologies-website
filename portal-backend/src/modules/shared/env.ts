@@ -42,6 +42,8 @@ const envSchema = z.object({
   // Where uploaded files (resumes, documents, attachments) are kept. In
   // Docker this is the portal_uploads volume mounted at /app/uploads.
   PORTAL_UPLOAD_DIR: z.string().default("uploads"),
+  // Printed under the company name on letters (appointment, offer). Optional.
+  PORTAL_COMPANY_ADDRESS: z.string().optional(),
   // Cashfree payments for program fees (same account as the Events site).
   // Leave the app id unset to hide "Pay now"; candidates can still start
   // the free trial and staff can mark a payment received by hand.

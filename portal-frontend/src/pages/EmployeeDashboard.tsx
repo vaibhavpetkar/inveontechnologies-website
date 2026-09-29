@@ -9,11 +9,14 @@ import { formatDate, STATUS_META, TYPE_LABELS, type EmployeeStatus } from "../li
 import { MyTasksWidget } from "../components/tasks/MyTasksWidget";
 import { UpcomingWidget } from "../components/calendar/UpcomingWidget";
 import { OnboardingCard, type MyEmployee } from "../components/people/OnboardingCard";
+import { MyAppointmentLetter } from "../components/people/MyAppointmentLetter";
 
 export default function EmployeeDashboard() {
   const { user, accessToken } = useAuth();
   const [employee, setEmployee] = useState<MyEmployee | null | "none">(null);
   const [error, setError] = useState<string | null>(null);
+  // Accepting the letter ticks checklist items, so the checklist reloads.
+  const [letterTick, setLetterTick] = useState(0);
 
   const load = useCallback(() => {
     if (!accessToken) return;
@@ -61,7 +64,11 @@ export default function EmployeeDashboard() {
             ))}
           </div>
           <div className="panel-grid">
-            <OnboardingCard employee={employee} onChanged={load} />
+            <MyAppointmentLetter key={`letter-${employee.id}`} employeeId={employee.id} onAccepted={() => {
+                setLetterTick((t) => t + 1);
+                load();
+              }} />
+            <OnboardingCard key={`onboarding-${letterTick}`} employee={employee} onChanged={load} />
             <MyTasksWidget />
             <UpcomingWidget />
           </div>

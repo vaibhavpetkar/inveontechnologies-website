@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, CalendarCheck, CalendarDays, Briefcase, ClipboardCheck, FileText, IndianRupee, KanbanSquare, LayoutDashboard, MessagesSquare, ReceiptIndianRupee, UserRound, Users, type LucideIcon } from "lucide-react";
+import { BarChart3, BookOpen, CalendarCheck, CalendarDays, Briefcase, ClipboardCheck, FileText, IndianRupee, KanbanSquare, LayoutDashboard, MessagesSquare, ReceiptIndianRupee, ScrollText, UserRound, Users, type LucideIcon } from "lucide-react";
 import type { UserRole } from "../context/AuthContext";
 
 export interface NavItem {
@@ -34,6 +34,7 @@ export function navForRole(role: UserRole): NavItem[] {
       { href: "/calendar", label: "Calendar", icon: CalendarDays },
       { href: "/courses", label: "Courses", icon: BookOpen },
       { href: "/chat", label: "Chat", icon: MessagesSquare },
+      { href: "/policies", label: "Policies", icon: ScrollText },
     ];
   }
   return [
@@ -44,6 +45,7 @@ export function navForRole(role: UserRole): NavItem[] {
     { href: "/calendar", label: "Calendar", icon: CalendarDays },
     { href: "/courses", label: "Courses", icon: BookOpen },
     { href: "/chat", label: "Chat", icon: MessagesSquare },
+    { href: "/policies", label: "Policies", icon: ScrollText },
   ];
 }
 

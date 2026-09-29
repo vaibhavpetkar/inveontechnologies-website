@@ -745,6 +745,35 @@ export const letterTemplates = pgTable("letter_templates", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** What an appointment letter states, kept with the letter so its PDF always renders the same. */
+export interface AppointmentDetails {
+  name: string;
+  email: string;
+  employeeId: string;
+  employeeType: "intern" | "full_time" | "contract";
+  designation: string;
+  department: string;
+  joiningDate: string; // YYYY-MM-DD
+  endDate: string | null; // interns and contracts
+  durationMonths: number | null;
+  reportingTo: string | null;
+  workLocation: string;
+  workHours: string;
+  monthlyPay: number | null; // stipend for interns, gross salary otherwise
+  probationMonths: number | null;
+  noticeDays: number;
+  additionalTerms: string | null;
+}
+
+/** A company policy as it read when a letter was issued. */
+export interface PolicySnapshot {
+  id: string;
+  slug: string;
+  title: string;
+  version: number;
+  body: string;
+}
+
 export const employeeLetters = pgTable("employee_letters", {
   id: uuid("id").primaryKey().defaultRandom(),
   employeeId: uuid("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
@@ -755,6 +784,35 @@ export const employeeLetters = pgTable("employee_letters", {
   signatoryTitle: text("signatory_title").notNull(),
   generatedBy: uuid("generated_by").notNull().references(() => users.id),
   generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+  // Appointment letters issued from the People page (admin only): the
+  // structured terms and the policies attached, both frozen at issue time.
+  seqNumber: integer("seq_number").generatedAlwaysAsIdentity(),
+  referenceNo: text("reference_no"),
+  details: jsonb("details").$type<AppointmentDetails>(),
+  policies: jsonb("policies").$type<PolicySnapshot[]>(),
+  emailedTo: text("emailed_to"),
+  emailedAt: timestamp("emailed_at", { withTimezone: true }),
+  acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+  acceptedName: text("accepted_name"),
+});
+
+/**
+ * Company policies: attached as PDFs to every appointment letter and
+ * readable by staff in the portal. Admins edit them; each edit to the
+ * wording bumps the version, and letters keep the wording they were sent.
+ */
+export const companyPolicies = pgTable("company_policies", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  slug: text("slug").notNull().unique(),
+  title: text("title").notNull(),
+  summary: text("summary").notNull(),
+  body: text("body").notNull(), // "## " headings, "- " bullets, blank lines between paragraphs
+  version: integer("version").notNull().default(1),
+  active: boolean("active").notNull().default(true),
+  orderIndex: integer("order_index").notNull().default(0),
+  updatedBy: uuid("updated_by").references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 /**

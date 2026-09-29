@@ -183,6 +183,13 @@
       "when": 1790701520711,
       "tag": "0025_graceful_supreme_intelligence",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1790708467172,
+      "tag": "0026_omniscient_famine",
+      "breakpoints": true
     }
   ]
 }
