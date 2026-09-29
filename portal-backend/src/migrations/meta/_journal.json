@@ -169,6 +169,13 @@
       "when": 1790622234068,
       "tag": "0023_lush_dreadnoughts",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790700973869,
+      "tag": "0024_curly_masked_marvel",
+      "breakpoints": true
     }
   ]
 }

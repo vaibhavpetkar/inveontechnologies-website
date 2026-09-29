@@ -286,6 +286,11 @@ export const assessments = pgTable("assessments", {
   maxAttempts: integer("max_attempts").notNull().default(1),
   // Inactive exams are hidden from candidates but keep their history.
   isActive: boolean("is_active").notNull().default(true),
+  // Optional exam window. Candidates can only start between these times,
+  // and an attempt started late still has to finish by closesAt. Either
+  // end can be open (null).
+  opensAt: timestamp("opens_at", { withTimezone: true }),
+  closesAt: timestamp("closes_at", { withTimezone: true }),
   createdBy: uuid("created_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

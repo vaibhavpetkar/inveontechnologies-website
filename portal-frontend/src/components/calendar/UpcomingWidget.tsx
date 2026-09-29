@@ -5,7 +5,7 @@ import { ArrowRight, Video } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useNotifications } from "../../context/NotificationsContext";
 import { apiFetch } from "../../lib/api";
-import { addDays, isLive, sameDay, shortDayFmt, timeFmt, isMeeting, type CalendarItem } from "../../lib/calendar";
+import { addDays, isLive, sameDay, shortDayFmt, timeFmt, isMarker, isMeeting, type CalendarItem } from "../../lib/calendar";
 
 /** The next few meetings and interviews, with a Join button when it's time. */
 export function UpcomingWidget() {
@@ -45,7 +45,7 @@ export function UpcomingWidget() {
                   <span>{timeFmt.format(s)}</span>
                 </span>
                 <Link href={isMeeting(it) ? `/calendar?event=${it.id}` : "/calendar"} className="upcoming-title">{it.title}</Link>
-                {it.kind !== "task_due" && it.joinUrl && (
+                {!isMarker(it) && it.joinUrl && (
                   <a className={`btn btn-sm${live ? "" : " btn-secondary"}`} href={it.joinUrl} target="_blank" rel="noreferrer"><Video size={14} /> Join</a>
                 )}
               </motion.li>
