@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { and, desc, eq, lt } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
-import { applications, applicationEvents, candidateProfiles, opportunities, users } from "../shared/db/schema.js";
+import { applications, applicationEvents, candidateProfiles, internshipTracks, opportunities, users } from "../shared/db/schema.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
@@ -47,6 +47,10 @@ export function applicationsRouter(db: Database, env: Env) {
     const opportunity = await db.query.opportunities.findFirst({ where: eq(opportunities.id, opportunityId) });
     if (!opportunity || opportunity.status !== "published") {
       throw new NotFoundError("Opportunity not found or not accepting applications");
+    }
+    const track = await db.query.internshipTracks.findFirst({ where: eq(internshipTracks.opportunityId, opportunityId) });
+    if (track) {
+      throw new AppError("APPLY_VIA_TRACK", `Join this program by completing the ${track.title} course and passing its final exam`, 409);
     }
 
     if (env.PORTAL_REQUIRE_EMAIL_VERIFICATION) {

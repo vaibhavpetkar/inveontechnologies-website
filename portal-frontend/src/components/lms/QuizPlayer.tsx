@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, ArrowRight, CheckCircle2, Cloud, RotateCcw, Timer, Trophy, XCircle } from "lucide-react";
+import { Link } from "wouter";
+import { ArrowLeft, ArrowRight, Award, CheckCircle2, Cloud, RotateCcw, Timer, Trophy, XCircle } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { apiFetch, ApiError } from "../../lib/api";
 import type { Lesson, QuizQuestion } from "../../lib/lms";
@@ -8,7 +9,7 @@ import { useToast } from "../Toast";
 
 interface Attempt { id: string; scorePercent: number; passed: boolean; submittedAt: string }
 interface Review { questionId: string; selectedOptionId: string | null; correct: boolean; correctOptionId: string; explanation: string | null }
-interface Result { attempt: Attempt; passingScorePercent: number; bestScorePercent: number; lessonPassed: boolean; courseCompleted: boolean; review: Review[]; late?: boolean; attemptsLeft?: number | null }
+interface Result { attempt: Attempt; passingScorePercent: number; bestScorePercent: number; lessonPassed: boolean; courseCompleted: boolean; review: Review[]; late?: boolean; attemptsLeft?: number | null; internship?: { trackSlug: string; offerId: string | null } | null }
 interface Draft { questionId: string; selectedOptionId: string | null }
 interface LiveAttempt { id: string; startedAt: string; deadlineAt: string; answers: Draft[] }
 interface QuizData { questions: QuizQuestion[]; attempts?: Attempt[]; attemptsLeft?: number | null; inProgress?: LiveAttempt | null; serverTime?: string }
@@ -181,6 +182,16 @@ export function QuizPlayer({ lesson, onGraded }: { lesson: Lesson; onGraded: (r:
             {!result.attempt.passed && result.lessonPassed && <div className="muted-small">You already passed this quiz earlier (best {result.bestScorePercent}%).</div>}
           </div>
         </div>
+        {result.internship?.offerId && (
+          <motion.div className="quiz-offer" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0, transition: { delay: 0.3 } }}>
+            <Award size={22} />
+            <div>
+              <strong>You've earned an internship offer!</strong>
+              <span>Your offer letter for the 6-month program is ready and on its way to your inbox.</span>
+            </div>
+            <Link href={`/internships/${result.internship.trackSlug}`} className="btn btn-sm">View offer</Link>
+          </motion.div>
+        )}
         <ol className="quiz-review">
           {questions.map((q, i) => {
             const r = byId.get(q.id!)!;

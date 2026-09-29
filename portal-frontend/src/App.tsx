@@ -31,6 +31,9 @@ import Payslips from "./pages/Payslips";
 import Attendance from "./pages/Attendance";
 import Reports from "./pages/Reports";
 import Policies from "./pages/Policies";
+import Internships from "./pages/Internships";
+import InternshipTrack from "./pages/InternshipTrack";
+import Reviews from "./pages/Reviews";
 import { MotionConfig } from "framer-motion";
 import { ToastProvider } from "./components/Toast";
 import { NotificationsProvider } from "./context/NotificationsContext";
@@ -86,6 +89,9 @@ function AppRoutes() {
       <Route path="/attendance"><Protected><Attendance /></Protected></Route>
       <Route path="/reports"><Protected><Reports /></Protected></Route>
       <Route path="/policies"><Protected><Policies /></Protected></Route>
+      <Route path="/internships"><Protected><Internships /></Protected></Route>
+      <Route path="/internships/:slug"><Protected><InternshipTrack /></Protected></Route>
+      <Route path="/reviews"><Protected><Reviews /></Protected></Route>
       <Route path="/calendar"><Protected><Calendar /></Protected></Route>
 
       <Route><div className="page-loading">Page not found.</div></Route>
