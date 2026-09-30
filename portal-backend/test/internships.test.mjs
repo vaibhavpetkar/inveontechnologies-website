@@ -5,11 +5,12 @@ import { startServer, JWT_SECRET } from "./helpers.mjs";
 import { allocateRoadmap, nextMonday } from "../dist/modules/internships/service.js";
 import { TRACKS, trackSkills } from "../dist/modules/internships/catalog-tracks.js";
 import { SKILLS } from "../dist/modules/internships/catalog-skills.js";
+import { EXERCISES } from "../dist/modules/internships/exercises/bank/index.js";
 
 let api, admin, hr, manager;
 
 before(async () => {
-  api = await startServer();
+  api = await startServer({ PORTAL_CODE_RUNNER: "local" });
   admin = await api.createUser("admin");
   hr = await api.createUser("hr");
   manager = await api.createUser("manager");
@@ -60,7 +61,7 @@ describe("roadmap allocation", () => {
 });
 
 describe("internship tracks", () => {
-  test("admins install six tracks once, with courses, exams, openings and 85 assignments", async () => {
+  test("admins install six tracks once, with courses, exams, openings, 85 projects and 170 exercises", async () => {
     assert.equal((await api.call("POST", "/internships/install", { token: hr.token })).status, 403);
     const first = await api.call("POST", "/internships/install", { token: admin.token });
     assert.equal(first.status, 201);
@@ -69,12 +70,13 @@ describe("internship tracks", () => {
     assert.deepEqual(again.json.created, []);
 
     const { rows } = await api.pool.query("SELECT count(*)::int AS n FROM track_assignments");
-    assert.equal(rows[0].n, 85);
+    assert.equal(rows[0].n, 255);
+    assert.equal((await api.pool.query("SELECT count(*)::int AS n FROM track_assignments WHERE kind = 'exercise'")).rows[0].n, 170);
     const list = await api.call("GET", "/internships", { token: (await api.createUser("candidate")).token });
     assert.equal(list.json.tracks.length, 6);
     const js = list.json.tracks.find((t) => t.slug === "full-stack-javascript");
     assert.equal(js.fee, 4000);
-    assert.equal(js.assignmentCount, 40);
+    assert.equal(js.assignmentCount, 120);
     assert.equal(js.me.offer, null);
     const opp = (await api.pool.query("SELECT kind, status, program_fee, trial_hours FROM opportunities WHERE id = $1", [js.opportunityId])).rows[0];
     assert.deepEqual({ ...opp, program_fee: Number(opp.program_fee) }, { kind: "program", status: "published", program_fee: 4000, trial_hours: 0 });
@@ -97,7 +99,7 @@ describe("internship tracks", () => {
     assert.equal(page.json.me.enrollment.status, "awaiting_choice");
     assert.match(page.json.me.offer.referenceNo, /^INV\/INT\/\d{4}\/\d{4}$/);
     assert.equal(page.json.me.unlocked, false);
-    assert.equal(page.json.progress.total, 40);
+    assert.equal(page.json.progress.total, 120);
     assert.equal(page.json.phases[0].skills[0].key, "html");
 
     const emailed = await waitFor(async () => (await api.pool.query("SELECT emailed_at FROM participant_offers WHERE id = $1", [submit.internship.offerId])).rows[0].emailed_at);
@@ -121,7 +123,7 @@ describe("internship tracks", () => {
     const track = (await api.call("GET", "/internships", { token: admin.token })).json.tracks.find((t) => t.slug === "frontend-react");
     const { candidate } = await takeExam(track);
     const page = (await api.call("GET", `/internships/${track.slug}`, { token: candidate.token })).json;
-    const assignment = page.phases[0].skills[0].assignments[0];
+    const assignment = page.phases[0].skills[0].assignments.find((a) => a.kind === "project");
 
     const locked = await api.call("POST", `/internships/assignments/${assignment.id}/submit`, { token: candidate.token, body: { repoUrl: "https://github.com/me/profile" } });
     assert.equal(locked.json.error.code, "ROADMAP_LOCKED");
@@ -167,6 +169,76 @@ describe("internship tracks", () => {
     const interns = (await api.call("GET", "/internships/reviews/interns", { token: hr.token })).json.interns;
     const row = interns.find((i) => i.userId === candidate.id);
     assert.equal(row.approved, 1);
-    assert.equal(row.total, 30);
+    assert.equal(row.total, 90);
+  });
+  test("coding exercises are checked automatically: examples on run, hidden tests on submit, full marks when everything passes", async () => {
+    const track = (await api.call("GET", "/internships", { token: admin.token })).json.tracks.find((t) => t.slug === "full-stack-javascript");
+    const { candidate } = await takeExam(track);
+    const before = (await api.call("GET", `/internships/${track.slug}`, { token: candidate.token })).json;
+    const locked = before.phases[0].skills[0].assignments.find((a) => a.kind === "exercise");
+    assert.deepEqual(Object.keys(locked.exercise), ["editor"], "nothing but the language before joining");
+    assert.equal((await api.call("POST", `/internships/assignments/${locked.id}/run`, { token: candidate.token, body: { code: "x" } })).json.error.code, "ROADMAP_LOCKED");
+    await api.call("POST", `/program/enrollments/${before.me.enrollment.id}/mark-paid`, { token: hr.token, body: { note: "cash" } });
+    const intern = { ...candidate, token: jwt.sign({ sub: candidate.id, role: "intern" }, JWT_SECRET, { expiresIn: "15m" }) };
+
+    const page = (await api.call("GET", `/internships/${track.slug}`, { token: intern.token })).json;
+    const all = page.phases.flatMap((p) => p.skills.flatMap((s) => s.assignments));
+    const sum = all.find((a) => a.title === "Sum of two numbers");
+    assert.equal(sum.kind, "exercise");
+    assert.equal(sum.maxMarks, 5);
+    const seed = EXERCISES.javascript.find((e) => e.title === "Sum of two numbers");
+    const visible = seed.check.run.tests.filter((t) => !t.hidden);
+    assert.deepEqual(sum.exercise.examples, visible.map((t) => ({ stdin: t.stdin, expected: t.expected })));
+    assert.equal(sum.exercise.hiddenTests, seed.check.run.tests.length - visible.length);
+    assert.ok(!JSON.stringify(page).includes(seed.solution), "the reference solution never leaves the server");
+
+    // Run: examples only, nothing saved. A wrong answer shows expected vs actual.
+    const wrong = `const [a, b] = require("fs").readFileSync(0, "utf8").trim().split(" ").map(Number);\nconsole.log(a * b);\n`;
+    const run = await api.call("POST", `/internships/assignments/${sum.id}/run`, { token: intern.token, body: { code: wrong } });
+    assert.equal(run.status, 200, JSON.stringify(run.json));
+    assert.equal(run.json.report.passed, false);
+    assert.equal(run.json.report.items.length, visible.length);
+    assert.ok(run.json.report.items.every((i) => !i.hidden && i.expected !== undefined));
+    assert.equal((await api.pool.query("SELECT count(*)::int AS n FROM assignment_submissions WHERE user_id = $1", [candidate.id])).rows[0].n, 0);
+
+    // Submit wrong: hidden tests run too, no input or output shown for them; it isn't a mentor's job.
+    const failed = await api.call("POST", `/internships/assignments/${sum.id}/submit`, { token: intern.token, body: { code: wrong } });
+    assert.equal(failed.status, 201, JSON.stringify(failed.json));
+    assert.equal(failed.json.submission.status, "changes_requested");
+    const hidden = failed.json.report.items.filter((i) => i.hidden);
+    assert.equal(hidden.length, seed.check.run.tests.length - visible.length);
+    assert.ok(hidden.every((i) => i.stdin === undefined && i.expected === undefined && i.actual === undefined));
+    const queue = (await api.call("GET", "/internships/reviews/queue?status=changes_requested", { token: manager.token })).json;
+    assert.ok(!queue.submissions.some((s) => s.id === failed.json.submission.id));
+
+    // Submit the right answer: approved with full marks, no mentor needed.
+    const passed = await api.call("POST", `/internships/assignments/${sum.id}/submit`, { token: intern.token, body: { code: seed.solution } });
+    assert.equal(passed.status, 200);
+    assert.equal(passed.json.report.passed, true);
+    assert.equal(passed.json.submission.status, "approved");
+    assert.equal(passed.json.submission.marks, 5);
+    assert.equal(passed.json.submission.attempt, 2);
+    assert.equal((await api.call("POST", `/internships/assignments/${sum.id}/submit`, { token: intern.token, body: { code: seed.solution } })).json.error.code, "ALREADY_APPROVED");
+    const approvedQueue = (await api.call("GET", "/internships/reviews/queue?status=approved", { token: manager.token })).json;
+    const row = approvedQueue.submissions.find((s) => s.id === passed.json.submission.id);
+    assert.equal(row.autoChecked, true);
+    assert.equal(row.code, seed.solution);
+
+    // Rule-checked exercise (HTML): no code runs, the structure is inspected.
+    const html = EXERCISES.html[0];
+    const htmlItem = all.find((a) => a.title === html.title);
+    assert.deepEqual(htmlItem.exercise.requirements, html.check.rules.map((r) => r.message));
+    const starter = await api.call("POST", `/internships/assignments/${htmlItem.id}/run`, { token: intern.token, body: { code: html.starter } });
+    assert.equal(starter.json.report.passed, false);
+    const good = await api.call("POST", `/internships/assignments/${htmlItem.id}/submit`, { token: intern.token, body: { code: html.solution } });
+    assert.equal(good.json.submission.status, "approved");
+
+    const after = (await api.call("GET", `/internships/${track.slug}`, { token: intern.token })).json;
+    assert.equal(after.progress.approved, 2);
+    assert.equal(after.progress.marks, 10);
+    const mine = after.phases.flatMap((p) => p.skills.flatMap((s) => s.assignments)).find((a) => a.id === sum.id);
+    assert.equal(mine.submission.code, seed.solution);
+    assert.equal(mine.submission.checkReport.passed, true);
+    assert.equal((await api.call("POST", `/internships/assignments/${sum.id}/run`, { token: intern.token, body: { code: "" } })).status, 400);
   });
 });

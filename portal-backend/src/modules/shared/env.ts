@@ -44,6 +44,17 @@ const envSchema = z.object({
   PORTAL_UPLOAD_DIR: z.string().default("uploads"),
   // Printed under the company name on letters (appointment, offer). Optional.
   PORTAL_COMPANY_ADDRESS: z.string().optional(),
+  // Automatic checking of internship coding exercises. Judge0 runs each
+  // program in a sandbox: set the URL (e.g. https://judge0-ce.p.rapidapi.com
+  // with a RapidAPI key, or a self-hosted Judge0) and the key if it needs one.
+  // Without it, HTML/CSS/React/config exercises are still checked, and code
+  // that has to run goes to a mentor instead. "local" runs code unsandboxed
+  // on this machine and is refused in production.
+  PORTAL_CODE_RUNNER: z.enum(["judge0", "local", "off"]).optional(),
+  PORTAL_JUDGE0_URL: z.string().url().optional(),
+  PORTAL_JUDGE0_KEY: z.string().optional(),
+  // Optional Judge0 language id overrides, e.g. "python=92,java=91".
+  PORTAL_JUDGE0_LANGUAGE_IDS: z.string().optional(),
   // Cashfree payments for program fees (same account as the Events site).
   // Leave the app id unset to hide "Pay now"; candidates can still start
   // the free trial and staff can mark a payment received by hand.

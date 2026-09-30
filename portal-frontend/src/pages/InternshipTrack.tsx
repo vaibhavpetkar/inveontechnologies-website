@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useParams, useSearch } from "wouter";
 import { motion } from "framer-motion";
-import { ArrowLeft, Award, BookOpen, Check, ClipboardCheck, CreditCard, Download, GraduationCap, Lock, Map as MapIcon, ShieldCheck, Trophy } from "lucide-react";
+import { ArrowLeft, Award, BookOpen, Check, ClipboardCheck, Code2, CreditCard, Download, FolderGit2, GraduationCap, Lock, Map as MapIcon, ShieldCheck, Trophy } from "lucide-react";
 import { DashboardShell } from "../components/DashboardShell";
 import { AssignmentItem } from "../components/internships/AssignmentItem";
 import { useAuth } from "../context/AuthContext";
@@ -183,16 +183,30 @@ export default function InternshipTrack() {
                   </div>
                   <span className="muted-small">{done}/{items.length} done</span>
                 </div>
-                {phase.skills.map((skill) => (
-                  <div key={skill.key} className="month-skill">
-                    <span className="skill-chip">{skill.label}</span>
-                    <ul className="assignment-list">
-                      {skill.assignments.map((a) => (
-                        <AssignmentItem key={a.id} assignment={a} locked={!me.unlocked} open={openId === a.id} onToggle={() => setOpenId(openId === a.id ? null : a.id)} onSubmitted={load} />
-                      ))}
-                    </ul>
-                  </div>
-                ))}
+                {phase.skills.map((skill) => {
+                  const exercises = skill.assignments.filter((a) => a.kind === "exercise");
+                  const projects = skill.assignments.filter((a) => a.kind !== "exercise");
+                  const item = (a: (typeof skill.assignments)[number]) => (
+                    <AssignmentItem key={a.id} assignment={a} locked={!me.unlocked} open={openId === a.id} onToggle={() => setOpenId(openId === a.id ? null : a.id)} onSubmitted={load} />
+                  );
+                  return (
+                    <div key={skill.key} className="month-skill">
+                      <span className="skill-chip">{skill.label}</span>
+                      {exercises.length > 0 && (
+                        <>
+                          <h4 className="assignment-group"><Code2 size={14} /> Coding exercises <span>{exercises.filter((a) => a.submission?.status === "approved").length}/{exercises.length} passed · checked automatically</span></h4>
+                          <ul className="assignment-list">{exercises.map(item)}</ul>
+                        </>
+                      )}
+                      {projects.length > 0 && (
+                        <>
+                          {exercises.length > 0 && <h4 className="assignment-group"><FolderGit2 size={14} /> Projects <span>reviewed by a mentor</span></h4>}
+                          <ul className="assignment-list">{projects.map(item)}</ul>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </motion.li>
           );

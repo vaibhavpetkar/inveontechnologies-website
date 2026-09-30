@@ -31,6 +31,36 @@ export interface TrackSummary {
 
 export type SubmissionStatus = "submitted" | "changes_requested" | "approved";
 
+export interface CheckItem {
+  kind: "test" | "rule";
+  label: string;
+  passed: boolean;
+  hidden?: boolean;
+  stdin?: string;
+  expected?: string;
+  actual?: string;
+  error?: string;
+}
+
+export interface CheckReport {
+  passed: boolean;
+  runnerUnavailable?: boolean;
+  items: CheckItem[];
+  summary: string;
+  checkedAt: string;
+}
+
+export interface ExerciseInfo {
+  editor: string;
+  starter?: string;
+  runs?: boolean;
+  autoChecked?: boolean;
+  examples?: { stdin: string; expected: string }[];
+  hiddenTests?: number;
+  requirements?: string[];
+  setup?: string;
+}
+
 export interface Assignment {
   id: string;
   title: string;
@@ -39,6 +69,8 @@ export interface Assignment {
   level: "basic" | "intermediate" | "advanced";
   deliverable: "repo" | "link" | "text";
   maxMarks: number;
+  kind: "project" | "exercise";
+  exercise: ExerciseInfo | null;
   submission: {
     id: string;
     status: SubmissionStatus;
@@ -50,6 +82,9 @@ export interface Assignment {
     feedback: string | null;
     submittedAt: string;
     reviewedAt: string | null;
+    code: string | null;
+    checkReport: CheckReport | null;
+    autoChecked: boolean;
   } | null;
 }
 
@@ -80,3 +115,23 @@ export function stageOf(me: TrackState): { step: 1 | 2 | 3 | 4 | 5; label: strin
 }
 
 export const inr = (n: number) => `₹${n.toLocaleString("en-IN")}`;
+
+/** Editor language names as students know them. */
+export const EDITOR_LABEL: Record<string, string> = {
+  javascript: "JavaScript",
+  python: "Python",
+  c: "C",
+  cpp: "C++",
+  csharp: "C#",
+  java: "Java",
+  sql: "SQL",
+  html: "HTML",
+  css: "CSS",
+  jsx: "React (JSX)",
+  yaml: "YAML",
+  dockerfile: "Dockerfile",
+  shell: "Shell",
+  hcl: "Terraform",
+  json: "JSON",
+  text: "Text",
+};

@@ -1,9 +1,10 @@
 import { useState, type FormEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { CheckCircle2, ChevronDown, Circle, Clock, ExternalLink, Github, Lock, MessageSquareWarning, Send } from "lucide-react";
+import { CheckCircle2, ChevronDown, Circle, Clock, Code2, ExternalLink, Github, Lock, MessageSquareWarning, RotateCcw, Send } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { apiFetch, ApiError } from "../../lib/api";
-import { LEVEL_LABEL, SUBMISSION_META, type Assignment } from "../../lib/internships";
+import { EDITOR_LABEL, LEVEL_LABEL, SUBMISSION_META, type Assignment } from "../../lib/internships";
+import { CodeExercise } from "./CodeExercise";
 import { useToast } from "../Toast";
 
 interface Props {
@@ -21,7 +22,10 @@ export function AssignmentItem({ assignment: a, locked, open, onToggle, onSubmit
   const sub = a.submission;
   const [form, setForm] = useState({ repoUrl: sub?.repoUrl ?? "", linkUrl: sub?.linkUrl ?? "", notes: sub?.notes ?? "" });
   const [busy, setBusy] = useState(false);
-  const canSubmit = !locked && sub?.status !== "approved" && sub?.status !== "submitted";
+  const isExercise = a.kind === "exercise";
+  const canSubmit = !isExercise && !locked && sub?.status !== "approved" && sub?.status !== "submitted";
+  // An automatic "not yet" on an exercise is a retry, not a mentor's request.
+  const retry = isExercise && sub?.status === "changes_requested" && sub.autoChecked;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -36,7 +40,7 @@ export function AssignmentItem({ assignment: a, locked, open, onToggle, onSubmit
     setBusy(false);
   }
 
-  const icon = locked ? <Lock size={16} /> : sub?.status === "approved" ? <CheckCircle2 size={18} /> : sub?.status === "submitted" ? <Clock size={17} /> : sub?.status === "changes_requested" ? <MessageSquareWarning size={17} /> : <Circle size={17} />;
+  const icon = locked ? <Lock size={16} /> : sub?.status === "approved" ? <CheckCircle2 size={18} /> : sub?.status === "submitted" ? <Clock size={17} /> : retry ? <RotateCcw size={16} /> : sub?.status === "changes_requested" ? <MessageSquareWarning size={17} /> : isExercise ? <Code2 size={17} /> : <Circle size={17} />;
 
   return (
     <li id={`assignment-${a.id}`} className={`assignment ${sub ? `is-${sub.status}` : ""}${locked ? " is-locked" : ""}${open ? " is-open" : ""}`}>
@@ -44,9 +48,9 @@ export function AssignmentItem({ assignment: a, locked, open, onToggle, onSubmit
         <span className="assignment-icon">{icon}</span>
         <span className="assignment-title">
           <strong>{a.title}</strong>
-          <span className="muted-small">{LEVEL_LABEL[a.level]} · {a.maxMarks} marks</span>
+          <span className="muted-small">{isExercise && a.exercise ? `${EDITOR_LABEL[a.exercise.editor] ?? a.exercise.editor} · ` : ""}{LEVEL_LABEL[a.level]} · {a.maxMarks} marks</span>
         </span>
-        {sub && <span className={`pill pill-${SUBMISSION_META[sub.status].tone}`}>{sub.status === "approved" ? `${sub.marks}/${a.maxMarks}` : SUBMISSION_META[sub.status].label}</span>}
+        {sub && <span className={`pill pill-${SUBMISSION_META[sub.status].tone}`}>{sub.status === "approved" ? `${sub.marks}/${a.maxMarks}` : retry ? "Try again" : SUBMISSION_META[sub.status].label}</span>}
         <ChevronDown size={17} className={`chevron${open ? " open" : ""}`} />
       </button>
       <AnimatePresence initial={false}>
@@ -56,12 +60,13 @@ export function AssignmentItem({ assignment: a, locked, open, onToggle, onSubmit
             <ul className="assignment-steps">
               {a.steps.map((s) => <li key={s}>{s}</li>)}
             </ul>
-            {sub?.feedback && (
+            {sub?.feedback && !(isExercise && sub.autoChecked) && (
               <div className={`review-note tone-${SUBMISSION_META[sub.status].tone}`}>
                 <strong>{sub.status === "approved" ? `Mentor feedback · ${sub.marks}/${a.maxMarks}` : "What to change"}</strong>
                 <p>{sub.feedback}</p>
               </div>
             )}
+            {isExercise && !locked && a.exercise?.starter !== undefined && <CodeExercise assignment={a} onSubmitted={onSubmitted} />}
             {sub && (sub.repoUrl || sub.linkUrl) && (
               <p className="submission-links">
                 {sub.repoUrl && <a href={sub.repoUrl} target="_blank" rel="noopener noreferrer"><Github size={14} /> Repository</a>}
@@ -70,7 +75,7 @@ export function AssignmentItem({ assignment: a, locked, open, onToggle, onSubmit
               </p>
             )}
             {locked && <p className="muted-small"><Lock size={13} /> Unlocks when you join the program.</p>}
-            {sub?.status === "submitted" && <p className="muted-small">Waiting for a mentor's review. You'll get a notification.</p>}
+            {sub?.status === "submitted" && !isExercise && <p className="muted-small">Waiting for a mentor's review. You'll get a notification.</p>}
             {canSubmit && (
               <form className="submit-form" onSubmit={submit}>
                 <div className="field-row field-row-2">
