@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { CheckCircle2, ExternalLink, Github, Inbox, MessageSquareWarning, Users, X } from "lucide-react";
+import { Bot, CheckCircle2, ExternalLink, Github, Inbox, MessageSquareWarning, Users, X, XCircle } from "lucide-react";
 import { DashboardShell } from "../components/DashboardShell";
 import { Avatar } from "../components/Avatar";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/api";
 import { formatDate } from "../lib/people";
-import { LEVEL_LABEL, type SubmissionStatus } from "../lib/internships";
+import { EDITOR_LABEL, LEVEL_LABEL, type CheckReport, type SubmissionStatus } from "../lib/internships";
 import { useToast } from "../components/Toast";
 
 interface QueueItem {
@@ -30,6 +30,11 @@ interface QueueItem {
   trackTitle: string;
   name: string;
   email: string;
+  kind: "project" | "exercise";
+  editor: string | null;
+  code: string | null;
+  checkReport: CheckReport | null;
+  autoChecked: boolean;
 }
 
 interface InternRow {
@@ -140,6 +145,7 @@ export default function Reviews() {
                     <span className="muted-small">{it.name} · {it.trackTitle} · {it.skillLabel}</span>
                   </span>
                   <span className="review-side">
+                    {it.autoChecked && <span className="pill pill-slate"><Bot size={11} /> Auto-checked</span>}
                     {it.status === "approved" ? <span className="pill pill-green">{it.marks}/{it.maxMarks}</span> : it.attempt > 1 ? <span className="pill pill-violet">Attempt {it.attempt}</span> : null}
                     <span className="muted-small">{formatDate(it.reviewedAt ?? it.submittedAt)}</span>
                   </span>
@@ -191,13 +197,20 @@ export default function Reviews() {
               </div>
               <p>{active.brief}</p>
               <ul className="assignment-steps">{active.steps.map((s) => <li key={s}>{s}</li>)}</ul>
-              <div className="submission-box">
+              {active.code !== null && (
+                <div className="code-view">
+                  <div className="code-editor-bar"><span>{EDITOR_LABEL[active.editor ?? ""] ?? "Code"}</span>{active.checkReport && <span className={active.checkReport.passed ? "ok" : "bad"}>{active.checkReport.passed ? <CheckCircle2 size={13} /> : <XCircle size={13} />} {active.checkReport.summary}</span>}</div>
+                  <pre>{active.code}</pre>
+                </div>
+              )}
+              {active.checkReport?.runnerUnavailable && <p className="muted-small">This code couldn't be run automatically, so it's waiting for you. Check that it does what the steps ask.</p>}
+              {active.code === null && <div className="submission-box">
                 <p className="submission-links">
                   {active.repoUrl && <a href={active.repoUrl} target="_blank" rel="noopener noreferrer"><Github size={14} /> {active.repoUrl.replace(/^https?:\/\//, "")}</a>}
                   {active.linkUrl && <a href={active.linkUrl} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} /> {active.linkUrl.replace(/^https?:\/\//, "")}</a>}
                 </p>
                 {active.notes && <p className="submission-notes">{active.notes}</p>}
-              </div>
+              </div>}
               {active.status === "submitted" ? (
                 <>
                   <div className="field">
@@ -220,7 +233,7 @@ export default function Reviews() {
                 </>
               ) : (
                 <div className={`review-note tone-${active.status === "approved" ? "green" : "amber"}`}>
-                  <strong>{active.status === "approved" ? `Approved ${active.marks}/${active.maxMarks}` : "Changes requested"}{active.reviewedBy ? ` by ${active.reviewedBy}` : ""}</strong>
+                  <strong>{active.status === "approved" ? `Approved ${active.marks}/${active.maxMarks}` : "Changes requested"}{active.reviewedBy ? ` by ${active.reviewedBy}` : active.autoChecked ? " automatically" : ""}</strong>
                   {active.feedback && <p>{active.feedback}</p>}
                 </div>
               )}

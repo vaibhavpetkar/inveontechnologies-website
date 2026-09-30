@@ -197,6 +197,13 @@
       "when": 1790709492643,
       "tag": "0027_absent_cargill",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1790763105716,
+      "tag": "0028_mysterious_hellcat",
+      "breakpoints": true
     }
   ]
 }

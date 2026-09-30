@@ -1,5 +1,6 @@
 import { pgTable, uuid, text, timestamp, boolean, jsonb, pgEnum, integer, primaryKey, unique, numeric, index, date } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+import type { CheckReport, ExerciseSpec } from "../../internships/exercises/types.js";
 
 /**
  * Phase 1 schema: identity + auth only. Opportunities/applications/
@@ -1604,6 +1605,10 @@ export const trackAssignments = pgTable(
     maxMarks: integer("max_marks").notNull().default(10),
     orderIndex: integer("order_index").notNull().default(0),
     active: boolean("active").notNull().default(true),
+    // "project": a mentor reviews a repo/link. "exercise": code written in
+    // the portal and checked automatically against `exercise`.
+    kind: text("kind", { enum: ["project", "exercise"] }).notNull().default("project"),
+    exercise: jsonb("exercise").$type<ExerciseSpec>(),
   },
   (t) => ({ uniqSkillTitle: unique("track_assignments_skill_title_unique").on(t.skill, t.title) }),
 );
@@ -1624,6 +1629,10 @@ export const assignmentSubmissions = pgTable(
     attempt: integer("attempt").notNull().default(1),
     marks: integer("marks"),
     feedback: text("feedback"),
+    // Exercises: the submitted code and the automatic check's result.
+    code: text("code"),
+    checkReport: jsonb("check_report").$type<CheckReport>(),
+    autoChecked: boolean("auto_checked").notNull().default(false),
     reviewedBy: uuid("reviewed_by").references(() => users.id),
     reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
     submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().defaultNow(),

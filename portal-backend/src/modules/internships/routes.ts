@@ -1,4 +1,5 @@
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
@@ -24,12 +25,42 @@ import { expireTrialIfDue } from "../payments/enrollments.js";
 import type { Env } from "../shared/env.js";
 import { SKILL_LABELS } from "./catalog-skills.js";
 import { trackSkills } from "./catalog-tracks.js";
-import { allocateRoadmap, assignmentsForSkills, installCatalog, offerFilename, offerPdf, trackStats, type Track } from "./service.js";
+import { allocateRoadmap, assignmentsForSkills, ensureBankSynced, installCatalog, offerFilename, offerPdf, trackStats, type Track, type TrackAssignment } from "./service.js";
+import { gradeExercise, MAX_CODE_LENGTH } from "./exercises/grade.js";
+import { runnerFromEnv } from "./exercises/runner.js";
+import type { ExerciseSpec } from "./exercises/types.js";
 
 const REVIEWER_ROLES = ["manager", "hr", "admin", "super_admin"] as const;
 const INSTALL_ROLES = ["admin", "super_admin"] as const;
 const isReviewer = (role: string) => (REVIEWER_ROLES as readonly string[]).includes(role);
 const UNLOCKED = ["paid", "waived"];
+
+// Each run or submit may compile and run code several times on Judge0.
+const checkLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 12,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => (req as Request & { user?: { sub: string } }).user?.sub ?? req.ip ?? "unknown",
+  message: { error: { code: "RATE_LIMITED", message: "You're checking too often; wait a minute and try again" } },
+});
+
+/** What a participant sees of an exercise: never the hidden tests. */
+function publicExercise(spec: ExerciseSpec | null, runsCode: boolean) {
+  if (!spec) return null;
+  const run = spec.check.run;
+  return {
+    editor: spec.editor,
+    starter: spec.starter,
+    runs: !!run,
+    // Whether this exercise is checked automatically right now.
+    autoChecked: !run || runsCode,
+    examples: run ? run.tests.filter((t) => !t.hidden).map((t) => ({ stdin: t.stdin, expected: t.expected })) : [],
+    hiddenTests: run ? run.tests.filter((t) => t.hidden).length : 0,
+    requirements: (spec.check.rules ?? []).map((r) => r.message),
+    ...(run?.language === "sql" ? { setup: run.setup ?? "" } : {}),
+  };
+}
 
 const url = z.string().trim().url().max(500).refine((u) => /^https?:\/\//.test(u), "Use an http(s) link");
 const submitSchema = z
@@ -39,6 +70,8 @@ const submitSchema = z
     notes: z.string().trim().max(4000).nullable().optional(),
   })
   .refine((b) => b.repoUrl || b.linkUrl || (b.notes && b.notes.length >= 20), "Add a repository or live link (or at least a short write-up)");
+
+const codeSchema = z.object({ code: z.string().max(MAX_CODE_LENGTH, "That's too much code for one exercise").refine((c) => c.trim().length > 0, "Write some code first") });
 
 const reviewSchema = z.object({
   decision: z.enum(["approve", "changes"]),
@@ -96,6 +129,7 @@ function publicTrack(track: Track) {
 export function internshipsRouter(db: Database, env: Env) {
   const router = Router();
   const cashfree = cashfreeConfig(env);
+  const runner = runnerFromEnv(env);
 
   const trackBySlug = async (slug: string) => {
     const track = await db.query.internshipTracks.findFirst({ where: eq(internshipTracks.slug, slug) });
@@ -104,6 +138,7 @@ export function internshipsRouter(db: Database, env: Env) {
   };
 
   router.get("/", requireAuth(env), async (req, res) => {
+    await ensureBankSynced(db);
     const tracks = await db.query.internshipTracks.findMany({ where: eq(internshipTracks.active, true), orderBy: asc(internshipTracks.orderIndex) });
     const counts = await db.execute<{ skill: string; n: number }>(sql`SELECT skill, count(*)::int AS n FROM track_assignments WHERE active GROUP BY skill`);
     const bySkill = new Map(counts.rows.map((r) => [r.skill, r.n]));
@@ -127,6 +162,54 @@ export function internshipsRouter(db: Database, env: Env) {
     res.status(created.length ? 201 : 200).json({ created });
   });
 
+
+  /** Everything on the roadmap approved: tell HR (to issue the completion certificate) and the intern. */
+  async function checkRoadmapDone(track: Track, enrollmentId: string, userId: string) {
+    const required = trackSkills(track.roadmap);
+    const [{ total, approved }] = (
+      await db.execute<{ total: number; approved: number }>(sql`
+        SELECT (SELECT count(*)::int FROM track_assignments WHERE active AND skill IN (${sql.join(required.map((s) => sql`${s}`), sql`, `)})) AS total,
+               (SELECT count(*)::int FROM assignment_submissions WHERE enrollment_id = ${enrollmentId} AND status = 'approved') AS approved
+      `)
+    ).rows;
+    if (approved < total) return;
+    const who = await displayNameFor(db, userId);
+    const staff = await db.query.users.findMany({ where: inArray(users.role, ["hr", "admin", "super_admin"]), columns: { id: true } });
+    await notify(db, {
+      userIds: staff.map((s) => s.id),
+      kind: "internship.roadmap_done",
+      title: `${who} finished the ${track.title} roadmap`,
+      body: "Every assignment is approved. Issue their internship completion certificate from the People page.",
+      link: "/people",
+      dedupeKey: `roadmap-done:${enrollmentId}`,
+      email: true,
+    });
+    await notify(db, { userIds: [userId], kind: "internship.roadmap_done", title: "You've completed your roadmap!", body: `Every ${track.title} assignment is approved. Well done!`, link: `/internships/${track.slug}`, dedupeKey: `roadmap-done-me:${enrollmentId}` });
+  }
+
+  /** The unlocked track (and its enrollment) that includes the assignment, or a 403. */
+  async function unlockedTrackFor(assignment: TrackAssignment, userId: string) {
+    const mine = await db.query.programEnrollments.findMany({ where: and(eq(programEnrollments.userId, userId), inArray(programEnrollments.status, ["paid", "waived"])) });
+    const tracks = mine.length ? await db.query.internshipTracks.findMany({ where: inArray(internshipTracks.opportunityId, mine.map((e) => e.opportunityId)) }) : [];
+    const track = tracks.find((t) => trackSkills(t.roadmap).includes(assignment.skill));
+    if (!track) throw new AppError("ROADMAP_LOCKED", "This assignment unlocks once you've joined an internship program that includes it", 403);
+    return { track, enrollment: mine.find((e) => e.opportunityId === track.opportunityId)! };
+  }
+
+  async function notifyMentors(track: Track, assignment: TrackAssignment, userId: string, resubmitted: boolean) {
+    const opportunity = await db.query.opportunities.findFirst({ where: (o, { eq: e }) => e(o.id, track.opportunityId!) });
+    const mentors = opportunity?.hiringManagerId ? [opportunity.hiringManagerId] : (await db.query.users.findMany({ where: inArray(users.role, ["hr", "admin", "super_admin"]), columns: { id: true } })).map((u) => u.id);
+    const who = await displayNameFor(db, userId);
+    await notify(db, {
+      userIds: mentors,
+      actorUserId: userId,
+      kind: "assignment.submitted",
+      title: `${resubmitted ? "Resubmitted" : "New submission"}: ${assignment.title}`,
+      body: `${who} · ${track.title} · ${SKILL_LABELS[assignment.skill] ?? assignment.skill}`,
+      link: "/reviews",
+    });
+  }
+
   // ---- Reviewing (mentors) — declared before /:slug ----
 
   router.get("/reviews/queue", requireAuth(env), requireRole(...REVIEWER_ROLES), async (req, res) => {
@@ -134,7 +217,9 @@ export function internshipsRouter(db: Database, env: Env) {
     const rows = await db.execute<Record<string, unknown>>(sql`
       SELECT s.id, s.status, s.repo_url AS "repoUrl", s.link_url AS "linkUrl", s.notes, s.attempt, s.marks, s.feedback,
              s.submitted_at AS "submittedAt", s.reviewed_at AS "reviewedAt",
+             s.code, s.check_report AS "checkReport", s.auto_checked AS "autoChecked",
              a.id AS "assignmentId", a.title, a.brief, a.steps, a.skill, a.level, a.deliverable, a.max_marks AS "maxMarks",
+             a.kind, a.exercise->>'editor' AS editor,
              t.slug AS "trackSlug", t.title AS "trackTitle",
              u.id AS "userId", u.email,
              coalesce(u.full_name, cp.full_name, initcap(replace(split_part(u.email, '@', 1), '.', ' '))) AS name,
@@ -146,14 +231,14 @@ export function internshipsRouter(db: Database, env: Env) {
       JOIN users u ON u.id = s.user_id
       LEFT JOIN candidate_profiles cp ON cp.user_id = u.id
       LEFT JOIN users r ON r.id = s.reviewed_by
-      WHERE s.status = ${status} ${track ? sql`AND t.slug = ${track}` : sql``}
+      WHERE s.status = ${status} AND NOT (s.auto_checked AND s.status = 'changes_requested') ${track ? sql`AND t.slug = ${track}` : sql``}
       ORDER BY ${status === "submitted" ? sql`s.submitted_at ASC` : sql`coalesce(s.reviewed_at, s.submitted_at) DESC`}
       LIMIT 200
     `);
     const [counts] = (
       await db.execute<{ submitted: number; changes: number; approved: number }>(sql`
         SELECT count(*) FILTER (WHERE status = 'submitted')::int AS submitted,
-               count(*) FILTER (WHERE status = 'changes_requested')::int AS changes,
+               count(*) FILTER (WHERE status = 'changes_requested' AND NOT auto_checked)::int AS changes,
                count(*) FILTER (WHERE status = 'approved')::int AS approved
         FROM assignment_submissions
       `)
@@ -234,30 +319,7 @@ export function internshipsRouter(db: Database, env: Env) {
     });
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: `assignment.${body.decision}`, entityType: "assignment_submission", entityId: submission.id, metadata: { marks: body.marks ?? null }, ipAddress: req.ip });
 
-    // Everything on the roadmap approved: the internship can be completed.
-    if (track && body.decision === "approve") {
-      const required = trackSkills(track.roadmap);
-      const [{ total, approved }] = (
-        await db.execute<{ total: number; approved: number }>(sql`
-          SELECT (SELECT count(*)::int FROM track_assignments WHERE active AND skill IN (${sql.join(required.map((s) => sql`${s}`), sql`, `)})) AS total,
-                 (SELECT count(*)::int FROM assignment_submissions WHERE enrollment_id = ${enrollment.id} AND status = 'approved') AS approved
-        `)
-      ).rows;
-      if (approved >= total) {
-        const who = await displayNameFor(db, submission.userId);
-        const staff = await db.query.users.findMany({ where: inArray(users.role, ["hr", "admin", "super_admin"]), columns: { id: true } });
-        await notify(db, {
-          userIds: staff.map((s) => s.id),
-          kind: "internship.roadmap_done",
-          title: `${who} finished the ${track.title} roadmap`,
-          body: "Every assignment is approved. Issue their internship completion certificate from the People page.",
-          link: "/people",
-          dedupeKey: `roadmap-done:${enrollment.id}`,
-          email: true,
-        });
-        await notify(db, { userIds: [submission.userId], kind: "internship.roadmap_done", title: "You've completed your roadmap!", body: `Every ${track.title} assignment is approved. Well done!`, link: `/internships/${track.slug}`, dedupeKey: `roadmap-done-me:${enrollment.id}` });
-      }
-    }
+    if (track && body.decision === "approve") await checkRoadmapDone(track, enrollment.id, submission.userId);
     res.json({ submission: updated });
   });
 
@@ -274,40 +336,74 @@ export function internshipsRouter(db: Database, env: Env) {
     res.send(Buffer.from(pdf));
   });
 
-  router.post("/assignments/:id/submit", requireAuth(env), async (req, res) => {
-    const body = submitSchema.parse(req.body);
+  /** Checks exercise code against the visible examples and requirements; nothing is saved. */
+  router.post("/assignments/:id/run", requireAuth(env), checkLimiter, async (req, res) => {
+    const { code } = codeSchema.parse(req.body);
+    const assignment = await db.query.trackAssignments.findFirst({ where: eq(trackAssignments.id, req.params.id) });
+    if (!assignment || !assignment.active || assignment.kind !== "exercise" || !assignment.exercise) throw new NotFoundError("Exercise not found");
+    await unlockedTrackFor(assignment, req.user!.sub);
+    res.json({ report: await gradeExercise(assignment.exercise, code, runner, { includeHidden: false }) });
+  });
+
+  router.post("/assignments/:id/submit", requireAuth(env), checkLimiter, async (req, res) => {
     const assignment = await db.query.trackAssignments.findFirst({ where: eq(trackAssignments.id, req.params.id) });
     if (!assignment || !assignment.active) throw new NotFoundError("Assignment not found");
-
-    // The assignment must be on a track the caller has unlocked.
-    const mine = await db.query.programEnrollments.findMany({ where: and(eq(programEnrollments.userId, req.user!.sub), inArray(programEnrollments.status, ["paid", "waived"])) });
-    const tracks = mine.length ? await db.query.internshipTracks.findMany({ where: inArray(internshipTracks.opportunityId, mine.map((e) => e.opportunityId)) }) : [];
-    const track = tracks.find((t) => trackSkills(t.roadmap).includes(assignment.skill));
-    if (!track) throw new AppError("ROADMAP_LOCKED", "This assignment unlocks once you've joined an internship program that includes it", 403);
-    const enrollment = mine.find((e) => e.opportunityId === track.opportunityId)!;
-
+    if (assignment.kind === "exercise") {
+      await submitExercise(req, res, assignment);
+      return;
+    }
+    const body = submitSchema.parse(req.body);
+    const { track, enrollment } = await unlockedTrackFor(assignment, req.user!.sub);
     const existing = await db.query.assignmentSubmissions.findFirst({ where: and(eq(assignmentSubmissions.assignmentId, assignment.id), eq(assignmentSubmissions.userId, req.user!.sub)) });
     if (existing?.status === "approved") throw new AppError("ALREADY_APPROVED", "This assignment is already approved", 409);
     const values = { repoUrl: body.repoUrl || null, linkUrl: body.linkUrl || null, notes: body.notes || null, status: "submitted" as const, submittedAt: new Date() };
     const [submission] = existing
       ? await db.update(assignmentSubmissions).set({ ...values, attempt: existing.attempt + 1 }).where(eq(assignmentSubmissions.id, existing.id)).returning()
       : await db.insert(assignmentSubmissions).values({ ...values, assignmentId: assignment.id, userId: req.user!.sub, enrollmentId: enrollment.id }).returning();
-
-    const opportunity = await db.query.opportunities.findFirst({ where: (o, { eq: e }) => e(o.id, track.opportunityId!) });
-    const mentors = opportunity?.hiringManagerId ? [opportunity.hiringManagerId] : (await db.query.users.findMany({ where: inArray(users.role, ["hr", "admin", "super_admin"]), columns: { id: true } })).map((u) => u.id);
-    const who = await displayNameFor(db, req.user!.sub);
-    await notify(db, {
-      userIds: mentors,
-      actorUserId: req.user!.sub,
-      kind: "assignment.submitted",
-      title: `${existing ? "Resubmitted" : "New submission"}: ${assignment.title}`,
-      body: `${who} · ${track.title} · ${SKILL_LABELS[assignment.skill] ?? assignment.skill}`,
-      link: "/reviews",
-    });
+    await notifyMentors(track, assignment, req.user!.sub, !!existing);
     res.status(existing ? 200 : 201).json({ submission });
   });
 
+  /**
+   * Exercise submissions are checked straight away, hidden tests included:
+   * all checks pass = approved with full marks; otherwise the student sees
+   * what failed and tries again. If the code can't be run right now, the
+   * submission waits for a mentor like a project does.
+   */
+  async function submitExercise(req: Request, res: Response, assignment: TrackAssignment) {
+    const { code } = codeSchema.parse(req.body);
+    const { track, enrollment } = await unlockedTrackFor(assignment, req.user!.sub);
+    const existing = await db.query.assignmentSubmissions.findFirst({ where: and(eq(assignmentSubmissions.assignmentId, assignment.id), eq(assignmentSubmissions.userId, req.user!.sub)) });
+    if (existing?.status === "approved") throw new AppError("ALREADY_APPROVED", "This exercise is already approved", 409);
+    if (existing?.status === "submitted" && !existing.autoChecked) throw new AppError("WAITING_FOR_REVIEW", "This is waiting for a mentor's review", 409);
+
+    const report = await gradeExercise(assignment.exercise!, code, runner, { includeHidden: true });
+    const now = new Date();
+    const toMentor = !!report.runnerUnavailable && report.items.every((i) => i.passed);
+    const values = {
+      code,
+      checkReport: report,
+      repoUrl: null,
+      linkUrl: null,
+      notes: null,
+      submittedAt: now,
+      ...(report.passed
+        ? { status: "approved" as const, autoChecked: true, marks: assignment.maxMarks, feedback: report.summary, reviewedAt: now, reviewedBy: null }
+        : toMentor
+          ? { status: "submitted" as const, autoChecked: false, marks: null, feedback: null, reviewedAt: null, reviewedBy: null }
+          : { status: "changes_requested" as const, autoChecked: true, marks: null, feedback: report.summary, reviewedAt: now, reviewedBy: null }),
+    };
+    const [submission] = existing
+      ? await db.update(assignmentSubmissions).set({ ...values, attempt: existing.attempt + 1 }).where(eq(assignmentSubmissions.id, existing.id)).returning()
+      : await db.insert(assignmentSubmissions).values({ ...values, assignmentId: assignment.id, userId: req.user!.sub, enrollmentId: enrollment.id }).returning();
+
+    if (report.passed) await checkRoadmapDone(track, enrollment.id, req.user!.sub);
+    if (toMentor) await notifyMentors(track, assignment, req.user!.sub, !!existing);
+    res.status(existing ? 200 : 201).json({ submission: { ...submission, code: undefined }, report });
+  }
+
   router.get("/:slug", requireAuth(env), async (req, res) => {
+    await ensureBankSynced(db);
     const track = await trackBySlug(req.params.slug);
     const me = await myState(db, track, req.user!.sub);
     const bank = await assignmentsForSkills(db, trackSkills(track.roadmap));
@@ -327,7 +423,11 @@ export function internshipsRouter(db: Database, env: Env) {
             level: a.level,
             deliverable: a.deliverable,
             maxMarks: a.maxMarks,
-            submission: sub ? { id: sub.id, status: sub.status, repoUrl: sub.repoUrl, linkUrl: sub.linkUrl, notes: sub.notes, attempt: sub.attempt, marks: sub.marks, feedback: sub.feedback, submittedAt: sub.submittedAt, reviewedAt: sub.reviewedAt } : null,
+            kind: a.kind,
+            exercise: me.unlocked ? publicExercise(a.exercise, !!runner) : a.exercise ? { editor: a.exercise.editor } : null,
+            submission: sub
+              ? { id: sub.id, status: sub.status, repoUrl: sub.repoUrl, linkUrl: sub.linkUrl, notes: sub.notes, attempt: sub.attempt, marks: sub.marks, feedback: sub.feedback, submittedAt: sub.submittedAt, reviewedAt: sub.reviewedAt, code: sub.code, checkReport: sub.checkReport, autoChecked: sub.autoChecked }
+              : null,
           };
         }),
       })),

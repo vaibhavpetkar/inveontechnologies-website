@@ -30,6 +30,7 @@ import { letterheadAddress } from "../employees/appointment.js";
 import { longDate, renderLetterPdf, type LetterDocument } from "../shared/letter-pdf.js";
 import { SKILL_LABELS, SKILLS } from "./catalog-skills.js";
 import { TRACKS, trackSkills } from "./catalog-tracks.js";
+import { EXERCISES } from "./exercises/bank/index.js";
 
 export type Track = typeof internshipTracks.$inferSelect;
 export type TrackAssignment = typeof trackAssignments.$inferSelect;
@@ -46,13 +47,17 @@ const money = (n: number | string) => `Rs. ${Number(n).toLocaleString("en-IN")}`
 
 /**
  * Places every assignment of the track's skills in a month. A skill that
- * appears in two months has its assignments split between them in order,
- * so each assignment shows up exactly once.
+ * appears in two months has its exercises and its projects each split
+ * between them in order, so each assignment shows up exactly once.
  */
 export function allocateRoadmap(roadmap: RoadmapPhase[], bySkill: Map<string, TrackAssignment[]>) {
   const occurrences = new Map<string, number>();
   for (const phase of roadmap) for (const skill of phase.skills) occurrences.set(skill, (occurrences.get(skill) ?? 0) + 1);
   const used = new Map<string, number>();
+  const share = (list: TrackAssignment[], total: number, seen: number) => {
+    const per = Math.ceil(list.length / total);
+    return list.slice(seen * per, (seen + 1) * per);
+  };
   return roadmap.map((phase) => ({
     ...phase,
     skills: phase.skills.map((skill) => {
@@ -60,8 +65,9 @@ export function allocateRoadmap(roadmap: RoadmapPhase[], bySkill: Map<string, Tr
       const total = occurrences.get(skill)!;
       const seen = used.get(skill) ?? 0;
       used.set(skill, seen + 1);
-      const per = Math.ceil(all.length / total);
-      return { key: skill, label: SKILL_LABELS[skill] ?? skill, assignments: all.slice(seen * per, (seen + 1) * per) };
+      // Practice exercises first, then the projects that build on them.
+      const assignments = [...share(all.filter((a) => a.kind === "exercise"), total, seen), ...share(all.filter((a) => a.kind !== "exercise"), total, seen)];
+      return { key: skill, label: SKILL_LABELS[skill] ?? skill, assignments };
     }),
   }));
 }
@@ -83,11 +89,55 @@ export async function assignmentsForSkills(db: Database, skills: string[]) {
  * again: anything that already exists (by skill+title or track slug) is left
  * as it is, so staff edits survive.
  */
-export async function installCatalog(db: Database, adminUserId: string) {
+export const EXERCISE_MARKS = 5;
+
+/**
+ * Writes the assignment bank. Projects are only added (staff may edit them);
+ * auto-checked exercises are kept in step with the code, so fixes to their
+ * tests reach existing installs. The reference solutions never leave the code.
+ */
+export async function syncAssignmentBank(db: Database) {
   await db
     .insert(trackAssignments)
     .values(SKILLS.flatMap((s) => s.assignments.map((a, i) => ({ skill: s.key, title: a.title, brief: a.brief, steps: a.steps, deliverable: a.deliverable ?? "repo", level: a.level ?? "basic", orderIndex: i }))))
     .onConflictDoNothing();
+  const exercises = Object.entries(EXERCISES).flatMap(([skill, list]) =>
+    list.map((e, i) => ({
+      skill,
+      title: e.title,
+      brief: e.brief,
+      steps: e.steps,
+      deliverable: "text" as const,
+      level: e.level ?? "basic",
+      maxMarks: EXERCISE_MARKS,
+      orderIndex: i,
+      kind: "exercise" as const,
+      exercise: { editor: e.editor, starter: e.starter, check: e.check },
+    })),
+  );
+  if (exercises.length) {
+    await db
+      .insert(trackAssignments)
+      .values(exercises)
+      .onConflictDoUpdate({
+        target: [trackAssignments.skill, trackAssignments.title],
+        set: { brief: sql`excluded.brief`, steps: sql`excluded.steps`, level: sql`excluded.level`, orderIndex: sql`excluded.order_index`, kind: sql`excluded.kind`, exercise: sql`excluded.exercise`, maxMarks: sql`excluded.max_marks` },
+      });
+  }
+}
+
+let bankSynced: Promise<void> | null = null;
+/** Syncs the bank once per process, the first time the internships pages are used. */
+export function ensureBankSynced(db: Database) {
+  bankSynced ??= syncAssignmentBank(db).catch((err) => {
+    bankSynced = null;
+    logger.error({ err }, "syncing the assignment bank failed");
+  });
+  return bankSynced;
+}
+
+export async function installCatalog(db: Database, adminUserId: string) {
+  await syncAssignmentBank(db);
 
   const created: string[] = [];
   for (const [index, seed] of TRACKS.entries()) {
