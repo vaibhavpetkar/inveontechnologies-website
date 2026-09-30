@@ -1558,3 +1558,92 @@ export const attendanceRecords = pgTable(
   },
   (t) => ({ uniqDay: unique("attendance_employee_date_unique").on(t.employeeId, t.date) }),
 );
+
+// --- Internship tracks (6-month programs): course, exam, offer, roadmap ---
+//
+// A track bundles a course whose final exam, once passed, earns the learner
+// a participant offer for the track's internship opening. The offer is an
+// application + program enrollment on that opening, so the fee is paid
+// through the existing Cashfree flow; paying unlocks the roadmap of
+// assignments, which mentors review and mark.
+
+export interface RoadmapPhase {
+  month: number;
+  title: string;
+  skills: string[];
+}
+
+export const internshipTracks = pgTable("internship_tracks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  slug: text("slug").notNull().unique(),
+  title: text("title").notNull(),
+  tagline: text("tagline").notNull(),
+  description: text("description").notNull(),
+  roadmap: jsonb("roadmap").$type<RoadmapPhase[]>().notNull(),
+  courseId: uuid("course_id").references(() => courses.id, { onDelete: "set null" }),
+  examLessonId: uuid("exam_lesson_id").references(() => courseLessons.id, { onDelete: "set null" }),
+  opportunityId: uuid("opportunity_id").unique().references(() => opportunities.id, { onDelete: "set null" }),
+  fee: numeric("fee", { precision: 10, scale: 2 }).notNull().default("4000"),
+  durationMonths: integer("duration_months").notNull().default(6),
+  active: boolean("active").notNull().default(true),
+  orderIndex: integer("order_index").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** The assignment bank, per skill (html, react, spring_boot, ...). Tracks pick skills. */
+export const trackAssignments = pgTable(
+  "track_assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    skill: text("skill").notNull(),
+    title: text("title").notNull(),
+    brief: text("brief").notNull(),
+    steps: jsonb("steps").$type<string[]>().notNull(),
+    deliverable: text("deliverable", { enum: ["repo", "link", "text"] }).notNull().default("repo"),
+    level: text("level", { enum: ["basic", "intermediate", "advanced"] }).notNull().default("basic"),
+    maxMarks: integer("max_marks").notNull().default(10),
+    orderIndex: integer("order_index").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+  },
+  (t) => ({ uniqSkillTitle: unique("track_assignments_skill_title_unique").on(t.skill, t.title) }),
+);
+
+export const submissionStatusEnum = pgEnum("assignment_submission_status", ["submitted", "changes_requested", "approved"]);
+
+export const assignmentSubmissions = pgTable(
+  "assignment_submissions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    assignmentId: uuid("assignment_id").notNull().references(() => trackAssignments.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    enrollmentId: uuid("enrollment_id").notNull().references(() => programEnrollments.id, { onDelete: "cascade" }),
+    status: submissionStatusEnum("status").notNull().default("submitted"),
+    repoUrl: text("repo_url"),
+    linkUrl: text("link_url"),
+    notes: text("notes"),
+    attempt: integer("attempt").notNull().default(1),
+    marks: integer("marks"),
+    feedback: text("feedback"),
+    reviewedBy: uuid("reviewed_by").references(() => users.id),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    uniqPerUser: unique("assignment_submissions_assignment_user_unique").on(t.assignmentId, t.userId),
+    byStatus: index("assignment_submissions_status_idx").on(t.status, t.submittedAt),
+  }),
+);
+
+/** The participant offer earned by passing a track's final exam. */
+export const participantOffers = pgTable("participant_offers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  seqNumber: integer("seq_number").generatedAlwaysAsIdentity(),
+  referenceNo: text("reference_no"),
+  enrollmentId: uuid("enrollment_id").notNull().unique().references(() => programEnrollments.id, { onDelete: "cascade" }),
+  trackId: uuid("track_id").notNull().references(() => internshipTracks.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  examScore: integer("exam_score").notNull(),
+  fee: numeric("fee", { precision: 10, scale: 2 }).notNull(),
+  issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+  emailedAt: timestamp("emailed_at", { withTimezone: true }),
+});

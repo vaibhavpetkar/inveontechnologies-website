@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, CalendarCheck, CalendarDays, Briefcase, ClipboardCheck, FileText, IndianRupee, KanbanSquare, LayoutDashboard, MessagesSquare, ReceiptIndianRupee, ScrollText, UserRound, Users, type LucideIcon } from "lucide-react";
+import { BarChart3, BookOpen, CalendarCheck, CalendarDays, Briefcase, ClipboardCheck, FileCheck2, FileText, GraduationCap, IndianRupee, KanbanSquare, LayoutDashboard, MessagesSquare, ReceiptIndianRupee, ScrollText, UserRound, Users, type LucideIcon } from "lucide-react";
 import type { UserRole } from "../context/AuthContext";
 
 export interface NavItem {
@@ -13,6 +13,7 @@ const STAFF_ROLES: UserRole[] = ["manager", "hr", "admin", "super_admin"];
 export function navForRole(role: UserRole): NavItem[] {
   if (role === "candidate") {
     return [
+      { href: "/internships", label: "Internships", icon: GraduationCap },
       { href: "/opportunities", label: "Opportunities", icon: Briefcase },
       { href: "/candidate", label: "My applications", icon: FileText },
       { href: "/assessments", label: "Exams", icon: ClipboardCheck },
@@ -27,18 +28,21 @@ export function navForRole(role: UserRole): NavItem[] {
       { href: "/admin", label: "Console", icon: LayoutDashboard },
       { href: "/people", label: role === "manager" ? "My team" : "People", icon: Users },
       { href: "/tasks", label: "Tasks", icon: KanbanSquare },
+      { href: "/reviews", label: "Reviews", icon: FileCheck2 },
       { href: "/attendance", label: "Attendance", icon: CalendarCheck },
       ...(role === "manager" ? [] : [{ href: "/opportunities", label: "Openings", icon: Briefcase }]),
       ...(role === "manager" ? [] : [{ href: "/payroll", label: "Payroll", icon: IndianRupee }]),
       ...(role === "manager" ? [] : [{ href: "/reports", label: "Reports", icon: BarChart3 }]),
       { href: "/calendar", label: "Calendar", icon: CalendarDays },
       { href: "/courses", label: "Courses", icon: BookOpen },
+      { href: "/internships", label: "Internships", icon: GraduationCap },
       { href: "/chat", label: "Chat", icon: MessagesSquare },
       { href: "/policies", label: "Policies", icon: ScrollText },
     ];
   }
   return [
     { href: "/employee", label: "Workspace", icon: LayoutDashboard },
+    { href: "/internships", label: "Internship", icon: GraduationCap },
     { href: "/tasks", label: "My tasks", icon: KanbanSquare },
     { href: "/attendance", label: "Attendance", icon: CalendarCheck },
     { href: "/payslips", label: "Pay", icon: ReceiptIndianRupee },

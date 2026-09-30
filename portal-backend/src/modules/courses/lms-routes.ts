@@ -9,6 +9,7 @@ import { writeAuditLog } from "../shared/audit.js";
 import { scoreAttempt } from "../assessments/scoring.js";
 import type { Env } from "../shared/env.js";
 import { ensureProgressRows, maybeAutoCompleteEnrollment, resolveEnrollmentPaymentStatus } from "./routes.js";
+import { onLessonPassed } from "../internships/service.js";
 
 const AUTHOR_ROLES = ["hr", "admin", "super_admin"] as const;
 const isAuthor = (role?: string) => !!role && (AUTHOR_ROLES as readonly string[]).includes(role);
@@ -279,6 +280,8 @@ export function lmsRouter(db: Database, env: Env) {
       .where(and(eq(lessonProgress.enrollmentId, enrollment.id), eq(lessonProgress.lessonId, lesson.id)));
 
     if (nowPassed) await maybeAutoCompleteEnrollment(db, enrollment.id, courseId, env.PORTAL_APP_URL);
+    // A track's final exam: passing it earns the internship offer.
+    const internship = result.passed ? await onLessonPassed(db, { lessonId: lesson.id, userId: enrollment.userId, scorePercent: result.scorePercent }) : null;
     const updatedEnrollment = await db.query.courseEnrollments.findFirst({ where: eq(courseEnrollments.id, enrollment.id) });
 
     const byId = new Map(questions.map((q) => [q.id, q]));
@@ -288,6 +291,7 @@ export function lmsRouter(db: Database, env: Env) {
       bestScorePercent: best,
       lessonPassed: nowPassed,
       courseCompleted: updatedEnrollment?.status === "completed",
+      internship,
       // Feedback per question: shown after submitting, so learners learn from mistakes.
       review: result.answers.map((a) => ({ questionId: a.questionId, selectedOptionId: a.selectedOptionId, correct: a.isCorrect, correctOptionId: byId.get(a.questionId)!.correctOptionId, explanation: byId.get(a.questionId)!.explanation })),
     };

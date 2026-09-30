@@ -10,6 +10,7 @@ import { ensureProgressRows } from "../courses/routes.js";
 import { formatWhen } from "../shared/format.js";
 import { logger } from "../shared/logger.js";
 import { joinUpcomingClasses } from "../courses/classes.js";
+import { onProgramUnlocked } from "../internships/service.js";
 
 export type ProgramEnrollment = typeof programEnrollments.$inferSelect;
 
@@ -143,7 +144,10 @@ export async function markEnrollmentPaid(
   if (!updated) return db.query.programEnrollments.findFirst({ where: eq(programEnrollments.id, enrollmentId) });
 
   await startProgram(db, updated, "paid", null);
-  await notifyCandidate(db, updated.applicationId, {
+  // Internship tracks have no joining form: paying unlocks the roadmap and
+  // makes the participant an intern, with its own notifications.
+  const isTrack = await onProgramUnlocked(db, updated, input.actorUserId);
+  if (!isTrack) await notifyCandidate(db, updated.applicationId, {
     kind: "program.paid",
     actorUserId: input.actorUserId ?? undefined,
     title: "Payment received",
