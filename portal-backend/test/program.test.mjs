@@ -2,10 +2,13 @@ import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createHmac, randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { startServer } from "./helpers.mjs";
 
 const SECRET = "cf-test-secret";
-let api, hr, admin, fake;
+let api, hr, admin, fake, uploadDir;
 
 // A stand-in for Cashfree's /orders API.
 function startFakeCashfree() {
@@ -38,13 +41,15 @@ function startFakeCashfree() {
 
 before(async () => {
   fake = await startFakeCashfree();
-  api = await startServer({ CASHFREE_APP_ID: "cf-app", CASHFREE_SECRET_KEY: SECRET, CASHFREE_API_BASE: fake.url });
+  uploadDir = mkdtempSync(path.join(tmpdir(), "portal-uploads-"));
+  api = await startServer({ CASHFREE_APP_ID: "cf-app", CASHFREE_SECRET_KEY: SECRET, CASHFREE_API_BASE: fake.url, PORTAL_UPLOAD_DIR: uploadDir });
   hr = await api.createUser("hr");
   admin = await api.createUser("admin");
 });
 after(async () => {
   await api?.stop();
   fake?.server.close();
+  if (uploadDir) rmSync(uploadDir, { recursive: true, force: true });
 });
 
 async function passedHr({ programFee = 4999, trialHours } = {}) {
@@ -73,6 +78,9 @@ const joining = {
   hoursPerWeek: 20,
   preferredSlots: ["weekday_evening", "weekend"],
   githubUsername: "asha-p",
+  educationStatus: "completed",
+  educationLevel: "graduate",
+  experienceCompanies: [],
 };
 
 function signed(body) {
@@ -191,6 +199,41 @@ describe("HR round to program", () => {
     const profile = await api.pool.query("SELECT full_name FROM candidate_profiles WHERE user_id = $1", [candidate.id]);
     assert.equal(profile.rows[0].full_name, "Asha Patil");
     assert.equal((await journey(candidate, application.id)).json.enrollment.joiningDetails.preferredStartDate, "2026-10-05");
+  });
+
+  test("the joining form asks for Aadhaar, PAN, education proof and experience letters; staff check each", async () => {
+    const { candidate, application, enrollment } = await passedHr({ programFee: null });
+    const put = (body) => api.call("PUT", `/program/enrollments/${enrollment.id}/joining`, { token: candidate.token, body: { ...joining, ...body } });
+    const docs = async () => (await journey(candidate, application.id)).json.documents;
+    const names = async () => (await docs()).map((d) => d.documentName).sort();
+
+    assert.equal((await put({ educationStatus: undefined })).status, 400, "education answers are required");
+    assert.equal((await put({ educationStatus: "studying", educationLevel: "12th" })).status, 200);
+    assert.deepEqual(await names(), ["Aadhaar card", "Last year's marksheet (12th / Intermediate)", "PAN card"]);
+    assert.ok((await docs()).every((d) => d.requestedBy === null && d.status === "requested"));
+
+    // Upload the Aadhaar, then change answers: finished graduation, two past jobs.
+    const aadhaar = (await docs()).find((d) => d.documentType === "aadhaar");
+    const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32, 1)]);
+    const up = await fetch(`${api.base}/files?purpose=application_document&name=aadhaar.png`, { method: "POST", headers: { Authorization: `Bearer ${candidate.token}`, "Content-Type": "application/octet-stream" }, body: PNG });
+    const file = (await up.json()).file;
+    assert.equal((await api.call("POST", `/documents/${aadhaar.id}/upload`, { token: candidate.token, body: { fileUrl: file.url } })).status, 200);
+    const told = await api.pool.query("SELECT count(*)::int AS n FROM notifications WHERE user_id = $1 AND kind = 'document.uploaded'", [hr.id]);
+    assert.ok(told.rows[0].n >= 1, "HR hears about uploads the form asked for");
+
+    assert.equal((await put({ educationStatus: "completed", educationLevel: "graduate", experienceCompanies: ["Acme Pvt Ltd", "acme pvt ltd", "Globex"] })).status, 200);
+    assert.deepEqual(await names(), ["Aadhaar card", "Experience certificate: Acme Pvt Ltd", "Experience certificate: Globex", "PAN card", "Passing certificate (Graduation)"]);
+    assert.equal((await docs()).find((d) => d.documentType === "aadhaar").status, "uploaded", "uploaded files survive an edit");
+
+    // Saving the same answers again adds nothing.
+    assert.equal((await put({ educationStatus: "completed", educationLevel: "graduate", experienceCompanies: ["Acme Pvt Ltd", "Globex"] })).status, 200);
+    assert.equal((await docs()).length, 5);
+
+    // HR accepts one and sends one back.
+    assert.equal((await api.call("POST", `/documents/${aadhaar.id}/verify`, { token: hr.token, body: { approve: false, note: "Too blurry" } })).json.documentRequest.status, "rejected");
+    assert.equal((await api.call("POST", `/documents/${aadhaar.id}/upload`, { token: candidate.token, body: { fileUrl: file.url } })).status, 200);
+    assert.equal((await api.call("POST", `/documents/${aadhaar.id}/verify`, { token: hr.token, body: { approve: true } })).json.documentRequest.status, "verified");
+    assert.equal((await api.call("POST", `/documents/${aadhaar.id}/verify`, { token: candidate.token, body: { approve: true } })).status, 403);
   });
 
   test("staff can mark paid or waive; candidates can't; the applicants list shows it all", async () => {

@@ -368,10 +368,14 @@ export const documentRequests = pgTable("document_requests", {
   id: uuid("id").primaryKey().defaultRandom(),
   applicationId: uuid("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
   documentName: text("document_name").notNull(),
+  // Set on documents the joining form asks for (aadhaar, pan, marksheet,
+  // passing_certificate, experience_certificate); null when staff asked by hand.
+  documentType: text("document_type"),
   status: documentRequestStatusEnum("status").notNull().default("requested"),
   fileUrl: text("file_url"), // placeholder — see module comment above
   note: text("note"),
-  requestedBy: uuid("requested_by").notNull().references(() => users.id),
+  // Null for documents the joining form asked for rather than a person.
+  requestedBy: uuid("requested_by").references(() => users.id),
   verifiedBy: uuid("verified_by").references(() => users.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

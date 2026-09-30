@@ -1913,6 +1913,26 @@ a.outline-lesson:hover { background: var(--surface); }
 .doc-note { margin: 0; }
 .doc-ask { display: grid; gap: 0.45rem; }
 .doc-ask input { padding: 0.45rem 0.65rem; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 0.88rem; }
+.doc-list li { border-left-width: 3px; transition: border-color 0.2s ease; }
+.doc-list li.doc-uploaded { border-left-color: #f59e0b; }
+.doc-list li.doc-verified { border-left-color: #22c55e; }
+.doc-list li.doc-rejected { border-left-color: var(--danger); }
+.doc-list .file-row:empty { display: none; }
+.doc-progress { display: grid; gap: 0.3rem; }
+.doc-progress .muted-small { margin: 0; }
+.doc-progress-bar { display: flex; height: 6px; border-radius: 999px; overflow: hidden; background: var(--surface); }
+.doc-progress-bar .good { background: #22c55e; }
+.doc-progress-bar .warn { background: #f59e0b; }
+
+/* Joining form: studies, experience and the documents they lead to */
+.company-list { display: grid; gap: 0.45rem; overflow: hidden; margin-bottom: 0.75rem; justify-items: start; }
+.company-row { display: flex; align-items: center; gap: 0.5rem; width: 100%; color: var(--muted); }
+.company-row input { flex: 1; min-width: 0; padding: 0.55rem 0.75rem; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 0.92rem; background: var(--paper); color: var(--ink); }
+.company-row input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15); }
+.doc-preview { padding: 0.75rem 0.85rem; border: 1px dashed var(--line); border-radius: 10px; background: var(--surface); }
+.doc-preview .field-label { display: inline-flex; align-items: center; gap: 0.35rem; }
+.doc-preview ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.doc-preview li { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.3rem 0.65rem; border-radius: 999px; background: var(--paper); border: 1px solid var(--line); font-size: 0.83rem; }
 
 /* Chat files */
 .chat-attach { flex-shrink: 0; width: 42px; height: 42px; border-radius: 50%; border: none; background: transparent; color: #54656f; display: grid; place-items: center; cursor: pointer; }

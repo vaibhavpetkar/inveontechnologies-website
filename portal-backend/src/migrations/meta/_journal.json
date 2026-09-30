@@ -204,6 +204,13 @@
       "when": 1790763105716,
       "tag": "0028_mysterious_hellcat",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1790785857132,
+      "tag": "0029_next_junta",
+      "breakpoints": true
     }
   ]
 }

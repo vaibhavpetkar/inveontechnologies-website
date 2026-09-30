@@ -4,6 +4,10 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   FolderOpen,
   ArrowLeft,
+  Briefcase,
+  FileCheck2,
+  GraduationCap,
+  Plus,
   CalendarClock,
   Check,
   ClipboardCheck,
@@ -23,7 +27,19 @@ import { useAuth } from "../context/AuthContext";
 import { useToast } from "../components/Toast";
 import { DocumentRequests } from "../components/files/DocumentRequests";
 import { apiFetch, ApiError } from "../lib/api";
-import { formatDateTime, openCashfreeCheckout, rupees, SLOT_LABELS, timeLeft, type Journey as JourneyData, type JoiningDetails, type SlotKey } from "../lib/journey";
+import {
+  documentsFor,
+  EDUCATION_LEVEL_LABELS,
+  formatDateTime,
+  openCashfreeCheckout,
+  rupees,
+  SLOT_LABELS,
+  timeLeft,
+  type EducationLevel,
+  type Journey as JourneyData,
+  type JoiningDetails,
+  type SlotKey,
+} from "../lib/journey";
 
 type StepState = "done" | "current" | "upcoming" | "stopped";
 interface Step { key: string; label: string; icon: typeof Check; state: StepState; hint?: string }
@@ -47,6 +63,12 @@ function buildSteps(j: JourneyData): Step[] {
   steps.push({ key: "hr", label: "HR round", icon: MessagesSquare, state: hrDone ? "done" : stopped ? "stopped" : (hasExam ? examPassed : true) ? "current" : "upcoming", hint: hrBooked ? "Booked" : undefined });
   if (fee || (e && e.status !== "waived")) steps.push({ key: "pay", label: "Pay or trial", icon: CreditCard, state: paidOrFree || e?.status === "trial" ? "done" : e ? "current" : "upcoming", hint: e?.status === "trial" ? "On trial" : undefined });
   steps.push({ key: "joining", label: "Joining form", icon: FileText, state: e?.joiningSubmittedAt ? "done" : started ? "current" : "upcoming" });
+  const formDocs = j.documents.filter((d) => d.documentType);
+  if (formDocs.length > 0) {
+    const accepted = formDocs.filter((d) => d.status === "verified").length;
+    const waiting = formDocs.some((d) => d.status === "requested" || d.status === "rejected");
+    steps.push({ key: "documents", label: "Documents", icon: FileCheck2, state: accepted === formDocs.length ? "done" : waiting ? "current" : "upcoming", hint: `${accepted}/${formDocs.length} accepted` });
+  }
   steps.push({ key: "sessions", label: "Sessions", icon: CalendarClock, state: j.sessions.length > 0 ? "current" : "upcoming" });
   // Only one step is "current": the first one that is.
   let seen = false;
@@ -272,7 +294,7 @@ export default function Journey() {
       {!stopped && data.documents.length > 0 && (
         <section className="panel journey-panel">
           <h2><FolderOpen size={20} /> Documents</h2>
-          <p>{data.documents.some((d) => d.status === "requested" || d.status === "rejected") ? "The team has asked for these. Upload each one as a PDF or a photo." : "Thanks, the team has what they asked for."}</p>
+          <p>{data.documents.some((d) => d.status === "requested" || d.status === "rejected") ? "Upload each one as a PDF or a clear photo. The team checks them and tells you if anything needs a redo." : "Thanks, the team has everything it needs."}</p>
           <DocumentRequests applicationId={data.application.id} documents={data.documents} mode="candidate" onChanged={() => load().catch(() => undefined)} />
         </section>
       )}
@@ -289,6 +311,7 @@ const EMPTY: JoiningDetails = {
   college: "",
   degree: "",
   graduationYear: null,
+  experienceCompanies: [],
   githubUsername: "",
   linkedinUrl: "",
   emergencyContactName: "",
@@ -305,10 +328,15 @@ function JoiningForm({ enrollmentId, initial, onDone, onCancel }: { enrollmentId
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = <K extends keyof JoiningDetails>(k: K, v: JoiningDetails[K]) => setForm((f) => ({ ...f, [k]: v }));
+  const [hasExperience, setHasExperience] = useState((initial?.experienceCompanies?.length ?? 0) > 0);
+  const [companies, setCompanies] = useState<string[]>(initial?.experienceCompanies?.length ? initial.experienceCompanies : [""]);
+  const willAsk = documentsFor({ ...form, experienceCompanies: hasExperience ? companies : [] });
   const toggleSlot = (s: SlotKey) => set("preferredSlots", form.preferredSlots.includes(s) ? form.preferredSlots.filter((x) => x !== s) : [...form.preferredSlots, s]);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (!form.educationStatus || !form.educationLevel) return setError("Tell us whether you're still studying and your latest course, so we know which certificate to ask for.");
+    if (hasExperience && companies.filter((c) => c.trim().length >= 2).length === 0) return setError("Add the companies you've worked at, or switch off work experience.");
     if (form.preferredSlots.length === 0) return setError("Pick at least one time that suits you for sessions.");
     setBusy(true);
     setError(null);
@@ -326,6 +354,7 @@ function JoiningForm({ enrollmentId, initial, onDone, onCancel }: { enrollmentId
           linkedinUrl: clean(form.linkedinUrl) ?? "",
           notes: clean(form.notes),
           graduationYear: form.graduationYear ? Number(form.graduationYear) : null,
+          experienceCompanies: hasExperience ? companies.map((c) => c.trim()).filter((c) => c.length >= 2) : [],
           hoursPerWeek: Number(form.hoursPerWeek),
         },
       });
@@ -365,6 +394,69 @@ function JoiningForm({ enrollmentId, initial, onDone, onCancel }: { enrollmentId
         <div className="field-row field-row-2">
           <div className="field"><label htmlFor="jf-gh">GitHub username</label><input id="jf-gh" value={form.githubUsername ?? ""} onChange={(e) => set("githubUsername", e.target.value)} placeholder="Used to add you to project repos" /></div>
           <div className="field"><label htmlFor="jf-li">LinkedIn URL</label><input id="jf-li" type="url" value={form.linkedinUrl ?? ""} onChange={(e) => set("linkedinUrl", e.target.value)} /></div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Studies, work and documents</legend>
+        <div className="field-row field-row-2">
+          <div className="field">
+            <span className="field-label">Are you still studying?</span>
+            <div className="slot-picks" role="group" aria-label="Are you still studying?">
+              {([["studying", "Yes, still studying"], ["completed", "No, I've finished"]] as const).map(([v, label]) => (
+                <button type="button" key={v} className={form.educationStatus === v ? "on" : ""} aria-pressed={form.educationStatus === v} onClick={() => set("educationStatus", v)}>
+                  {form.educationStatus === v && <Check size={14} />} {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="field">
+            <label htmlFor="jf-level">{form.educationStatus === "studying" ? "Course you're in" : "Highest course finished"}</label>
+            <select id="jf-level" required value={form.educationLevel ?? ""} onChange={(e) => set("educationLevel", (e.target.value || undefined) as EducationLevel | undefined)}>
+              <option value="">Choose…</option>
+              {(Object.keys(EDUCATION_LEVEL_LABELS) as EducationLevel[]).map((l) => <option key={l} value={l}>{EDUCATION_LEVEL_LABELS[l]}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="field">
+          <span className="field-label">Any work experience?</span>
+          <div className="slot-picks" role="group" aria-label="Any work experience?">
+            {([[false, "No, this is my first"], [true, "Yes, I've worked before"]] as const).map(([v, label]) => (
+              <button type="button" key={String(v)} className={hasExperience === v ? "on" : ""} aria-pressed={hasExperience === v} onClick={() => setHasExperience(v)}>
+                {hasExperience === v && <Check size={14} />} {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <AnimatePresence initial={false}>
+          {hasExperience && (
+            <motion.div className="company-list" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
+              {companies.map((c, i) => (
+                <div className="company-row" key={i}>
+                  <Briefcase size={16} aria-hidden />
+                  <input value={c} onChange={(e) => setCompanies(companies.map((x, j) => (j === i ? e.target.value : x)))} placeholder="Company name" aria-label={`Company ${i + 1}`} maxLength={120} />
+                  {companies.length > 1 && (
+                    <button type="button" className="icon-button" aria-label={`Remove company ${i + 1}`} onClick={() => setCompanies(companies.filter((_, j) => j !== i))}><X size={15} /></button>
+                  )}
+                </div>
+              ))}
+              {companies.length < 5 && (
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setCompanies([...companies, ""])}><Plus size={14} /> Add another company</button>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+        <div className="doc-preview" aria-live="polite">
+          <span className="field-label"><GraduationCap size={15} /> You'll upload these next</span>
+          <ul>
+            <AnimatePresence initial={false}>
+              {willAsk.map((d) => (
+                <motion.li key={d} layout initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}>
+                  <FileText size={13} /> {d}
+                </motion.li>
+              ))}
+            </AnimatePresence>
+          </ul>
         </div>
       </fieldset>
 
