@@ -124,11 +124,38 @@ function matchesCompound(node: HtmlNode, c: Compound): boolean {
   return true;
 }
 
+/**
+ * Splits a selector into tokens outside [attribute] brackets and quotes:
+ * on `sep` only (keeping nothing), or on whitespace and ">" (keeping ">").
+ */
+function tokenize(text: string, sep: "," | "combinators"): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let depth = 0;
+  let quote: string | null = null;
+  for (const ch of text) {
+    if (quote) {
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === "[") depth++;
+    else if (ch === "]") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && (sep === "," ? ch === "," : /\s/.test(ch) || ch === ">")) {
+      if (sep === "," || cur) out.push(cur);
+      cur = "";
+      if (ch === ">") out.push(">");
+      continue;
+    }
+    cur += ch;
+  }
+  if (sep === "," || cur) out.push(cur);
+  return out;
+}
+
 /** Elements matching a selector: tags, #id, .class, [attr], [attr=v], descendant and > child combinators, comma lists. */
 export function querySelectorAll(root: HtmlNode, selector: string): HtmlNode[] {
   const found = new Set<HtmlNode>();
-  for (const alternative of selector.split(",")) {
-    const parts = alternative.trim().replace(/\s*>\s*/g, " > ").split(/\s+/);
+  for (const alternative of tokenize(selector, ",")) {
+    const parts = tokenize(alternative.trim(), "combinators");
     const chain: { compound: Compound; combinator: " " | ">" }[] = [];
     let combinator: " " | ">" = " ";
     for (const p of parts) {
@@ -225,8 +252,10 @@ export function cssOf(code: string, editor: EditorLanguage): string {
 export function stripComments(code: string, editor: EditorLanguage): string {
   if (editor === "html") return code.replace(/<!--[\s\S]*?-->/g, "");
   if (editor === "css") return code.replace(/\/\*[\s\S]*?\*\//g, "");
-  const hash = ["python", "yaml", "shell", "dockerfile", "hcl"].includes(editor);
-  const slash = ["javascript", "jsx", "c", "cpp", "csharp", "java", "hcl", "json"].includes(editor);
+  const hash = ["python", "yaml", "shell", "dockerfile", "hcl", "php"].includes(editor);
+  const slash = ["javascript", "jsx", "c", "cpp", "csharp", "java", "hcl", "json", "php"].includes(editor);
+  // In shell a # only starts a comment at a word start ($#, ${#x} are not comments), and a #! first line is kept.
+  const shellLike = editor === "shell" || editor === "dockerfile";
   const dash = editor === "sql";
   let out = "";
   let quote: string | null = null;
@@ -246,7 +275,8 @@ export function stripComments(code: string, editor: EditorLanguage): string {
       out += ch;
       continue;
     }
-    const lineComment = (hash && ch === "#") || (slash && ch === "/" && code[i + 1] === "/") || (dash && ch === "-" && code[i + 1] === "-");
+    const hashComment = hash && ch === "#" && !(shellLike && ((i === 0 && code[1] === "!") || (i > 0 && !/[\s;]/.test(code[i - 1]))));
+    const lineComment = hashComment || (slash && ch === "/" && code[i + 1] === "/") || (dash && ch === "-" && code[i + 1] === "-");
     if (lineComment) {
       while (i < code.length && code[i] !== "\n") i++;
       out += "\n";

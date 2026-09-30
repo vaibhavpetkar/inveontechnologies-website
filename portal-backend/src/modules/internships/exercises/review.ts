@@ -421,9 +421,23 @@ function checkC(src: Source, f: Findings, cpp: boolean) {
 function checkUninitialised(src: Source, f: Findings, types: VarTypes) {
   const declaredAt = new Map<string, number>();
   const declNoInit = /\b(?:int|long|float|double|short)\s+([^;(){}=]+);/;
+  // Class and struct members get their values from constructors or definitions elsewhere.
+  const inType = new Set<number>();
+  const stack: boolean[] = [];
+  let pendingType = false;
+  src.code.forEach((line, i) => {
+    if (stack.includes(true)) inType.add(i);
+    if (/\b(class|struct)\s+\w+[^;]*$/.test(line)) pendingType = true;
+    for (const ch of line) {
+      if (ch === "{") {
+        stack.push(pendingType);
+        pendingType = false;
+      } else if (ch === "}") stack.pop();
+    }
+  });
   src.code.forEach((line, i) => {
     const m = declNoInit.exec(line);
-    if (!m || /\(/.test(line)) return;
+    if (!m || /\(/.test(line) || /\b(static|extern)\b/.test(line) || inType.has(i)) return;
     for (const part of m[1].split(",")) {
       const name = part.trim();
       if (/^[A-Za-z_]\w*$/.test(name)) declaredAt.set(name, i);
