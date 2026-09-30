@@ -43,6 +43,8 @@ export interface OutgoingEmail {
   // A calendar invite (RFC 5545 text). Sent as a text/calendar part so mail
   // apps show it as an invitation with Yes/No/Maybe buttons.
   icalEvent?: { method: "REQUEST" | "CANCEL"; content: string };
+  // Files sent with the email, e.g. a letter and the policies it refers to.
+  attachments?: { filename: string; content: Buffer; contentType: string }[];
 }
 
 /**
@@ -68,7 +70,7 @@ export function sendEmail(email: OutgoingEmail): void {
  */
 export async function deliverEmail(email: OutgoingEmail): Promise<void> {
   if (!transporter) {
-    logger.info({ toEmail: email.to, subject: email.subject, text: email.text }, "[EMAIL NOT SENT — SMTP not configured]");
+    logger.info({ toEmail: email.to, subject: email.subject, text: email.text, attachments: email.attachments?.map((a) => `${a.filename} (${a.content.length} bytes)`) }, "[EMAIL NOT SENT — SMTP not configured]");
     return;
   }
   await transporter.sendMail({
@@ -77,6 +79,7 @@ export async function deliverEmail(email: OutgoingEmail): Promise<void> {
     subject: email.subject,
     text: email.text,
     icalEvent: email.icalEvent ? { method: email.icalEvent.method, filename: "invite.ics", content: email.icalEvent.content } : undefined,
+    attachments: email.attachments,
   });
-  logger.info({ toEmail: email.to, subject: email.subject }, "Email sent");
+  logger.info({ toEmail: email.to, subject: email.subject, attachments: email.attachments?.map((a) => a.filename) }, "Email sent");
 }

@@ -2039,3 +2039,60 @@ a.outline-lesson:hover { background: var(--surface); }
 .class-where button { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.45rem 0.7rem; border-radius: 10px; border: 1px solid var(--line); background: var(--paper); font: inherit; font-size: 0.85rem; cursor: pointer; }
 .class-where button.on { border-color: var(--primary); background: rgba(37, 99, 235, 0.07); color: var(--primary-dark); }
 @media (max-width: 560px) { .class-when { grid-template-columns: 1fr 1fr; } .class-when .field:first-child { grid-column: 1 / -1; } }
+
+/* ---- Appointment letters and company policies ---- */
+.letter-card h3 { display: flex; align-items: center; gap: 0.35rem; }
+.letter-line { display: flex; justify-content: space-between; gap: 0.75rem; align-items: flex-start; flex-wrap: wrap; padding: 0.75rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); margin-bottom: 0.6rem; }
+.letter-line > div:first-child { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.letter-states { display: flex; gap: 0.35rem; flex-wrap: wrap; margin: 0.2rem 0; }
+.letter-states .pill { gap: 0.25rem; }
+.letter-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.letter-history { margin: 0 0 0.6rem; }
+.letter-history summary { cursor: pointer; }
+.letter-history .link-button { display: flex; }
+.letter-dialog { width: min(760px, 100%); }
+.policy-picks { border: 1px solid var(--line); border-radius: 12px; padding: 0.6rem 0.75rem; margin: 0.25rem 0 1rem; max-height: 220px; overflow-y: auto; }
+.policy-picks legend { font-size: 0.85rem; font-weight: 600; padding: 0 0.3rem; }
+.policy-pick { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.35rem 0; cursor: pointer; }
+.policy-pick input { margin-top: 0.2rem; }
+.policy-pick > span { display: flex; flex-direction: column; font-size: 0.9rem; }
+.policy-pick .muted-small { margin: 0; }
+.check-line { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; margin: 0.4rem 0 0.8rem; cursor: pointer; }
+.check-line input { flex: none; }
+
+.my-letter .panel-head { gap: 0.6rem; flex-wrap: wrap; }
+.my-letter h2 { display: flex; align-items: center; gap: 0.45rem; }
+.my-letter .pill { gap: 0.25rem; }
+.my-letter-policies .link-button { text-align: left; align-items: flex-start; }
+.my-letter-policies .link-button svg { flex: none; margin-top: 0.15rem; }
+.my-letter-role { margin: 0 0 0.15rem; }
+.my-letter > .btn { margin: 0.6rem 0 0.3rem; }
+.my-letter-policies { margin: 0.75rem 0; }
+.my-letter-policies ul { list-style: none; padding: 0; margin: 0.25rem 0 0; display: grid; gap: 0.1rem; }
+.accept-form { border-top: 1px solid var(--line); padding-top: 0.85rem; margin-top: 0.5rem; }
+
+.policy-list { display: grid; gap: 0.75rem; }
+.policy-card { padding: 0; overflow: hidden; }
+.policy-card.retired { opacity: 0.7; }
+.policy-head { display: flex; align-items: center; gap: 0.85rem; width: 100%; padding: 1rem 1.2rem; background: none; border: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.policy-head:hover { background: var(--surface); }
+.policy-icon { flex: none; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 10px; background: rgba(37, 99, 235, 0.1); color: var(--primary); }
+.policy-title { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.policy-title .muted-small { margin: 0.1rem 0 0; }
+.policy-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 0.2rem; flex: none; }
+.policy-meta .muted-small { margin: 0; }
+.chevron { flex: none; color: var(--muted); transition: transform 0.2s ease; }
+.chevron.open { transform: rotate(180deg); }
+.policy-body { overflow: hidden; border-top: 1px solid var(--line); }
+.policy-prose { padding: 1rem 1.4rem 0.4rem; max-width: 72ch; line-height: 1.65; font-size: 0.93rem; }
+.policy-prose h3 { font-size: 1rem; margin: 1rem 0 0.35rem; }
+.policy-prose p { margin: 0 0 0.7rem; color: var(--ink); }
+.policy-prose ul { margin: 0 0 0.7rem; padding-left: 1.2rem; }
+.policy-prose li { margin: 0.2rem 0; }
+.policy-actions { display: flex; gap: 0.5rem; align-items: center; padding: 0.4rem 1.4rem 1.1rem; }
+@media (max-width: 560px) {
+  .policy-head { padding: 0.85rem; gap: 0.6rem; }
+  .policy-meta { display: none; }
+  .policy-prose { padding: 0.85rem; }
+  .policy-actions { padding: 0.3rem 0.85rem 0.9rem; }
+}
