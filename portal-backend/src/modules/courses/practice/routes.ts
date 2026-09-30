@@ -29,7 +29,7 @@ const EMAIL_EVERY_MS = 10 * 60 * 1000;
 // Each check or upload may compile and run code several times.
 const checkLimiter = rateLimit({
   windowMs: 60 * 1000,
-  limit: 12,
+  limit: 30,
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => (req as Request & { user?: { sub: string } }).user?.sub ?? req.ip ?? "unknown",

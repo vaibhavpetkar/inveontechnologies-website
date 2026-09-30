@@ -4,23 +4,35 @@
  * the reviewer, every starter fails, and each course and unit has enough
  * content. Runs code on this machine, so it's a development tool:
  *
- *   npx tsx src/modules/courses/practice/verify.ts [course ...]
+ *   npx tsx src/modules/courses/practice/verify.ts [course key or path/to/course/index.ts ...]
+ *
+ * A path checks a course module that isn't listed in catalog/index.ts yet.
  */
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { slugify } from "../../shared/slugify.js";
 import { gradeExercise } from "../../internships/exercises/grade.js";
 import { localRunner } from "../../internships/exercises/runner.js";
 import { PRACTICE_COURSES } from "./catalog/index.js";
+import type { PracticeCourse } from "./types.js";
 
 const MIN_QUESTIONS = 50;
 const MIN_QUIZ_PER_UNIT = 8;
 
 async function main() {
-  const wanted = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const wanted = args.filter((a) => !a.endsWith(".ts"));
+  const extra: PracticeCourse[] = [];
+  for (const file of args.filter((a) => a.endsWith(".ts"))) {
+    const mod = (await import(pathToFileURL(path.resolve(file)).href)) as Record<string, unknown>;
+    extra.push(...Object.values(mod).filter((v): v is PracticeCourse => !!v && typeof v === "object" && "units" in v && "key" in v));
+  }
   const runner = localRunner();
   let problems = 0;
   let unverified = 0;
   const keys = new Set<string>();
-  for (const course of PRACTICE_COURSES.filter((c) => !wanted.length || wanted.includes(c.key))) {
+  const courses = [...PRACTICE_COURSES.filter((c) => (!wanted.length && !extra.length) || wanted.includes(c.key)), ...extra];
+  for (const course of courses) {
     const issues: string[] = [];
     if (keys.has(course.key)) issues.push("duplicate course key");
     keys.add(course.key);
