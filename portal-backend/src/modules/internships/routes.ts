@@ -28,7 +28,7 @@ import { trackSkills } from "./catalog-tracks.js";
 import { allocateRoadmap, assignmentsForSkills, ensureBankSynced, installCatalog, offerFilename, offerPdf, trackStats, type Track, type TrackAssignment } from "./service.js";
 import { gradeExercise, MAX_CODE_LENGTH } from "./exercises/grade.js";
 import { runnerFromEnv } from "./exercises/runner.js";
-import type { ExerciseSpec } from "./exercises/types.js";
+import { publicExercise } from "./exercises/public.js";
 
 const REVIEWER_ROLES = ["manager", "hr", "admin", "super_admin"] as const;
 const INSTALL_ROLES = ["admin", "super_admin"] as const;
@@ -44,23 +44,6 @@ const checkLimiter = rateLimit({
   keyGenerator: (req) => (req as Request & { user?: { sub: string } }).user?.sub ?? req.ip ?? "unknown",
   message: { error: { code: "RATE_LIMITED", message: "You're checking too often; wait a minute and try again" } },
 });
-
-/** What a participant sees of an exercise: never the hidden tests. */
-function publicExercise(spec: ExerciseSpec | null, runsCode: boolean) {
-  if (!spec) return null;
-  const run = spec.check.run;
-  return {
-    editor: spec.editor,
-    starter: spec.starter,
-    runs: !!run,
-    // Whether this exercise is checked automatically right now.
-    autoChecked: !run || runsCode,
-    examples: run ? run.tests.filter((t) => !t.hidden).map((t) => ({ stdin: t.stdin, expected: t.expected })) : [],
-    hiddenTests: run ? run.tests.filter((t) => t.hidden).length : 0,
-    requirements: (spec.check.rules ?? []).map((r) => r.message),
-    ...(run?.language === "sql" ? { setup: run.setup ?? "" } : {}),
-  };
-}
 
 const url = z.string().trim().url().max(500).refine((u) => /^https?:\/\//.test(u), "Use an http(s) link");
 const submitSchema = z

@@ -34,7 +34,7 @@ const MAX_OUTPUT = 64 * 1024;
 // ---------- Judge0 ----------
 
 /** Judge0 CE language ids; override with PORTAL_JUDGE0_LANGUAGE_IDS="python=92,java=91". */
-const JUDGE0_IDS: Record<RunLanguage, number> = { javascript: 63, python: 71, c: 50, cpp: 54, csharp: 51, java: 62, sql: 82 };
+const JUDGE0_IDS: Record<RunLanguage, number> = { javascript: 63, python: 71, c: 50, cpp: 54, csharp: 51, java: 62, sql: 82, php: 68, bash: 46 };
 
 export function judge0Runner(opts: { url: string; key?: string; languageIds?: string }): CodeRunner {
   const ids = { ...JUDGE0_IDS };
@@ -182,6 +182,13 @@ export function localRunner(): CodeRunner {
           case "csharp":
             await writeFile(path.join(dir, "main.cs"), source);
             return (await compile("mcs", ["-out:main.exe", "main.cs"])) ?? (await run("mono", ["main.exe"]));
+          case "php":
+            if (!(await has("php"))) throw new RunnerUnavailableError("php isn't installed on this machine");
+            await writeFile(path.join(dir, "main.php"), source);
+            return await run("php", ["main.php"]);
+          case "bash":
+            await writeFile(path.join(dir, "main.sh"), source);
+            return await run("bash", ["main.sh"]);
           case "sql":
             await writeFile(path.join(dir, "main.sql"), source);
             return await run(process.execPath, ["--no-warnings", "-e", SQLITE_SCRIPT, path.join(dir, "main.sql")]);

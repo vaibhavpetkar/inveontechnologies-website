@@ -10,7 +10,7 @@
  */
 
 /** Languages the code runner can execute. */
-export type RunLanguage = "javascript" | "python" | "c" | "cpp" | "csharp" | "java" | "sql";
+export type RunLanguage = "javascript" | "python" | "c" | "cpp" | "csharp" | "java" | "sql" | "php" | "bash";
 
 /** What the editor highlights and labels the code as. */
 export type EditorLanguage = RunLanguage | "html" | "css" | "jsx" | "yaml" | "dockerfile" | "shell" | "hcl" | "json" | "text";
@@ -20,6 +20,12 @@ export interface TestCase {
   expected: string;
   /** Hidden tests run on submit only and never show their input or output. */
   hidden?: boolean;
+  /**
+   * "tokens" matching only: words that must not be in the answer, e.g. "not"
+   * when the answer is "Leap year". Only the last line printed counts, after
+   * its last ":" (so menus and input prompts are ignored).
+   */
+  forbid?: string[];
 }
 
 export type Rule =
@@ -41,6 +47,13 @@ export interface ExerciseCheck {
     setup?: string;
     /** SQL only: a query run after the student's code, whose output is compared. */
     after?: string;
+    /**
+     * How output is compared. "exact" (default) compares line by line.
+     * "tokens" looks only for the words and numbers of the expected output,
+     * in order, anywhere in the output, so prompts like "Enter a number:"
+     * don't fail a correct answer; numbers compare by value (78.5 = 78.50).
+     */
+    match?: "exact" | "tokens";
   };
   rules?: Rule[];
 }
@@ -73,6 +86,18 @@ export interface CheckItem {
   actual?: string;
   /** Compile or runtime error output, trimmed. */
   error?: string;
+  /** A plain-language explanation of what differs (visible tests only). */
+  hint?: string;
+}
+
+/** A comment on one line of the submitted code, from the compiler, the runtime or the static reviewer. */
+export interface ReviewFinding {
+  line: number | null;
+  column?: number;
+  /** error: must be fixed (blocks passing); warning: likely a bug; tip: style or good practice. */
+  severity: "error" | "warning" | "tip";
+  message: string;
+  source: "compiler" | "runtime" | "review";
 }
 
 export interface CheckReport {
@@ -82,4 +107,6 @@ export interface CheckReport {
   items: CheckItem[];
   summary: string;
   checkedAt: string;
+  /** Line-by-line review (assignment questions only). */
+  review?: ReviewFinding[];
 }

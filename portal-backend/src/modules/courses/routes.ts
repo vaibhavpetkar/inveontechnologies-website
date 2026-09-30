@@ -9,6 +9,7 @@ import {
   courseEnrollments,
   lessonProgress,
   coursePrerequisites,
+  lessonCodeQuestions,
 } from "../shared/db/schema.js";
 import { optionalAuth, requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
@@ -336,6 +337,9 @@ export function lessonsRouter(db: Database, env: Env) {
     if (!lesson) throw new NotFoundError("Lesson not found");
     if (lesson.contentType === "test") {
       throw new AppError("USE_GRADE_ENDPOINT", "Quiz lessons are completed by passing the quiz (POST /lessons/:id/quiz/submit) or by a reviewer's grade, not self-reported", 400);
+    }
+    if (lesson.contentType === "assignment" && (await db.query.lessonCodeQuestions.findFirst({ where: eq(lessonCodeQuestions.lessonId, lesson.id) }))) {
+      throw new AppError("UPLOAD_ANSWERS", "This assignment completes when every question's upload passes the automatic review", 400);
     }
 
     const courseModule = await db.query.courseModules.findFirst({ where: eq(courseModules.id, lesson.moduleId) });

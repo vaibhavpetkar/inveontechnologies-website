@@ -211,6 +211,13 @@
       "when": 1790785857132,
       "tag": "0029_next_junta",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1790787685179,
+      "tag": "0030_ambiguous_prism",
+      "breakpoints": true
     }
   ]
 }

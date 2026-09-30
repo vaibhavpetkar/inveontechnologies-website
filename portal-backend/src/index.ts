@@ -20,6 +20,7 @@ import { interviewsRouter } from "./modules/recruitment/interviews-routes.js";
 import { offersRouter } from "./modules/recruitment/offers-routes.js";
 import { onboardingRouter } from "./modules/recruitment/onboarding-routes.js";
 import { coursesRouter, lessonsRouter } from "./modules/courses/routes.js";
+import { practiceRouter } from "./modules/courses/practice/routes.js";
 import { lmsRouter } from "./modules/courses/lms-routes.js";
 import { classesRouter } from "./modules/courses/classes.js";
 import { certificateTemplatesRouter, certificatesRouter, courseCertificateIssueRouter } from "./modules/certificates/routes.js";
@@ -146,6 +147,7 @@ app.use("/api/v1", interviewsRouter(db, env));
 app.use("/api/v1", offersRouter(db, env));
 app.use("/api/v1", onboardingRouter(db, env));
 app.use("/api/v1/courses", classesRouter(db, env));
+app.use("/api/v1/courses", practiceRouter(db, env)); // before coursesRouter: /courses/practice/...
 app.use("/api/v1/courses", lmsRouter(db, env)); // before coursesRouter: /courses/catalog etc.
 app.use("/api/v1/courses", coursesRouter(db, env));
 app.use("/api/v1/courses", courseCertificateIssueRouter(db, env));

@@ -489,6 +489,9 @@ export const courses = pgTable("courses", {
   // Null = certificates for this course are issued by hand, as before.
   certificateTemplateId: uuid("certificate_template_id"),
   category: text("category"),
+  // Set on courses installed from the practice-course catalog (e.g. "c"),
+  // so installing again adds new content instead of duplicating the course.
+  catalogKey: text("catalog_key").unique(),
   createdBy: uuid("created_by").notNull().references(() => users.id),
   publishedAt: timestamp("published_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -529,7 +532,55 @@ export const courseLessons = pgTable("course_lessons", {
   // when time runs out. null = untimed / unlimited.
   timeLimitMinutes: integer("time_limit_minutes"),
   maxAttempts: integer("max_attempts"),
+  // Lessons installed from the practice-course catalog ("c/loops/assignment").
+  catalogKey: text("catalog_key").unique(),
 });
+
+/**
+ * Coding questions of an "assignment" lesson (an assignment sheet): the
+ * learner uploads a file (or writes code) for each question, and it's
+ * reviewed automatically, line by line, and run against test cases. The
+ * reference solutions stay in code (courses/practice/) and never reach the
+ * browser.
+ */
+export const lessonCodeQuestions = pgTable(
+  "lesson_code_questions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    lessonId: uuid("lesson_id").notNull().references(() => courseLessons.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    title: text("title").notNull(),
+    brief: text("brief").notNull(),
+    steps: jsonb("steps").$type<string[]>().notNull().default([]),
+    level: text("level", { enum: ["basic", "intermediate", "advanced"] }).notNull().default("basic"),
+    spec: jsonb("spec").$type<ExerciseSpec>().notNull(),
+    orderIndex: integer("order_index").notNull().default(0),
+  },
+  (t) => ({ uniqLessonKey: unique("lesson_code_questions_lesson_key_unique").on(t.lessonId, t.key) }),
+);
+
+/**
+ * Every upload for a question is kept. status: passed (every check ran and
+ * passed, no line needs fixing), failed (something to fix; the learner is
+ * emailed the review), pending (the code couldn't be run right now but the
+ * line-by-line review found nothing wrong).
+ */
+export const lessonCodeSubmissions = pgTable(
+  "lesson_code_submissions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    questionId: uuid("question_id").notNull().references(() => lessonCodeQuestions.id, { onDelete: "cascade" }),
+    enrollmentId: uuid("enrollment_id").notNull().references(() => courseEnrollments.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    fileName: text("file_name"),
+    code: text("code").notNull(),
+    report: jsonb("report").$type<CheckReport>().notNull(),
+    status: text("status", { enum: ["passed", "failed", "pending"] }).notNull(),
+    emailedAt: timestamp("emailed_at", { withTimezone: true }),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ byQuestion: index("lesson_code_submissions_question_idx").on(t.questionId, t.enrollmentId, t.submittedAt) }),
+);
 
 /**
  * Auto-graded quizzes for "test" lessons (LMS phase D). Same multiple-choice
