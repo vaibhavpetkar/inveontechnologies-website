@@ -3,6 +3,7 @@ import { Link, useLocation } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
 import { Award, BookOpen, Clock, GraduationCap, Layers, Plus, Search, Users, X } from "lucide-react";
 import { DashboardShell } from "../components/DashboardShell";
+import { PracticeLibrary } from "../components/lms/PracticeLibrary";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/api";
 import { AUTHOR_ROLES, coverFor, minutesLabel, priceLabel, type CatalogCourse } from "../lib/lms";
@@ -17,6 +18,7 @@ export default function Courses() {
   const [tab, setTab] = useState<Tab>("all");
   const [search, setSearch] = useState("");
   const [creating, setCreating] = useState(false);
+  const [reload, setReload] = useState(0);
   const isAuthor = !!user && AUTHOR_ROLES.includes(user.role);
 
   useEffect(() => {
@@ -26,7 +28,7 @@ export default function Courses() {
         if (r.courses.some((c) => c.enrollment?.status === "enrolled")) setTab("mine");
       })
       .catch(() => setError("Couldn't load courses."));
-  }, [accessToken]);
+  }, [accessToken, reload]);
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -48,6 +50,8 @@ export default function Courses() {
           </motion.button>
         )}
       </div>
+
+      {isAuthor && <PracticeLibrary onInstalled={() => setReload((n) => n + 1)} />}
 
       {inProgress.length > 0 && (
         <section className="continue-strip">

@@ -40,12 +40,23 @@ export interface CheckItem {
   expected?: string;
   actual?: string;
   error?: string;
+  hint?: string;
+}
+
+/** One line-by-line finding from the code reviewer. Only errors block passing. */
+export interface ReviewFinding {
+  line: number;
+  column?: number;
+  severity: "error" | "warning" | "tip";
+  message: string;
+  source: "compiler" | "runtime" | "review";
 }
 
 export interface CheckReport {
   passed: boolean;
   runnerUnavailable?: boolean;
   items: CheckItem[];
+  review?: ReviewFinding[];
   summary: string;
   checkedAt: string;
 }
@@ -131,6 +142,8 @@ export const EDITOR_LABEL: Record<string, string> = {
   yaml: "YAML",
   dockerfile: "Dockerfile",
   shell: "Shell",
+  php: "PHP",
+  bash: "Bash",
   hcl: "Terraform",
   json: "JSON",
   text: "Text",
