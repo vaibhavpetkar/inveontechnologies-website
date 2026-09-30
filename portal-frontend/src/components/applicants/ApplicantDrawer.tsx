@@ -5,7 +5,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../Toast";
 import { apiFetch, ApiError } from "../../lib/api";
 import { nextSlot, toLocalInput, type Colleague, type ProviderInfo } from "../../lib/calendar";
-import { ENROLLMENT_LABELS, formatDateTime, rupees, SLOT_LABELS, timeLeft, type Journey } from "../../lib/journey";
+import { EDUCATION_LEVEL_LABELS, ENROLLMENT_LABELS, formatDateTime, rupees, SLOT_LABELS, timeLeft, type Journey } from "../../lib/journey";
 import { Avatar } from "../Avatar";
 import { EventDialog } from "../calendar/EventDialog";
 import { FileChip } from "../files/FileChip";
@@ -190,6 +190,8 @@ export function ApplicantDrawer({ applicationId, opportunityTitle, onClose, onCh
                     <dt>Sessions</dt><dd>{e.joiningDetails.preferredSlots.map((s) => SLOT_LABELS[s]).join(", ")}</dd>
                     <dt>Lives in</dt><dd>{e.joiningDetails.address}, {e.joiningDetails.city}</dd>
                     {(e.joiningDetails.college || e.joiningDetails.degree) && <><dt>Education</dt><dd>{[e.joiningDetails.degree, e.joiningDetails.college, e.joiningDetails.graduationYear].filter(Boolean).join(", ")}</dd></>}
+                    {e.joiningDetails.educationLevel && <><dt>Studies</dt><dd>{EDUCATION_LEVEL_LABELS[e.joiningDetails.educationLevel]}, {e.joiningDetails.educationStatus === "studying" ? "still studying" : "finished"}</dd></>}
+                    <dt>Experience</dt><dd>{e.joiningDetails.experienceCompanies?.length ? e.joiningDetails.experienceCompanies.join(", ") : e.joiningDetails.educationLevel ? "None, first job" : "Not asked"}</dd>
                     {e.joiningDetails.githubUsername && <><dt>GitHub</dt><dd><a href={`https://github.com/${e.joiningDetails.githubUsername}`} target="_blank" rel="noreferrer">@{e.joiningDetails.githubUsername}</a></dd></>}
                     {e.joiningDetails.linkedinUrl && <><dt>LinkedIn</dt><dd><a href={e.joiningDetails.linkedinUrl} target="_blank" rel="noreferrer">Profile</a></dd></>}
                     <dt>Emergency</dt><dd>{e.joiningDetails.emergencyContactName}, {e.joiningDetails.emergencyContactPhone}</dd>

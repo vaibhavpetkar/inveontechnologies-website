@@ -9,6 +9,7 @@ import { writeAuditLog } from "../shared/audit.js";
 import type { Env } from "../shared/env.js";
 import { claimFile } from "../files/service.js";
 import { notify } from "../notifications/service.js";
+import { notifyHiringTeam } from "../assessments/exams.js";
 import { PIPELINE_ROLES, assertCanManageApplication, canViewApplication, getApplicationOr404 } from "../applications/access.js";
 
 
@@ -68,14 +69,13 @@ export function documentsRouter(db: Database, env: Env) {
       .where(eq(documentRequests.id, doc.id))
       .returning();
 
-    await notify(db, {
-      userIds: [doc.requestedBy],
-      actorUserId: req.user!.sub,
-      kind: "document.uploaded",
-      title: `${doc.documentName} uploaded`,
-      body: "It's ready to check.",
-      link: `/opportunities/${application.opportunityId}?applicant=${application.id}`,
-    });
+    const link = `/opportunities/${application.opportunityId}?applicant=${application.id}`;
+    if (doc.requestedBy) {
+      await notify(db, { userIds: [doc.requestedBy], actorUserId: req.user!.sub, kind: "document.uploaded", title: `${doc.documentName} uploaded`, body: "It's ready to check.", link });
+    } else {
+      // Asked for by the joining form, so whoever runs hiring checks it.
+      await notifyHiringTeam(db, application.opportunityId, application.userId, { kind: "document.uploaded", title: `${doc.documentName} uploaded`, body: (who) => `${who} uploaded their ${doc.documentName}. It's ready to check.`, link });
+    }
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "document_request.upload", entityType: "document_request", entityId: doc.id, ipAddress: req.ip });
     res.json({ documentRequest: updated });
   });

@@ -10,6 +10,9 @@ export interface JoiningDetails {
   college?: string | null;
   degree?: string | null;
   graduationYear?: number | null;
+  educationStatus?: EducationStatus;
+  educationLevel?: EducationLevel;
+  experienceCompanies?: string[];
   githubUsername?: string | null;
   linkedinUrl?: string | null;
   emergencyContactName: string;
@@ -18,6 +21,33 @@ export interface JoiningDetails {
   hoursPerWeek: number;
   preferredSlots: SlotKey[];
   notes?: string | null;
+}
+
+export type EducationStatus = "studying" | "completed";
+export type EducationLevel = "10th" | "12th" | "diploma" | "graduate" | "postgraduate";
+export const EDUCATION_LEVEL_LABELS: Record<EducationLevel, string> = {
+  "10th": "10th / SSC",
+  "12th": "12th / Intermediate",
+  diploma: "Diploma",
+  graduate: "Graduation",
+  postgraduate: "Post-graduation",
+};
+
+/** The documents the joining form will ask for. Mirrors the server's joining-documents.ts. */
+export function documentsFor(d: Pick<JoiningDetails, "educationStatus" | "educationLevel" | "experienceCompanies">): string[] {
+  const docs = ["Aadhaar card", "PAN card"];
+  if (d.educationStatus && d.educationLevel) {
+    const level = EDUCATION_LEVEL_LABELS[d.educationLevel];
+    docs.push(d.educationStatus === "studying" ? `Last year's marksheet (${level})` : `Passing certificate (${level})`);
+  }
+  const seen = new Set<string>();
+  for (const raw of d.experienceCompanies ?? []) {
+    const c = raw.trim();
+    if (c.length < 2 || seen.has(c.toLowerCase())) continue;
+    seen.add(c.toLowerCase());
+    docs.push(`Experience certificate: ${c}`);
+  }
+  return docs;
 }
 
 export type SlotKey = "weekday_morning" | "weekday_afternoon" | "weekday_evening" | "weekend";
@@ -69,6 +99,8 @@ export interface Session {
 export interface DocumentRequest {
   id: string;
   documentName: string;
+  /** Set when the joining form asked for it; null when staff asked by hand. */
+  documentType: "aadhaar" | "pan" | "marksheet" | "passing_certificate" | "experience_certificate" | null;
   status: "requested" | "uploaded" | "verified" | "rejected";
   fileUrl: string | null;
   file: StoredFile | null;

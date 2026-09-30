@@ -32,6 +32,7 @@ import { every } from "../shared/jobs.js";
 import { cashfreeConfig, createOrder, getOrder, normalisePhone, verifyWebhookSignature } from "./cashfree.js";
 import { expireTrialIfDue, markEnrollmentPaid, startProgram, sweepTrials, type ProgramEnrollment } from "./enrollments.js";
 import { onProgramUnlocked, trackForOpportunity } from "../internships/service.js";
+import { EDUCATION_LEVELS, syncJoiningDocuments } from "../recruitment/joining-documents.js";
 
 const joiningSchema = z.object({
   fullName: z.string().trim().min(2).max(200),
@@ -42,6 +43,9 @@ const joiningSchema = z.object({
   college: z.string().trim().max(200).nullable().optional(),
   degree: z.string().trim().max(100).nullable().optional(),
   graduationYear: z.number().int().min(1990).max(2100).nullable().optional(),
+  educationStatus: z.enum(["studying", "completed"]),
+  educationLevel: z.enum(EDUCATION_LEVELS),
+  experienceCompanies: z.array(z.string().trim().min(2).max(120)).max(5).default([]),
   githubUsername: z.string().trim().max(60).regex(/^[A-Za-z0-9-]*$/, "GitHub usernames use letters, numbers and dashes").nullable().optional(),
   linkedinUrl: z.string().trim().url().max(300).nullable().optional().or(z.literal("")),
   emergencyContactName: z.string().trim().min(2).max(200),
@@ -234,6 +238,8 @@ export function programRouter(db: Database, env: Env) {
     // Keep the profile in step with what they just told us.
     await db.update(candidateProfiles).set({ fullName: body.fullName, phone: body.phone }).where(eq(candidateProfiles.userId, enrollment.userId));
     if (body.githubUsername) await db.update(users).set({ githubUsername: body.githubUsername }).where(eq(users.id, enrollment.userId));
+    // Aadhaar, PAN, education proof and experience letters, per their answers.
+    await syncJoiningDocuments(db, enrollment.applicationId, body);
     if (first) {
       await notifyHiringTeam(db, enrollment.opportunityId, enrollment.userId, {
         kind: "program.joining_submitted",
