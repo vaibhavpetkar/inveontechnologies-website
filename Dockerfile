@@ -13,6 +13,7 @@ RUN pnpm run build
 FROM nginx:1.27-alpine
 
 COPY nginx/inveontechnologies.in.conf /etc/nginx/conf.d/default.conf
+COPY nginx/security-headers.conf /etc/nginx/snippets/security-headers.conf
 
 COPY --from=build /app/dist/public /usr/share/nginx/html
 
