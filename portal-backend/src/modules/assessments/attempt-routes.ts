@@ -14,7 +14,7 @@ import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import { scoreAttempt } from "./scoring.js";
 import type { ApplicationStatus } from "../applications/state-machine.js";
-import { attemptsUsedByExam, examsForOpportunity, resolveAfterAttempt } from "./exams.js";
+import { attemptsUsedByExam, examWindow, examsForOpportunity, formatIst, resolveAfterAttempt } from "./exams.js";
 import type { Env } from "../shared/env.js";
 import { canStaffAccessApplication } from "../applications/access.js";
 
@@ -85,6 +85,16 @@ async function resolveExpiryIfNeeded(db: Database, attempt: typeof assessmentAtt
   return updated;
 }
 
+function assertExamOpen(exam: { opensAt: Date | null; closesAt: Date | null }) {
+  const state = examWindow(exam);
+  if (state === "upcoming") {
+    throw new AppError("EXAM_NOT_OPEN", `This exam opens on ${formatIst(exam.opensAt!)}`, 409);
+  }
+  if (state === "closed") {
+    throw new AppError("EXAM_CLOSED", `This exam closed on ${formatIst(exam.closesAt!)}`, 409);
+  }
+}
+
 export function attemptRouter(db: Database, env: Env) {
   const router = Router();
 
@@ -143,7 +153,7 @@ export function attemptRouter(db: Database, env: Env) {
 
     res.json({
       applicationStatus: current?.status ?? application.status,
-      exams: exams.map((e) => ({ ...e, attemptsUsed: used.get(e.id) ?? 0, attemptsLeft: Math.max(0, e.maxAttempts - (used.get(e.id) ?? 0)) })),
+      exams: exams.map((e) => ({ ...e, window: examWindow(e), attemptsUsed: used.get(e.id) ?? 0, attemptsLeft: Math.max(0, e.maxAttempts - (used.get(e.id) ?? 0)) })),
       attempts: attempts.map((a) => ({ ...a, examTitle: names.get(a.assessmentId)?.title ?? "Exam", language: names.get(a.assessmentId)?.language ?? null })),
       // Kept for older clients that expect a single attempt.
       attempt: attempts[0] ?? null,
@@ -167,6 +177,7 @@ export function attemptRouter(db: Database, env: Env) {
     const exams = await examsForOpportunity(db, application.opportunityId);
     const exam = exams.find((e) => e.id === assessmentId);
     if (!exam) throw new NotFoundError("Exam not found for this opening");
+    assertExamOpen(exam);
 
     const open = await db.query.assessmentAttempts.findFirst({
       where: and(eq(assessmentAttempts.applicationId, application.id), inArray(assessmentAttempts.status, ["not_started", "in_progress"])),
@@ -209,7 +220,11 @@ export function attemptRouter(db: Database, env: Env) {
     const assessment = await db.query.assessments.findFirst({ where: eq(assessments.id, attempt.assessmentId) });
     if (!assessment) throw new NotFoundError("Assessment not found");
 
-    const expiresAt = new Date(Date.now() + assessment.durationMinutes * 60 * 1000);
+    assertExamOpen(assessment);
+
+    // An attempt started close to the window's end still has to finish by then.
+    let expiresAt = new Date(Date.now() + assessment.durationMinutes * 60 * 1000);
+    if (assessment.closesAt && assessment.closesAt < expiresAt) expiresAt = assessment.closesAt;
     const [updated] = await db
       .update(assessmentAttempts)
       .set({ status: "in_progress", startedAt: new Date(), expiresAt })

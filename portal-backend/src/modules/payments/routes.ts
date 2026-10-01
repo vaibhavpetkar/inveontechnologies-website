@@ -31,6 +31,8 @@ import { notifyHiringTeam } from "../assessments/exams.js";
 import { every } from "../shared/jobs.js";
 import { cashfreeConfig, createOrder, getOrder, normalisePhone, verifyWebhookSignature } from "./cashfree.js";
 import { expireTrialIfDue, markEnrollmentPaid, startProgram, sweepTrials, type ProgramEnrollment } from "./enrollments.js";
+import { onProgramUnlocked, trackForOpportunity } from "../internships/service.js";
+import { EDUCATION_LEVELS, syncJoiningDocuments } from "../recruitment/joining-documents.js";
 
 const joiningSchema = z.object({
   fullName: z.string().trim().min(2).max(200),
@@ -41,6 +43,9 @@ const joiningSchema = z.object({
   college: z.string().trim().max(200).nullable().optional(),
   degree: z.string().trim().max(100).nullable().optional(),
   graduationYear: z.number().int().min(1990).max(2100).nullable().optional(),
+  educationStatus: z.enum(["studying", "completed"]),
+  educationLevel: z.enum(EDUCATION_LEVELS),
+  experienceCompanies: z.array(z.string().trim().min(2).max(120)).max(5).default([]),
   githubUsername: z.string().trim().max(60).regex(/^[A-Za-z0-9-]*$/, "GitHub usernames use letters, numbers and dashes").nullable().optional(),
   linkedinUrl: z.string().trim().url().max(300).nullable().optional().or(z.literal("")),
   emergencyContactName: z.string().trim().min(2).max(200),
@@ -179,15 +184,16 @@ export function programRouter(db: Database, env: Env) {
     const phone = normalisePhone(details.phone) ?? normalisePhone(profile?.phone);
     if (!phone) throw new AppError("PHONE_REQUIRED", "Add a 10-digit phone number to your profile before paying", 400);
 
+    const track = await trackForOpportunity(db, enrollment.opportunityId);
     const orderId = `inv_${enrollment.id.slice(0, 8)}_${Date.now()}`;
     const appUrl = env.PORTAL_APP_URL.replace(/\/$/, "");
     const order = await createOrder(cashfree, {
       orderId,
       amount,
       customer: { id: enrollment.userId, name: profile?.fullName ?? null, email: user!.email, phone },
-      returnUrl: `${appUrl}/journey/${enrollment.applicationId}?order_id={order_id}`,
+      returnUrl: track ? `${appUrl}/internships/${track.slug}?order_id={order_id}` : `${appUrl}/journey/${enrollment.applicationId}?order_id={order_id}`,
       notifyUrl: appUrl.startsWith("https://") ? `${appUrl}/api/v1/payments/cashfree/webhook` : null,
-      note: "Inveon program fee",
+      note: track ? `Inveon ${track.title} internship fee` : "Inveon program fee",
     });
     if (!order.payment_session_id) throw new AppError("PAYMENT_GATEWAY_ERROR", "Cashfree didn't return a payment session", 502);
 
@@ -232,6 +238,8 @@ export function programRouter(db: Database, env: Env) {
     // Keep the profile in step with what they just told us.
     await db.update(candidateProfiles).set({ fullName: body.fullName, phone: body.phone }).where(eq(candidateProfiles.userId, enrollment.userId));
     if (body.githubUsername) await db.update(users).set({ githubUsername: body.githubUsername }).where(eq(users.id, enrollment.userId));
+    // Aadhaar, PAN, education proof and experience letters, per their answers.
+    await syncJoiningDocuments(db, enrollment.applicationId, body);
     if (first) {
       await notifyHiringTeam(db, enrollment.opportunityId, enrollment.userId, {
         kind: "program.joining_submitted",
@@ -262,6 +270,7 @@ export function programRouter(db: Database, env: Env) {
     if (!["awaiting_choice", "trial", "trial_expired"].includes(enrollment.status)) throw new AppError("INVALID_STATE", `Already ${enrollment.status.replace("_", " ")}`, 409);
     const [updated] = await db.update(programEnrollments).set({ status: "waived", paymentNote: note || "Fee waived", updatedAt: new Date() }).where(eq(programEnrollments.id, enrollment.id)).returning();
     await startProgram(db, updated, "not_required", null);
+    await onProgramUnlocked(db, updated, req.user!.sub);
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "program.waive", entityType: "program_enrollment", entityId: enrollment.id, metadata: { note }, ipAddress: req.ip });
     res.json({ enrollment: updated });
   });

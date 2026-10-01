@@ -14,10 +14,19 @@ export interface ExamRow {
   passingScorePercent: number;
   maxAttempts: number;
   isActive: boolean;
+  opensAt: string | null;
+  closesAt: string | null;
   questionCount: number;
   attemptCount: number;
   passCount: number;
 }
+
+/** ISO time to the value a datetime-local input wants (local time, minutes). */
+const toLocalInput = (iso: string | null | undefined) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+};
 
 interface Question { questionText: string; options: { id: string; text: string }[]; correctOptionId: string; points: number }
 
@@ -43,6 +52,8 @@ export function ExamEditor({ opportunityId, exam, onClose, onSaved }: Props) {
     durationMinutes: String(exam?.durationMinutes ?? 30),
     passingScorePercent: String(exam?.passingScorePercent ?? 60),
     maxAttempts: String(exam?.maxAttempts ?? 2),
+    opensAt: toLocalInput(exam?.opensAt),
+    closesAt: toLocalInput(exam?.closesAt),
   });
   const [questions, setQuestions] = useState<Question[]>(exam ? [] : [blankQuestion()]);
   const [busy, setBusy] = useState(false);
@@ -68,6 +79,9 @@ export function ExamEditor({ opportunityId, exam, onClose, onSaved }: Props) {
       const bad = clean.findIndex((q) => q.options.length < 2 || !q.options.some((o) => o.id === q.correctOptionId));
       if (bad >= 0) return setError(`Question ${bad + 1} needs at least two options, with the correct one filled in.`);
     }
+    if (form.opensAt && form.closesAt && new Date(form.closesAt) <= new Date(form.opensAt)) {
+      return setError("The exam has to close after it opens.");
+    }
     setBusy(true);
     const body = {
       title: form.title.trim(),
@@ -76,6 +90,8 @@ export function ExamEditor({ opportunityId, exam, onClose, onSaved }: Props) {
       durationMinutes: Number(form.durationMinutes),
       passingScorePercent: Number(form.passingScorePercent),
       maxAttempts: Number(form.maxAttempts),
+      opensAt: form.opensAt ? new Date(form.opensAt).toISOString() : null,
+      closesAt: form.closesAt ? new Date(form.closesAt).toISOString() : null,
       ...(locked ? {} : { questions: clean }),
     };
     try {
@@ -116,6 +132,11 @@ export function ExamEditor({ opportunityId, exam, onClose, onSaved }: Props) {
             <div className="field"><label htmlFor="ex-pass">Pass mark (%)</label><input id="ex-pass" type="number" required min={0} max={100} value={form.passingScorePercent} onChange={(e) => setForm({ ...form, passingScorePercent: e.target.value })} /></div>
             <div className="field"><label htmlFor="ex-att">Attempts allowed</label><input id="ex-att" type="number" required min={1} max={10} value={form.maxAttempts} onChange={(e) => setForm({ ...form, maxAttempts: e.target.value })} /></div>
           </div>
+          <div className="field-row">
+            <div className="field"><label htmlFor="ex-open">Opens (optional)</label><input id="ex-open" type="datetime-local" value={form.opensAt} onChange={(e) => setForm({ ...form, opensAt: e.target.value })} /></div>
+            <div className="field"><label htmlFor="ex-close">Closes (optional)</label><input id="ex-close" type="datetime-local" min={form.opensAt || undefined} value={form.closesAt} onChange={(e) => setForm({ ...form, closesAt: e.target.value })} /></div>
+          </div>
+          <span className="muted-small exam-window-hint">Leave both empty to keep the exam open. Candidates can only start inside the window, invited candidates are reminded when it opens and a day before it closes, and it shows on their calendar.</span>
 
           <div className="quiz-editor">
             <h3>Questions {questions.length > 0 && <span className="muted-small">· {questions.length} questions, {totalPoints} points</span>}</h3>

@@ -1,5 +1,6 @@
 import { pgTable, uuid, text, timestamp, boolean, jsonb, pgEnum, integer, primaryKey, unique, numeric, index, date } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+import type { CheckReport, ExerciseSpec } from "../../internships/exercises/types.js";
 
 /**
  * Phase 1 schema: identity + auth only. Opportunities/applications/
@@ -286,6 +287,11 @@ export const assessments = pgTable("assessments", {
   maxAttempts: integer("max_attempts").notNull().default(1),
   // Inactive exams are hidden from candidates but keep their history.
   isActive: boolean("is_active").notNull().default(true),
+  // Optional exam window. Candidates can only start between these times,
+  // and an attempt started late still has to finish by closesAt. Either
+  // end can be open (null).
+  opensAt: timestamp("opens_at", { withTimezone: true }),
+  closesAt: timestamp("closes_at", { withTimezone: true }),
   createdBy: uuid("created_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -362,10 +368,14 @@ export const documentRequests = pgTable("document_requests", {
   id: uuid("id").primaryKey().defaultRandom(),
   applicationId: uuid("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
   documentName: text("document_name").notNull(),
+  // Set on documents the joining form asks for (aadhaar, pan, marksheet,
+  // passing_certificate, experience_certificate); null when staff asked by hand.
+  documentType: text("document_type"),
   status: documentRequestStatusEnum("status").notNull().default("requested"),
   fileUrl: text("file_url"), // placeholder — see module comment above
   note: text("note"),
-  requestedBy: uuid("requested_by").notNull().references(() => users.id),
+  // Null for documents the joining form asked for rather than a person.
+  requestedBy: uuid("requested_by").references(() => users.id),
   verifiedBy: uuid("verified_by").references(() => users.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -479,6 +489,9 @@ export const courses = pgTable("courses", {
   // Null = certificates for this course are issued by hand, as before.
   certificateTemplateId: uuid("certificate_template_id"),
   category: text("category"),
+  // Set on courses installed from the practice-course catalog (e.g. "c"),
+  // so installing again adds new content instead of duplicating the course.
+  catalogKey: text("catalog_key").unique(),
   createdBy: uuid("created_by").notNull().references(() => users.id),
   publishedAt: timestamp("published_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -519,7 +532,55 @@ export const courseLessons = pgTable("course_lessons", {
   // when time runs out. null = untimed / unlimited.
   timeLimitMinutes: integer("time_limit_minutes"),
   maxAttempts: integer("max_attempts"),
+  // Lessons installed from the practice-course catalog ("c/loops/assignment").
+  catalogKey: text("catalog_key").unique(),
 });
+
+/**
+ * Coding questions of an "assignment" lesson (an assignment sheet): the
+ * learner uploads a file (or writes code) for each question, and it's
+ * reviewed automatically, line by line, and run against test cases. The
+ * reference solutions stay in code (courses/practice/) and never reach the
+ * browser.
+ */
+export const lessonCodeQuestions = pgTable(
+  "lesson_code_questions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    lessonId: uuid("lesson_id").notNull().references(() => courseLessons.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    title: text("title").notNull(),
+    brief: text("brief").notNull(),
+    steps: jsonb("steps").$type<string[]>().notNull().default([]),
+    level: text("level", { enum: ["basic", "intermediate", "advanced"] }).notNull().default("basic"),
+    spec: jsonb("spec").$type<ExerciseSpec>().notNull(),
+    orderIndex: integer("order_index").notNull().default(0),
+  },
+  (t) => ({ uniqLessonKey: unique("lesson_code_questions_lesson_key_unique").on(t.lessonId, t.key) }),
+);
+
+/**
+ * Every upload for a question is kept. status: passed (every check ran and
+ * passed, no line needs fixing), failed (something to fix; the learner is
+ * emailed the review), pending (the code couldn't be run right now but the
+ * line-by-line review found nothing wrong).
+ */
+export const lessonCodeSubmissions = pgTable(
+  "lesson_code_submissions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    questionId: uuid("question_id").notNull().references(() => lessonCodeQuestions.id, { onDelete: "cascade" }),
+    enrollmentId: uuid("enrollment_id").notNull().references(() => courseEnrollments.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    fileName: text("file_name"),
+    code: text("code").notNull(),
+    report: jsonb("report").$type<CheckReport>().notNull(),
+    status: text("status", { enum: ["passed", "failed", "pending"] }).notNull(),
+    emailedAt: timestamp("emailed_at", { withTimezone: true }),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ byQuestion: index("lesson_code_submissions_question_idx").on(t.questionId, t.enrollmentId, t.submittedAt) }),
+);
 
 /**
  * Auto-graded quizzes for "test" lessons (LMS phase D). Same multiple-choice
@@ -740,6 +801,35 @@ export const letterTemplates = pgTable("letter_templates", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/** What an appointment letter states, kept with the letter so its PDF always renders the same. */
+export interface AppointmentDetails {
+  name: string;
+  email: string;
+  employeeId: string;
+  employeeType: "intern" | "full_time" | "contract";
+  designation: string;
+  department: string;
+  joiningDate: string; // YYYY-MM-DD
+  endDate: string | null; // interns and contracts
+  durationMonths: number | null;
+  reportingTo: string | null;
+  workLocation: string;
+  workHours: string;
+  monthlyPay: number | null; // stipend for interns, gross salary otherwise
+  probationMonths: number | null;
+  noticeDays: number;
+  additionalTerms: string | null;
+}
+
+/** A company policy as it read when a letter was issued. */
+export interface PolicySnapshot {
+  id: string;
+  slug: string;
+  title: string;
+  version: number;
+  body: string;
+}
+
 export const employeeLetters = pgTable("employee_letters", {
   id: uuid("id").primaryKey().defaultRandom(),
   employeeId: uuid("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
@@ -750,6 +840,35 @@ export const employeeLetters = pgTable("employee_letters", {
   signatoryTitle: text("signatory_title").notNull(),
   generatedBy: uuid("generated_by").notNull().references(() => users.id),
   generatedAt: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+  // Appointment letters issued from the People page (admin only): the
+  // structured terms and the policies attached, both frozen at issue time.
+  seqNumber: integer("seq_number").generatedAlwaysAsIdentity(),
+  referenceNo: text("reference_no"),
+  details: jsonb("details").$type<AppointmentDetails>(),
+  policies: jsonb("policies").$type<PolicySnapshot[]>(),
+  emailedTo: text("emailed_to"),
+  emailedAt: timestamp("emailed_at", { withTimezone: true }),
+  acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+  acceptedName: text("accepted_name"),
+});
+
+/**
+ * Company policies: attached as PDFs to every appointment letter and
+ * readable by staff in the portal. Admins edit them; each edit to the
+ * wording bumps the version, and letters keep the wording they were sent.
+ */
+export const companyPolicies = pgTable("company_policies", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  slug: text("slug").notNull().unique(),
+  title: text("title").notNull(),
+  summary: text("summary").notNull(),
+  body: text("body").notNull(), // "## " headings, "- " bullets, blank lines between paragraphs
+  version: integer("version").notNull().default(1),
+  active: boolean("active").notNull().default(true),
+  orderIndex: integer("order_index").notNull().default(0),
+  updatedBy: uuid("updated_by").references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 /**
@@ -1144,8 +1263,25 @@ export const notificationPreferences = pgTable("notification_preferences", {
   userId: uuid("user_id").primaryKey().references(() => users.id),
   emailEnabled: boolean("email_enabled").notNull().default(true),
   inAppEnabled: boolean("in_app_enabled").notNull().default(true),
+  // The morning summary email (only sent when emailEnabled is on too).
+  digestEnabled: boolean("digest_enabled").notNull().default(true),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * One row per person per (IST) day the morning digest went out. Inserting
+ * the row is how a sender claims that person's digest, so two backend
+ * processes never both send it.
+ */
+export const digestSends = pgTable(
+  "digest_sends",
+  {
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    sentOn: date("sent_on").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.userId, t.sentOn] }) }),
+);
 
 /**
  * Notifications and background jobs (roadmap phase B).
@@ -1478,3 +1614,100 @@ export const attendanceRecords = pgTable(
   },
   (t) => ({ uniqDay: unique("attendance_employee_date_unique").on(t.employeeId, t.date) }),
 );
+
+// --- Internship tracks (6-month programs): course, exam, offer, roadmap ---
+//
+// A track bundles a course whose final exam, once passed, earns the learner
+// a participant offer for the track's internship opening. The offer is an
+// application + program enrollment on that opening, so the fee is paid
+// through the existing Cashfree flow; paying unlocks the roadmap of
+// assignments, which mentors review and mark.
+
+export interface RoadmapPhase {
+  month: number;
+  title: string;
+  skills: string[];
+}
+
+export const internshipTracks = pgTable("internship_tracks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  slug: text("slug").notNull().unique(),
+  title: text("title").notNull(),
+  tagline: text("tagline").notNull(),
+  description: text("description").notNull(),
+  roadmap: jsonb("roadmap").$type<RoadmapPhase[]>().notNull(),
+  courseId: uuid("course_id").references(() => courses.id, { onDelete: "set null" }),
+  examLessonId: uuid("exam_lesson_id").references(() => courseLessons.id, { onDelete: "set null" }),
+  opportunityId: uuid("opportunity_id").unique().references(() => opportunities.id, { onDelete: "set null" }),
+  fee: numeric("fee", { precision: 10, scale: 2 }).notNull().default("4000"),
+  durationMonths: integer("duration_months").notNull().default(6),
+  active: boolean("active").notNull().default(true),
+  orderIndex: integer("order_index").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** The assignment bank, per skill (html, react, spring_boot, ...). Tracks pick skills. */
+export const trackAssignments = pgTable(
+  "track_assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    skill: text("skill").notNull(),
+    title: text("title").notNull(),
+    brief: text("brief").notNull(),
+    steps: jsonb("steps").$type<string[]>().notNull(),
+    deliverable: text("deliverable", { enum: ["repo", "link", "text"] }).notNull().default("repo"),
+    level: text("level", { enum: ["basic", "intermediate", "advanced"] }).notNull().default("basic"),
+    maxMarks: integer("max_marks").notNull().default(10),
+    orderIndex: integer("order_index").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    // "project": a mentor reviews a repo/link. "exercise": code written in
+    // the portal and checked automatically against `exercise`.
+    kind: text("kind", { enum: ["project", "exercise"] }).notNull().default("project"),
+    exercise: jsonb("exercise").$type<ExerciseSpec>(),
+  },
+  (t) => ({ uniqSkillTitle: unique("track_assignments_skill_title_unique").on(t.skill, t.title) }),
+);
+
+export const submissionStatusEnum = pgEnum("assignment_submission_status", ["submitted", "changes_requested", "approved"]);
+
+export const assignmentSubmissions = pgTable(
+  "assignment_submissions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    assignmentId: uuid("assignment_id").notNull().references(() => trackAssignments.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    enrollmentId: uuid("enrollment_id").notNull().references(() => programEnrollments.id, { onDelete: "cascade" }),
+    status: submissionStatusEnum("status").notNull().default("submitted"),
+    repoUrl: text("repo_url"),
+    linkUrl: text("link_url"),
+    notes: text("notes"),
+    attempt: integer("attempt").notNull().default(1),
+    marks: integer("marks"),
+    feedback: text("feedback"),
+    // Exercises: the submitted code and the automatic check's result.
+    code: text("code"),
+    checkReport: jsonb("check_report").$type<CheckReport>(),
+    autoChecked: boolean("auto_checked").notNull().default(false),
+    reviewedBy: uuid("reviewed_by").references(() => users.id),
+    reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    uniqPerUser: unique("assignment_submissions_assignment_user_unique").on(t.assignmentId, t.userId),
+    byStatus: index("assignment_submissions_status_idx").on(t.status, t.submittedAt),
+  }),
+);
+
+/** The participant offer earned by passing a track's final exam. */
+export const participantOffers = pgTable("participant_offers", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  seqNumber: integer("seq_number").generatedAlwaysAsIdentity(),
+  referenceNo: text("reference_no"),
+  enrollmentId: uuid("enrollment_id").notNull().unique().references(() => programEnrollments.id, { onDelete: "cascade" }),
+  trackId: uuid("track_id").notNull().references(() => internshipTracks.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  examScore: integer("exam_score").notNull(),
+  fee: numeric("fee", { precision: 10, scale: 2 }).notNull(),
+  issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
+  emailedAt: timestamp("emailed_at", { withTimezone: true }),
+});

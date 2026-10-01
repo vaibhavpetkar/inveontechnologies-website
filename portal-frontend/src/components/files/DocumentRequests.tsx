@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import { motion } from "framer-motion";
 import { Check, FilePlus2, X } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { apiFetch, ApiError } from "../../lib/api";
@@ -22,7 +23,11 @@ interface Props {
   onChanged: () => void;
 }
 
-/** Documents staff ask a candidate for (ID proof, marksheets…), with upload and review. */
+/**
+ * Documents a candidate owes: the ones the joining form asks for (Aadhaar,
+ * PAN, marksheet or passing certificate, experience letters) plus any staff
+ * ask for by hand. The candidate uploads; staff accept or send back.
+ */
 export function DocumentRequests({ applicationId, documents, mode, onChanged }: Props) {
   const { accessToken } = useAuth();
   const toast = useToast();
@@ -60,17 +65,28 @@ export function DocumentRequests({ applicationId, documents, mode, onChanged }: 
   }
 
   if (mode === "candidate" && documents.length === 0) return null;
+  const accepted = documents.filter((d) => d.status === "verified").length;
+  const toCheck = documents.filter((d) => d.status === "uploaded").length;
 
   return (
     <div className="doc-requests">
+      {documents.length > 0 && (
+        <div className="doc-progress" aria-label={`${accepted} of ${documents.length} documents accepted`}>
+          <div className="doc-progress-bar">
+            <motion.span className="good" initial={{ width: 0 }} animate={{ width: `${(accepted / documents.length) * 100}%` }} transition={{ duration: 0.5, ease: "easeOut" }} />
+            <motion.span className="warn" initial={{ width: 0 }} animate={{ width: `${(toCheck / documents.length) * 100}%` }} transition={{ duration: 0.5, ease: "easeOut", delay: 0.1 }} />
+          </div>
+          <span className="muted-small">{accepted} of {documents.length} accepted{toCheck > 0 ? ` · ${toCheck} ${mode === "staff" ? "to check" : "being checked"}` : ""}</span>
+        </div>
+      )}
       {documents.length === 0 ? (
         <p className="muted-small">No documents requested.</p>
       ) : (
         <ul className="doc-list">
-          {documents.map((d) => {
+          {documents.map((d, i) => {
             const needsUpload = mode === "candidate" && (d.status === "requested" || d.status === "rejected");
             return (
-              <li key={d.id}>
+              <motion.li key={d.id} className={`doc-${d.status}`} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(i, 8) * 0.04 }}>
                 <div className="doc-head">
                   <strong>{d.documentName}</strong>
                   <span className={`score-pill ${STATUS[d.status].tone}`}>{mode === "candidate" && d.status === "uploaded" ? "Being checked" : STATUS[d.status].label}</span>
@@ -93,7 +109,7 @@ export function DocumentRequests({ applicationId, documents, mode, onChanged }: 
                     </>
                   )}
                 </div>
-              </li>
+              </motion.li>
             );
           })}
         </ul>

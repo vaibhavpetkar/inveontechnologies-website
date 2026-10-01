@@ -98,3 +98,23 @@ Every download is recorded in the export log (admins see it at `GET /api/v1/repo
 | See a payslip | HR, admin, super admin; the employee once it's published |
 | Issue or revoke a completion or experience certificate | HR, admin, super admin. Also automatic: interns when their internship ends, anyone when they're offboarded |
 | Verify a certificate | Anyone with the link (name, role, dates and ID only) |
+
+## Appointment letters and company policies
+
+| Action | Who |
+| --- | --- |
+| Issue an appointment letter (emailed with the company policies attached as PDFs) | Admin, super admin |
+| See someone's appointment letters, download them, resend the email | HR, admin, super admin; the employee sees and downloads their own |
+| Accept an appointment letter | Only the person it's addressed to. Accepting ticks their policy-consent and signed-letter checklist items |
+| Read and download company policies | Everyone signed in |
+| Add, edit or retire a policy | Admin, super admin. Rewording creates a new version; letters already sent keep the version they attached |
+
+## Internship tracks and coding exercises
+
+| Action | Who |
+| --- | --- |
+| Set up the six tracks (courses, exams, openings, assignments) | Admin, super admin |
+| Open a track's roadmap, run and submit exercises, submit projects | Participants who have paid (or been waived) for a track that includes the assignment |
+| Review projects and exercises that couldn't be checked automatically | Manager, HR, admin, super admin (never their own work) |
+
+Coding exercises are checked by the portal, not a person. JavaScript, Python, C, C++, C#, Java and SQL are run against test cases by Judge0 (`PORTAL_JUDGE0_URL`, `PORTAL_JUDGE0_KEY`); "Run" uses the visible examples, "Submit" adds hidden tests, and passing every check approves the exercise with full marks. HTML, CSS, Bootstrap, React, Django, Spring Boot, Express, DevOps and cloud exercises are checked by inspecting the code and need no runner. When Judge0 isn't set up or is unreachable, code that has to run goes to the Reviews queue for a mentor instead. The portal never runs student code itself in production.

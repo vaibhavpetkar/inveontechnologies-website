@@ -1,0 +1,231 @@
+import type { ExerciseSeed } from "../types.js";
+
+
+export default [
+  {
+    title: "Greeting with props",
+    brief: "Write a Greeting component that shows \"Hello, <name>!\" using a name prop, and render it from App.",
+    steps: [
+      "Define a Greeting component (function Greeting or const Greeting = ...)",
+      "Greeting reads the name prop (props.name or destructured { name })",
+      "Greeting returns an h1 that shows {name} (or {props.name})",
+      "App renders <Greeting name=\"...\" /> and is the default export",
+    ],
+    level: "basic",
+    editor: "jsx",
+    starter: `function Greeting() {\n  return <h1>Hello!</h1>;\n}\n\nexport default function App() {\n  return <div>{/* Render Greeting with a name */}</div>;\n}\n`,
+    solution: `function Greeting({ name }) {\n  return <h1>Hello, {name}!</h1>;\n}\n\nexport default function App() {\n  return (\n    <div>\n      <Greeting name="Asha" />\n      <Greeting name="Ravi" />\n    </div>\n  );\n}\n`,
+    check: {
+      rules: [
+        { match: String.raw`(function\s+Greeting\s*\(|const\s+Greeting\s*=)`, message: "Defines a Greeting component" },
+        { match: String.raw`Greeting\s*(=\s*)?\(\s*(\{\s*name\b[^}]*\}|props)\s*\)`, message: "Greeting takes the name prop" },
+        { match: String.raw`<h1[^>]*>[^<]*\{\s*(props\.)?name\s*\}`, message: "The h1 shows the name with {name}" },
+        { match: String.raw`<Greeting\s+name\s*=\s*("[^"]+"|'[^']+'|\{)`, message: "App renders <Greeting name=... />" },
+        { match: String.raw`export\s+default`, message: "Has a default export" },
+      ],
+    },
+  },
+  {
+    title: "Like button counter",
+    brief: "Build a Like button that counts how many times it was clicked, using the useState hook.",
+    steps: [
+      "Import useState from react",
+      "Create state with const [count, setCount] = useState(0)",
+      "A button with an onClick handler that calls setCount to add 1",
+      "Show the count in the page with {count}",
+    ],
+    level: "basic",
+    editor: "jsx",
+    starter: `import React from "react";\n\nexport default function LikeButton() {\n  let count = 0;\n  return <button>Like (0)</button>;\n}\n`,
+    solution: `import { useState } from "react";\n\nexport default function LikeButton() {\n  const [count, setCount] = useState(0);\n  return <button onClick={() => setCount(count + 1)}>Like ({count})</button>;\n}\n`,
+    check: {
+      rules: [
+        { match: String.raw`import\s*(React\s*,\s*)?\{[^}]*\buseState\b[^}]*\}\s*from\s*["']react["']`, message: "Imports useState from react" },
+        { match: String.raw`const\s*\[\s*\w+\s*,\s*set\w+\s*\]\s*=\s*(React\.)?useState\(\s*0\s*\)`, message: "Uses useState(0) for the count" },
+        { match: String.raw`onClick\s*=\s*\{[^}]*set\w+\(\s*(\w+\s*\+\s*1|\w+\s*=>\s*\w+\s*\+\s*1|\(\s*\w+\s*\)\s*=>\s*\w+\s*\+\s*1)\s*\)`, message: "onClick calls the setter to add 1" },
+        { match: String.raw`>[^<{]*\{\s*count\s*\}`, message: "Shows {count} on the page" },
+      ],
+    },
+  },
+  {
+    title: "Render a list with map",
+    brief: "Render an array of fruits as a bulleted list using map, giving each item a key.",
+    steps: [
+      "Keep the fruits in an array: const fruits = [\"Apple\", \"Mango\", \"Banana\"]",
+      "Render a ul",
+      "Inside it, use fruits.map(...) to return one li per fruit",
+      "Give each li a key prop",
+    ],
+    level: "basic",
+    editor: "jsx",
+    starter: `export default function FruitList() {\n  const fruits = ["Apple", "Mango", "Banana"];\n  return (\n    <ul>\n      <li>Apple</li>\n    </ul>\n  );\n}\n`,
+    solution: `export default function FruitList() {\n  const fruits = ["Apple", "Mango", "Banana"];\n  return (\n    <ul>\n      {fruits.map((fruit) => (\n        <li key={fruit}>{fruit}</li>\n      ))}\n    </ul>\n  );\n}\n`,
+    check: {
+      rules: [
+        { match: String.raw`const\s+fruits\s*=\s*\[`, message: "Keeps the fruits in an array" },
+        { match: String.raw`<ul[\s>]`, message: "Renders a ul" },
+        { match: String.raw`fruits\.map\(`, message: "Uses fruits.map(...)" },
+        { match: String.raw`<li\s[^>]*key\s*=\s*\{`, message: "Each li has a key prop" },
+      ],
+    },
+  },
+  {
+    title: "Show or hide text",
+    brief: "Make a button that shows and hides a paragraph, and changes its label between Show and Hide.",
+    steps: [
+      "State: const [show, setShow] = useState(false)",
+      "The button's onClick flips it: setShow(!show)",
+      "Render the paragraph only when show is true: {show && <p>...</p>}",
+      "The button label uses a ternary: {show ? \"Hide\" : \"Show\"}",
+    ],
+    level: "basic",
+    editor: "jsx",
+    starter: `import { useState } from "react";\n\nexport default function Toggle() {\n  return (\n    <div>\n      <button>Show</button>\n      <p>Surprise! You found the secret.</p>\n    </div>\n  );\n}\n`,
+    solution: `import { useState } from "react";\n\nexport default function Toggle() {\n  const [show, setShow] = useState(false);\n  return (\n    <div>\n      <button onClick={() => setShow(!show)}>{show ? "Hide" : "Show"}</button>\n      {show && <p>Surprise! You found the secret.</p>}\n    </div>\n  );\n}\n`,
+    check: {
+      rules: [
+        { match: String.raw`useState\(\s*false\s*\)`, message: "Uses useState(false) for show" },
+        { match: String.raw`onClick\s*=\s*\{[^}]*set\w+\(\s*(!\s*\w+|\(?\s*\w+\s*\)?\s*=>\s*!\s*\w+)\s*\)`, message: "onClick flips the state with !" },
+        { match: String.raw`\{\s*\w+\s*(&&\s*<p|\?\s*\(?\s*<p)`, message: "Renders the paragraph only when shown" },
+        { match: String.raw`\{\s*\w+\s*\?\s*["']Hide["']\s*:\s*["']Show["']\s*\}`, message: "The label switches between Hide and Show" },
+      ],
+    },
+  },
+  {
+    title: "Live character counter",
+    brief: "Build a controlled textarea that shows how many characters have been typed.",
+    steps: [
+      "State: const [text, setText] = useState(\"\")",
+      "The textarea has value={text}",
+      "onChange updates the state with e.target.value",
+      "Show the count with {text.length}",
+    ],
+    level: "intermediate",
+    editor: "jsx",
+    starter: `import { useState } from "react";\n\nexport default function CharCounter() {\n  return (\n    <div>\n      <textarea />\n      <p>0 characters</p>\n    </div>\n  );\n}\n`,
+    solution: `import { useState } from "react";\n\nexport default function CharCounter() {\n  const [text, setText] = useState("");\n  return (\n    <div>\n      <textarea value={text} onChange={(e) => setText(e.target.value)} />\n      <p>{text.length} characters</p>\n    </div>\n  );\n}\n`,
+    check: {
+      rules: [
+        { match: String.raw`useState\(\s*(""|'')\s*\)`, message: "Uses useState(\"\") for the text" },
+        { match: String.raw`<textarea[^>]*value\s*=\s*\{\s*\w+\s*\}`, message: "The textarea is controlled with value={...}" },
+        { match: String.raw`onChange\s*=\s*\{[^}]*set\w+\(\s*\w+\.target\.value\s*\)`, message: "onChange sets the state from e.target.value" },
+        { match: String.raw`\{\s*\w+\.length\s*\}`, message: "Shows the count with {text.length}" },
+      ],
+    },
+  },
+  {
+    title: "Page title with useEffect",
+    brief: "Keep the browser tab title in sync with a click counter using useEffect with a dependency array.",
+    steps: [
+      "Import useState and useEffect from react",
+      "A count state and a button whose onClick adds 1",
+      "In useEffect, set document.title to include the count",
+      "Pass [count] as the dependency array so it runs only when count changes",
+    ],
+    level: "intermediate",
+    editor: "jsx",
+    starter: `import { useState } from "react";\n\nexport default function TitleCounter() {\n  const [count, setCount] = useState(0);\n  document.title = "Clicked " + count + " times";\n  return <button onClick={() => setCount(count + 1)}>Click me</button>;\n}\n`,
+    solution: `import { useState, useEffect } from "react";\n\nexport default function TitleCounter() {\n  const [count, setCount] = useState(0);\n\n  useEffect(() => {\n    document.title = "Clicked " + count + " times";\n  }, [count]);\n\n  return <button onClick={() => setCount(count + 1)}>Click me ({count})</button>;\n}\n`,
+    check: {
+      rules: [
+        { match: String.raw`import\s*(React\s*,\s*)?\{[^}]*\buseEffect\b[^}]*\}\s*from\s*["']react["']`, message: "Imports useEffect from react" },
+        { match: String.raw`onClick\s*=\s*\{[^}]*set\w+\(`, message: "A button with an onClick that updates the count" },
+        { match: String.raw`useEffect\(\s*(\(\s*\)\s*=>|function\s*\(\s*\))\s*\{[^}]*document\.title\s*=`, message: "useEffect sets document.title" },
+        { match: String.raw`useEffect\([\s\S]*?\}\s*,\s*\[\s*count\s*\]\s*\)`, message: "useEffect has [count] as its dependency array" },
+      ],
+    },
+  },
+  {
+    title: "Search filter list",
+    brief: "Show a list of names with a search box; only names containing the typed text (ignoring case) are shown.",
+    steps: [
+      "A controlled input: value={query} and onChange updating the query state",
+      "Filter with names.filter(...) using toLowerCase() and includes(...)",
+      "Render the filtered names with map, each li with a key",
+      "When nothing matches, show a p with the text No results (conditional rendering)",
+    ],
+    level: "intermediate",
+    editor: "jsx",
+    starter: `import { useState } from "react";\n\nconst names = ["Asha", "Ravi", "Neha", "Arjun", "Meera"];\n\nexport default function NameSearch() {\n  return (\n    <div>\n      <input placeholder="Search" />\n      <ul>\n        {names.map((n) => <li key={n}>{n}</li>)}\n      </ul>\n    </div>\n  );\n}\n`,
+    solution: `import { useState } from "react";\n\nconst names = ["Asha", "Ravi", "Neha", "Arjun", "Meera"];\n\nexport default function NameSearch() {\n  const [query, setQuery] = useState("");\n  const visible = names.filter((n) => n.toLowerCase().includes(query.toLowerCase()));\n  return (\n    <div>\n      <input placeholder="Search" value={query} onChange={(e) => setQuery(e.target.value)} />\n      <ul>\n        {visible.map((n) => <li key={n}>{n}</li>)}\n      </ul>\n      {visible.length === 0 && <p>No results</p>}\n    </div>\n  );\n}\n`,
+    check: {
+      rules: [
+        { match: String.raw`<input[^>]*value\s*=\s*\{\s*\w+\s*\}[^>]*onChange|<input[^>]*onChange[^>]*value\s*=\s*\{\s*\w+\s*\}`, message: "A controlled input with value and onChange" },
+        { match: String.raw`\.filter\(`, message: "Filters the names with filter(...)" },
+        { match: String.raw`\.filter\([\s\S]*toLowerCase\(\)[\s\S]*\.includes\(|\.filter\([\s\S]*\.includes\([\s\S]*toLowerCase\(\)`, message: "Compares ignoring case with toLowerCase() and includes()" },
+        { match: String.raw`\.map\([\s\S]*?<li\s[^>]*key\s*=`, message: "Renders the results with map and a key" },
+        { match: String.raw`<p[^>]*>\s*No results`, flags: "i", message: "Shows \"No results\" when nothing matches" },
+      ],
+    },
+  },
+  {
+    title: "Card with children",
+    brief: "Write a reusable Card component that takes a title prop and wraps whatever is placed inside it (children).",
+    steps: [
+      "Card receives { title, children } (or props.title / props.children)",
+      "It renders a div with className=\"card\", an h2 showing the title, and {children}",
+      "App uses <Card title=\"...\"> ... </Card> at least twice with different content",
+    ],
+    level: "intermediate",
+    editor: "jsx",
+    starter: `function Card() {\n  return <div>Card</div>;\n}\n\nexport default function App() {\n  return <Card />;\n}\n`,
+    solution: `function Card({ title, children }) {\n  return (\n    <div className="card">\n      <h2>{title}</h2>\n      {children}\n    </div>\n  );\n}\n\nexport default function App() {\n  return (\n    <div>\n      <Card title="HTML">\n        <p>Structure of the page.</p>\n      </Card>\n      <Card title="CSS">\n        <p>Style of the page.</p>\n      </Card>\n    </div>\n  );\n}\n`,
+    check: {
+      rules: [
+        { match: String.raw`Card\s*(=\s*)?\(\s*(\{[^}]*\bchildren\b[^}]*\}|props)\s*\)`, message: "Card receives children as a prop" },
+        { match: String.raw`className\s*=\s*["']card["']`, message: "Card renders a div with className=\"card\"" },
+        { match: String.raw`<h2[^>]*>\s*\{\s*(props\.)?title\s*\}`, message: "An h2 shows the title" },
+        { match: String.raw`\{\s*(props\.)?children\s*\}`, message: "Card renders {children}" },
+        { match: String.raw`<Card\s+title\s*=[^>]*>[\s\S]*?</Card>[\s\S]*<Card\s+title\s*=[^>]*>[\s\S]*?</Card>`, message: "App uses <Card title=...>...</Card> at least twice" },
+      ],
+    },
+  },
+  {
+    title: "Fetch users on load",
+    brief: "Load a list of users from an API once when the component mounts, showing Loading... until they arrive.",
+    steps: [
+      "State for users ([]) and loading (true)",
+      "useEffect with an empty dependency array [] that calls fetch(\"https://jsonplaceholder.typicode.com/users\")",
+      "Convert with res.json(), then save the users and set loading to false",
+      "While loading, render Loading...; otherwise map users to li elements with key={user.id}",
+    ],
+    level: "advanced",
+    editor: "jsx",
+    starter: `import { useState, useEffect } from "react";\n\nexport default function UserList() {\n  const [users, setUsers] = useState([]);\n  // Load the users here\n  return (\n    <ul>\n      <li>No users yet</li>\n    </ul>\n  );\n}\n`,
+    solution: `import { useState, useEffect } from "react";\n\nexport default function UserList() {\n  const [users, setUsers] = useState([]);\n  const [loading, setLoading] = useState(true);\n\n  useEffect(() => {\n    fetch("https://jsonplaceholder.typicode.com/users")\n      .then((res) => res.json())\n      .then((data) => {\n        setUsers(data);\n        setLoading(false);\n      });\n  }, []);\n\n  if (loading) return <p>Loading...</p>;\n\n  return (\n    <ul>\n      {users.map((user) => (\n        <li key={user.id}>{user.name}</li>\n      ))}\n    </ul>\n  );\n}\n`,
+    check: {
+      rules: [
+        { match: String.raw`useState\(\s*true\s*\)`, message: "A loading state that starts as true" },
+        { match: String.raw`useEffect\([\s\S]*fetch\(\s*["']https://jsonplaceholder\.typicode\.com/users["']`, message: "useEffect fetches the users URL" },
+        { match: String.raw`\.json\(\)`, message: "Converts the response with res.json()" },
+        { match: String.raw`useEffect\([\s\S]*\}\s*,\s*\[\s*\]\s*\)`, message: "useEffect has an empty dependency array []" },
+        { match: String.raw`set\w+\(\s*false\s*\)`, message: "Sets loading to false when the data arrives" },
+        { match: String.raw`Loading`, message: "Shows Loading... while waiting" },
+        { match: String.raw`\.map\([\s\S]*?key\s*=\s*\{\s*\w+\.id\s*\}`, message: "Maps users to items with key={user.id}" },
+      ],
+    },
+  },
+  {
+    title: "Sign-in form with errors",
+    brief: "Build a small sign-in form that checks the email on submit and shows an error message instead of submitting when it is invalid.",
+    steps: [
+      "A form with onSubmit={handleSubmit}; handleSubmit calls e.preventDefault()",
+      "A controlled email input (value + onChange)",
+      "If the email does not include \"@\", set an error state; otherwise clear it",
+      "Render the error only when there is one: {error && <p className=\"error\">{error}</p>}",
+    ],
+    level: "advanced",
+    editor: "jsx",
+    starter: `import { useState } from "react";\n\nexport default function SignIn() {\n  const [email, setEmail] = useState("");\n\n  return (\n    <form>\n      <input type="email" />\n      <button type="submit">Sign in</button>\n    </form>\n  );\n}\n`,
+    solution: `import { useState } from "react";\n\nexport default function SignIn() {\n  const [email, setEmail] = useState("");\n  const [error, setError] = useState("");\n\n  function handleSubmit(e) {\n    e.preventDefault();\n    if (!email.includes("@")) {\n      setError("Please enter a valid email.");\n      return;\n    }\n    setError("");\n    alert("Welcome, " + email);\n  }\n\n  return (\n    <form onSubmit={handleSubmit}>\n      <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />\n      <button type="submit">Sign in</button>\n      {error && <p className="error">{error}</p>}\n    </form>\n  );\n}\n`,
+    check: {
+      rules: [
+        { match: String.raw`<form[^>]*onSubmit\s*=\s*\{`, message: "The form has an onSubmit handler" },
+        { match: String.raw`\w+\.preventDefault\(\)`, message: "The handler calls e.preventDefault()" },
+        { match: String.raw`<input[^>]*value\s*=\s*\{\s*\w+\s*\}[^>]*onChange|<input[^>]*onChange[^>]*value\s*=\s*\{\s*\w+\s*\}`, message: "A controlled email input" },
+        { match: String.raw`\.includes\(\s*["']@["']\s*\)|\.indexOf\(\s*["']@["']\s*\)`, message: "Checks that the email contains @" },
+        { match: String.raw`\{\s*\w+\s*&&\s*<p[^>]*>\s*\{\s*\w+\s*\}`, message: "Renders the error only when there is one" },
+      ],
+    },
+  },
+] satisfies ExerciseSeed[];

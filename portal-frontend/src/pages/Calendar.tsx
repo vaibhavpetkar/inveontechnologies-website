@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useSearch } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { CalendarDays, ChevronLeft, ChevronRight, ClipboardCheck, Plus, Video } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, ClipboardCheck, GraduationCap, Plus, Video } from "lucide-react";
 import { DashboardShell } from "../components/DashboardShell";
 import { EventDialog } from "../components/calendar/EventDialog";
 import { EventDrawer } from "../components/calendar/EventDrawer";
@@ -26,6 +26,7 @@ import {
   type Colleague,
   type Meeting,
   type ProviderInfo,
+  isMarker,
   isMeeting,
 } from "../lib/calendar";
 
@@ -52,6 +53,7 @@ function rangeFor(view: View, anchor: Date): [Date, Date] {
 
 function itemIcon(item: CalendarItem, size = 13) {
   if (item.kind === "task_due") return <ClipboardCheck size={size} />;
+  if (item.kind === "exam") return <GraduationCap size={size} />;
   if (item.joinUrl) return <Video size={size} />;
   return <CalendarDays size={size} />;
 }
@@ -132,7 +134,7 @@ export default function Calendar() {
   };
 
   const title = view === "month" ? monthFmt.format(anchor) : view === "week" ? `${shortDayFmt.format(from)} – ${shortDayFmt.format(addDays(to, -1))} ${addDays(to, -1).getFullYear()}` : `From ${dayFmt.format(from)}`;
-  const upcomingToday = (items ?? []).filter((i) => i.kind !== "task_due" && sameDay(new Date(i.startsAt), new Date()) && new Date(i.endsAt) > new Date());
+  const upcomingToday = (items ?? []).filter((i) => !isMarker(i) && sameDay(new Date(i.startsAt), new Date()) && new Date(i.endsAt) > new Date());
 
   const openNew = (day?: Date) => canSchedule && setEditing({ meeting: null, day });
 
@@ -286,8 +288,8 @@ function WeekView({ start, items, onPick, onNew }: { start: Date; items: Calenda
     const t = setInterval(() => setNow(new Date()), 60_000);
     return () => clearInterval(t);
   }, []);
-  const timed = items.filter((i) => i.kind !== "task_due");
-  const due = items.filter((i) => i.kind === "task_due");
+  const timed = items.filter((i) => !isMarker(i));
+  const due = items.filter(isMarker);
 
   return (
     <div className="cal-week">
@@ -398,7 +400,7 @@ function AgendaView({ items, onPick, onNew }: { items: CalendarItem[]; onPick: (
                 <div
                   role="button"
                   tabIndex={0}
-                  className={`agenda-row kind-${it.kind}${isLive(it) ? " live" : ""}${it.kind !== "task_due" && new Date(it.endsAt) < new Date() ? " past" : ""}`}
+                  className={`agenda-row kind-${it.kind}${isLive(it) ? " live" : ""}${!isMarker(it) && new Date(it.endsAt) < new Date() ? " past" : ""}`}
                   onClick={() => onPick(it)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
@@ -414,10 +416,10 @@ function AgendaView({ items, onPick, onNew }: { items: CalendarItem[]; onPick: (
                     <span className="muted-small">
                       {KIND_META[it.kind].label}
                       {isMeeting(it) && it.attendees.length > 1 ? ` · ${it.attendees.length} people` : ""}
-                      {it.kind !== "task_due" ? ` · ${durationLabel(it)}` : ""}
+                      {!isMarker(it) ? ` · ${durationLabel(it)}` : ""}
                     </span>
                   </span>
-                  {it.kind !== "task_due" && it.joinUrl && new Date(it.endsAt) > new Date() && (
+                  {!isMarker(it) && it.joinUrl && new Date(it.endsAt) > new Date() && (
                     <a className={`btn btn-sm${isLive(it) ? "" : " btn-secondary"}`} href={it.joinUrl} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
                       <Video size={15} /> Join
                     </a>

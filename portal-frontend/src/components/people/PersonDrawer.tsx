@@ -9,6 +9,7 @@ import { useDirectory } from "../../lib/useDirectory";
 import { Avatar } from "../Avatar";
 import { useToast } from "../Toast";
 import { PersonPayCard } from "../payroll/PersonPayCard";
+import { AppointmentLetterCard } from "./AppointmentLetterCard";
 
 interface Props {
   personId: string;
@@ -208,6 +209,7 @@ export function PersonDrawer({ personId, canManage, onClose, onChanged }: Props)
                 </form>
               )}
             </div>
+            {canManage && <AppointmentLetterCard employeeId={person.id} />}
             {canManage && <PersonPayCard employeeId={person.id} />}
           </div>
         )}

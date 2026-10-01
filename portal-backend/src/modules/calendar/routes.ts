@@ -8,6 +8,7 @@ import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import type { Env } from "../shared/env.js";
 import { enqueueJob, every } from "../shared/jobs.js";
+import { sendExamWindowReminders } from "../assessments/exams.js";
 import { formatWhen } from "../shared/format.js";
 import { notify } from "../notifications/service.js";
 import { buildIcs } from "./ics.js";
@@ -189,6 +190,9 @@ export function registerCalendarSchedules(db: Database) {
   every("meeting-reminders", 60 * 1000, async () => {
     await sendMeetingReminders(db);
   });
+  every("exam-window-reminders", 5 * 60 * 1000, async () => {
+    await sendExamWindowReminders(db);
+  });
 }
 
 export function calendarRouter(db: Database, env: Env, providers: Map<ProviderName, MeetingProvider> = meetingProviders(env)) {
@@ -284,7 +288,41 @@ export function calendarRouter(db: Database, env: Env, providers: Map<ProviderNa
       link: `/tasks/${t.id}`,
     }));
 
-    const events = [...meetings, ...interviews, ...due].sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
+    // Exam windows: when an exam opens and closes. Candidates see the exams
+    // they're invited to; HR and admins see every active exam's window.
+    const staffView = ["hr", "admin", "super_admin"].includes(req.user!.role);
+    const examRows = await db.execute<{ id: string; title: string; language: string | null; opens_at: string | null; closes_at: string | null; opportunity_id: string; opportunity: string; application_id: string | null }>(sql`
+      SELECT DISTINCT ON (x.id) x.id, x.title, x.language, x.opens_at, x.closes_at, o.id AS opportunity_id, o.title AS opportunity, a.id AS application_id
+      FROM assessments x
+      JOIN opportunities o ON o.id = x.opportunity_id
+      LEFT JOIN applications a ON a.opportunity_id = o.id AND a.user_id = ${me} AND a.status = 'assessment_invited'
+      WHERE x.is_active = true
+        AND (x.opens_at IS NOT NULL OR x.closes_at IS NOT NULL)
+        AND (a.id IS NOT NULL OR ${staffView})
+        AND ((x.opens_at >= ${from.toISOString()} AND x.opens_at < ${to.toISOString()})
+          OR (x.closes_at >= ${from.toISOString()} AND x.closes_at < ${to.toISOString()}))
+      ORDER BY x.id, a.id
+    `);
+    const exams = examRows.rows.flatMap((x) => {
+      const name = x.language ? `${x.language} exam` : x.title;
+      const link = x.application_id ? `/assessments/${x.application_id}` : `/opportunities/${x.opportunity_id}`;
+      const marks: { at: string; edge: "opens" | "closes" }[] = [];
+      if (x.opens_at) marks.push({ at: x.opens_at, edge: "opens" });
+      if (x.closes_at) marks.push({ at: x.closes_at, edge: "closes" });
+      return marks
+        .filter((m) => new Date(m.at) >= from && new Date(m.at) < to)
+        .map((m) => ({
+          id: `exam:${x.id}:${m.edge}`,
+          kind: "exam" as const,
+          edge: m.edge,
+          title: `${name} ${m.edge}: ${x.opportunity}`,
+          startsAt: new Date(m.at),
+          endsAt: new Date(m.at),
+          link,
+        }));
+    });
+
+    const events = [...meetings, ...interviews, ...due, ...exams].sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime());
     res.json({ events });
   });
 

@@ -25,6 +25,7 @@ export function NotificationBell() {
   const toast = useToast();
   const [open, setOpen] = useState(false);
   const [emailOn, setEmailOn] = useState<boolean | null>(null);
+  const [digestOn, setDigestOn] = useState<boolean | null>(null);
   const [, navigate] = useLocation();
   const wrapRef = useRef<HTMLDivElement>(null);
   const bell = useAnimationControls();
@@ -53,8 +54,11 @@ export function NotificationBell() {
 
   useEffect(() => {
     if (!open || emailOn !== null || !accessToken) return;
-    apiFetch<{ preferences: { emailEnabled: boolean } }>("/api/v1/notification-preferences", { accessToken })
-      .then((r) => setEmailOn(r.preferences.emailEnabled))
+    apiFetch<{ preferences: { emailEnabled: boolean; digestEnabled: boolean } }>("/api/v1/notification-preferences", { accessToken })
+      .then((r) => {
+        setEmailOn(r.preferences.emailEnabled);
+        setDigestOn(r.preferences.digestEnabled);
+      })
       .catch(() => {});
   }, [open, emailOn, accessToken]);
 
@@ -66,6 +70,18 @@ export function NotificationBell() {
       toast(next ? "You'll get emails for important updates" : "Emails turned off");
     } catch {
       setEmailOn(!next);
+      toast("Couldn't save that setting.", "error");
+    }
+  }
+
+  async function toggleDigest() {
+    const next = !digestOn;
+    setDigestOn(next);
+    try {
+      await apiFetch("/api/v1/notification-preferences", { method: "PUT", body: { digestEnabled: next }, accessToken });
+      toast(next ? "You'll get a summary of your day each morning" : "Morning summary turned off");
+    } catch {
+      setDigestOn(!next);
       toast("Couldn't save that setting.", "error");
     }
   }
@@ -161,9 +177,14 @@ export function NotificationBell() {
               )}
             </div>
 
-            <label className="notif-foot toggle">
-              <input type="checkbox" checked={!!emailOn} disabled={emailOn === null} onChange={toggleEmail} /> Also email me important updates
-            </label>
+            <div className="notif-foot">
+              <label className="toggle">
+                <input type="checkbox" checked={!!emailOn} disabled={emailOn === null} onChange={toggleEmail} /> Also email me important updates
+              </label>
+              <label className="toggle" title={emailOn ? undefined : "Turn on emails first"}>
+                <input type="checkbox" checked={!!emailOn && !!digestOn} disabled={!emailOn || digestOn === null} onChange={toggleDigest} /> Morning summary of my day (8 AM)
+              </label>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>

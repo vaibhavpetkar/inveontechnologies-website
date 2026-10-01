@@ -3,7 +3,9 @@ import { Link, Redirect, useLocation, useRoute } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, Award, CheckCircle2, Circle, ExternalLink, ListTree, PartyPopper, X } from "lucide-react";
 import { DashboardShell } from "../components/DashboardShell";
+import { AssignmentSheet } from "../components/lms/AssignmentSheet";
 import { QuizPlayer } from "../components/lms/QuizPlayer";
+import { Reading } from "../components/lms/Reading";
 import { useToast } from "../components/Toast";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/api";
@@ -20,6 +22,8 @@ export default function LessonPlayer() {
   const [busy, setBusy] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [celebrate, setCelebrate] = useState(false);
+  // Assignment lessons with code questions complete by uploading answers, not by a button.
+  const [sheetFor, setSheetFor] = useState<Record<string, boolean>>({});
 
   const byLesson = new Map(progress.map((p) => [p.lessonId, p]));
   const firstOpen = lessons.find((l) => byLesson.get(l.id)?.status !== "completed") ?? lessons[0];
@@ -134,7 +138,20 @@ export default function LessonPlayer() {
                 <a className="resource-link" href={embed.src} target="_blank" rel="noreferrer"><ExternalLink size={16} /> Open the {lesson.contentType === "video" ? "video" : "material"}</a>
               )}
 
-              {lesson.contentText && <div className="player-text">{lesson.contentText.split(/\n{2,}/).map((para, i) => <p key={i}>{para}</p>)}</div>}
+              {lesson.contentText && <Reading text={lesson.contentText} />}
+
+              {lesson.contentType === "assignment" && (
+                <AssignmentSheet
+                  lessonId={lesson.id}
+                  onLoaded={(has) => setSheetFor((m) => ({ ...m, [lesson.id]: has }))}
+                  onSubmitted={async (r) => {
+                    const wasCompleted = enrollment?.status === "completed";
+                    await loadProgress();
+                    if (r.courseCompleted && !wasCompleted) finished(true);
+                    else if (r.assignment.completed && r.submission.status !== "failed" && r.assignment.done === r.assignment.total) toast("Assignment complete: every question is done");
+                  }}
+                />
+              )}
 
               {lesson.contentType === "test" ? (
                 <QuizPlayer
@@ -147,7 +164,7 @@ export default function LessonPlayer() {
                   }}
                 />
               ) : (
-                !isDone && (
+                !isDone && !(lesson.contentType === "assignment" && sheetFor[lesson.id] !== false) && (
                   <motion.button className="btn player-complete" disabled={busy} onClick={markComplete} whileTap={{ scale: 0.96 }}>
                     <CheckCircle2 size={18} /> {lesson.contentType === "assignment" ? "I've done this" : "Mark as complete"}{next ? " and continue" : ""}
                   </motion.button>

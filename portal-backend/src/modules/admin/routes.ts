@@ -12,7 +12,7 @@ import type { Env } from "../shared/env.js";
 const SENSITIVE_ROLES = ["admin", "super_admin"] as const;
 
 const setFlagSchema = z.object({ key: z.string().min(1).max(200), enabled: z.boolean(), description: z.string().max(1000).optional() });
-const prefsSchema = z.object({ emailEnabled: z.boolean().optional(), inAppEnabled: z.boolean().optional() });
+const prefsSchema = z.object({ emailEnabled: z.boolean().optional(), inAppEnabled: z.boolean().optional(), digestEnabled: z.boolean().optional() });
 const bulkTransitionSchema = z.object({
   applicationIds: z.array(z.string().uuid()).min(1).max(500),
   toStatus: z.enum(["under_review", "shortlisted", "selected", "rejected"]),
@@ -50,7 +50,7 @@ export function notificationPreferencesRouter(db: Database, env: Env) {
 
   router.get("/", requireAuth(env), async (req, res) => {
     const existing = await db.query.notificationPreferences.findFirst({ where: eq(notificationPreferences.userId, req.user!.sub) });
-    res.json({ preferences: existing ?? { userId: req.user!.sub, emailEnabled: true, inAppEnabled: true } });
+    res.json({ preferences: existing ?? { userId: req.user!.sub, emailEnabled: true, inAppEnabled: true, digestEnabled: true } });
   });
 
   router.put("/", requireAuth(env), async (req, res) => {

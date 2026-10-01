@@ -29,8 +29,16 @@ const createAssessmentSchema = z.object({
   passingScorePercent: z.number().int().min(0).max(100).default(60),
   language: z.string().trim().max(60).nullable().optional(),
   maxAttempts: z.number().int().min(1).max(10).default(1),
+  opensAt: z.coerce.date().nullable().optional(),
+  closesAt: z.coerce.date().nullable().optional(),
   questions: z.array(questionSchema).min(1),
 });
+
+function assertWindow(body: { opensAt?: Date | null; closesAt?: Date | null }) {
+  if (body.opensAt && body.closesAt && body.closesAt <= body.opensAt) {
+    throw new AppError("INVALID_WINDOW", "The exam has to close after it opens", 400);
+  }
+}
 
 const updateAssessmentSchema = createAssessmentSchema.omit({ opportunityId: true }).extend({
   isActive: z.boolean().optional(),
@@ -61,6 +69,7 @@ export function assessmentsRouter(db: Database, env: Env) {
     if (!opportunity) throw new NotFoundError("Opportunity not found");
 
     assertAnswerKeys(body.questions);
+    assertWindow(body);
 
     const result = await db.transaction(async (tx) => {
       const [assessment] = await tx
@@ -73,6 +82,8 @@ export function assessmentsRouter(db: Database, env: Env) {
           passingScorePercent: body.passingScorePercent,
           language: body.language || null,
           maxAttempts: body.maxAttempts,
+          opensAt: body.opensAt ?? null,
+          closesAt: body.closesAt ?? null,
           createdBy: req.user!.sub,
         })
         .returning();
@@ -127,6 +138,10 @@ export function assessmentsRouter(db: Database, env: Env) {
     const body = updateAssessmentSchema.parse(req.body);
     const assessment = await db.query.assessments.findFirst({ where: eq(assessments.id, req.params.id) });
     if (!assessment) throw new NotFoundError("Assessment not found");
+    assertWindow({
+      opensAt: body.opensAt !== undefined ? body.opensAt : assessment.opensAt,
+      closesAt: body.closesAt !== undefined ? body.closesAt : assessment.closesAt,
+    });
 
     if (body.questions) {
       assertAnswerKeys(body.questions);
@@ -146,6 +161,8 @@ export function assessmentsRouter(db: Database, env: Env) {
           passingScorePercent: body.passingScorePercent,
           language: body.language || null,
           maxAttempts: body.maxAttempts,
+          ...(body.opensAt !== undefined ? { opensAt: body.opensAt } : {}),
+          ...(body.closesAt !== undefined ? { closesAt: body.closesAt } : {}),
           ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
           updatedAt: new Date(),
         })
