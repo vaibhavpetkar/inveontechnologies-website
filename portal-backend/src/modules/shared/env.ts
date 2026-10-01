@@ -51,6 +51,7 @@ const envSchema = z.object({
   // that has to run goes to a mentor instead. "local" runs code unsandboxed
   // on this machine and is refused in production.
   PORTAL_CODE_RUNNER: z.enum(["judge0", "local", "off"]).optional(),
+  PORTAL_AUTO_MIGRATE: z.enum(["true", "false"]).optional(),
   PORTAL_JUDGE0_URL: z.string().url().optional(),
   PORTAL_JUDGE0_KEY: z.string().optional(),
   // Optional Judge0 language id overrides, e.g. "python=92,java=91".

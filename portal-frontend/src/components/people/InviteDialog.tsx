@@ -1,12 +1,13 @@
 import { useState, type ChangeEvent, type FormEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertCircle, CheckCircle2, Download, FileSpreadsheet, Upload, UserPlus, X } from "lucide-react";
+import { AlertCircle, CheckCircle2, Download, FileSignature, FileSpreadsheet, Upload, UserPlus, X } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { apiFetch, ApiError } from "../../lib/api";
 import { displayName } from "../../lib/nav";
 import { CSV_TEMPLATE, parseCsv, rowsToInvites, type EmployeeType } from "../../lib/people";
 import { useDirectory } from "../../lib/useDirectory";
 import { useToast } from "../Toast";
+import { IssueLetterDialog } from "./IssueLetterDialog";
 
 interface Props {
   onClose: () => void;
@@ -25,7 +26,8 @@ type Mode = "one" | "sheet";
 
 /** Invite one person, or many from a spreadsheet (CSV), with a dry-run preview. */
 export function InviteDialog({ onClose, onInvited }: Props) {
-  const { accessToken } = useAuth();
+  const { user, accessToken } = useAuth();
+  const canIssueLetter = !!user && ["admin", "super_admin"].includes(user.role);
   const toast = useToast();
   const { people: staff } = useDirectory();
   const [mode, setMode] = useState<Mode>("one");
@@ -39,6 +41,9 @@ export function InviteDialog({ onClose, onInvited }: Props) {
   const [unknownHeaders, setUnknownHeaders] = useState<string[]>([]);
   const [preview, setPreview] = useState<RowResult[] | null>(null);
   const [done, setDone] = useState<RowResult[] | null>(null);
+  // After a one-person invite: offer the appointment letter, which is emailed with the company policies attached.
+  const [invited, setInvited] = useState<{ employeeId: string; name: string } | null>(null);
+  const [issuing, setIssuing] = useState(false);
 
   const managers = staff.filter((s) => ["manager", "hr", "admin", "super_admin"].includes(s.role));
 
@@ -50,10 +55,11 @@ export function InviteDialog({ onClose, onInvited }: Props) {
       const body: Record<string, unknown> = { email: form.email, employeeType: form.employeeType, joiningDate: form.joiningDate };
       for (const k of ["fullName", "role", "departmentName", "designationTitle", "managerEmail"] as const) if (form[k].trim()) body[k] = form[k].trim();
       if (form.durationMonths) body.durationMonths = Number(form.durationMonths);
-      await apiFetch("/api/v1/people/invite", { method: "POST", body, accessToken });
+      const r = await apiFetch<{ employeeId: string }>("/api/v1/people/invite", { method: "POST", body, accessToken });
       toast(`Invited ${form.fullName.trim() || form.email}. A welcome email is on its way.`);
       onInvited();
-      onClose();
+      setInvited({ employeeId: r.employeeId, name: form.fullName.trim() || form.email });
+      setBusy(false);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't send the invite.");
       setBusy(false);
@@ -116,6 +122,20 @@ export function InviteDialog({ onClose, onInvited }: Props) {
   const results = done ?? preview;
   const okCount = results?.filter((r) => r.status !== "error").length ?? 0;
 
+  // The letter dialog replaces this one (rendered beside it, so its clicks don't reach this scrim).
+  if (issuing && invited) {
+    return (
+      <IssueLetterDialog
+        employeeId={invited.employeeId}
+        onClose={onClose}
+        onIssued={(to) => {
+          toast(to ? `Letter issued. Emailing it with the policies to ${to}.` : "Letter issued");
+          onClose();
+        }}
+      />
+    );
+  }
+
   return (
     <motion.div className="modal-scrim" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={onClose}>
       <motion.div
@@ -139,7 +159,7 @@ export function InviteDialog({ onClose, onInvited }: Props) {
           Each person gets an employee record, the standard onboarding checklist, and a welcome email with a link to set their password.
         </p>
 
-        <div className="segmented" role="tablist" style={{ marginBottom: "1rem" }}>
+        {!invited && <div className="segmented" role="tablist" style={{ marginBottom: "1rem" }}>
           {(
             [
               ["one", "One person", UserPlus],
@@ -151,12 +171,33 @@ export function InviteDialog({ onClose, onInvited }: Props) {
               <span><Icon size={15} style={{ verticalAlign: "-2px", marginRight: 6 }} />{label}</span>
             </button>
           ))}
-        </div>
+        </div>}
 
         {error && <div className="error-banner">{error}</div>}
 
         <AnimatePresence mode="wait">
-          {mode === "one" ? (
+          {invited ? (
+            <motion.div key="invited" className="invite-next" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+              <p><CheckCircle2 size={18} className="ok" /> <strong>{invited.name}</strong> is invited. The welcome email with their sign-in link is on its way.</p>
+              <div className="invite-next-card">
+                <FileSignature size={20} />
+                <div>
+                  <strong>Next: the appointment letter</strong>
+                  <p className="muted-small">
+                    {canIssueLetter
+                      ? "Issue it now and it is emailed as a PDF with the company policies attached. You can also do it later from their profile under People."
+                      : "An admin issues it from their profile under People. It is emailed as a PDF with the company policies attached."}
+                  </p>
+                </div>
+              </div>
+              <div className="modal-actions">
+                <button type="button" className="btn btn-secondary" onClick={onClose}>{canIssueLetter ? "Later" : "Done"}</button>
+                {canIssueLetter && (
+                  <button type="button" className="btn" onClick={() => setIssuing(true)}><FileSignature size={16} /> Issue appointment letter</button>
+                )}
+              </div>
+            </motion.div>
+          ) : mode === "one" ? (
             <motion.form key="one" onSubmit={inviteOne} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }} transition={{ duration: 0.15 }}>
               <div className="form-grid">
                 <div className="field"><label htmlFor="i-email">Work email</label><input id="i-email" type="email" required autoFocus value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="name@example.com" /></div>

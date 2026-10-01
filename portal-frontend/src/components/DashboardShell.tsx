@@ -19,6 +19,23 @@ export function DashboardShell({ children, wide = false }: { children: ReactNode
 
   useEffect(() => setDrawerOpen(false), [location]);
 
+  // Escape closes whichever dialog or drawer is on top, the same as clicking outside it. Components
+  // that handle Escape themselves call preventDefault, so this waits until they have had their turn.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setTimeout(() => {
+        if (e.defaultPrevented) return;
+        const scrims = document.querySelectorAll<HTMLElement>(".modal-scrim, .drawer-scrim");
+        const top = scrims[scrims.length - 1];
+        if (!top) return;
+        for (const type of ["mousedown", "click"]) top.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true }));
+      });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // Clearing the user is enough: every page using this shell sits behind
   // ProtectedRoute, which redirects to /login once the user is gone.
   async function handleLogout() {

@@ -8,6 +8,7 @@ import { loadEnv } from "./modules/shared/env.js";
 import { logger } from "./modules/shared/logger.js";
 import { errorHandler } from "./modules/shared/errors.js";
 import { createDb } from "./modules/shared/db/client.js";
+import { runMigrations } from "./modules/shared/run-migrations.js";
 import { authRouter } from "./modules/auth/routes.js";
 import { opportunitiesRouter } from "./modules/opportunities/routes.js";
 import { publicOpeningsRouter } from "./modules/opportunities/public-routes.js";
@@ -184,6 +185,18 @@ app.use("/api/v1/holidays", holidaysRouter(db, env));
 // etc.
 
 app.use(errorHandler);
+
+// New code often needs new columns, so a deploy that skipped `npm run
+// db:migrate` would fail every query that touches them. Apply pending
+// migrations before taking traffic (set PORTAL_AUTO_MIGRATE=false to opt out).
+if (env.PORTAL_AUTO_MIGRATE !== "false") {
+  try {
+    await runMigrations(db);
+  } catch (err) {
+    logger.fatal({ err }, "Migrations failed; not starting");
+    process.exit(1);
+  }
+}
 
 app.listen(env.PORTAL_PORT, () => {
   logger.info({ port: env.PORTAL_PORT, env: env.NODE_ENV }, "portal-backend listening");

@@ -19,7 +19,7 @@ export default function CourseBuilder() {
   const courseId = params?.id;
   const { user, accessToken } = useAuth();
   const toast = useToast();
-  const { course, modules, lessons, reload } = useCourse(courseId);
+  const { course, modules, lessons, reload } = useCourse(courseId, { withProgress: false });
   const [templates, setTemplates] = useState<Template[]>([]);
   const [settings, setSettings] = useState({ title: "", description: "", category: "", price: "", certificateTemplateId: "" });
   const [editing, setEditing] = useState<{ lesson: Lesson | null; moduleId: string } | null>(null);

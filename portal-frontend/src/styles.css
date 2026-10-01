@@ -2324,3 +2324,11 @@ a.outline-lesson:hover { background: var(--surface); }
   .kbd-hint { display: none; }
   .assignment-body { padding-left: 0.9rem; }
 }
+
+/* Invite dialog: the step after a one-person invite */
+.invite-next { display: grid; gap: 0.8rem; }
+.invite-next > p { display: flex; align-items: center; gap: 0.45rem; margin: 0; }
+.invite-next > p .ok { color: #16a34a; flex: none; }
+.invite-next-card { display: flex; gap: 0.75rem; align-items: flex-start; padding: 0.85rem 1rem; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); }
+.invite-next-card svg { color: var(--primary); flex: none; margin-top: 0.1rem; }
+.invite-next-card p { margin: 0.2rem 0 0; }

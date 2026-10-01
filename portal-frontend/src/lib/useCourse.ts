@@ -3,8 +3,8 @@ import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "./api";
 import { orderedLessons, type Course, type Enrollment, type Lesson, type Module, type Progress } from "./lms";
 
-/** A course with its outline and the caller's enrollment/progress. */
-export function useCourse(courseId: string | undefined) {
+/** A course with its outline and the caller's enrollment/progress (skipped for authors editing it). */
+export function useCourse(courseId: string | undefined, { withProgress = true }: { withProgress?: boolean } = {}) {
   const { accessToken } = useAuth();
   const [course, setCourse] = useState<Course | null>(null);
   const [modules, setModules] = useState<Module[]>([]);
@@ -16,7 +16,7 @@ export function useCourse(courseId: string | undefined) {
   const [loaded, setLoaded] = useState(false);
 
   const loadProgress = useCallback(async () => {
-    if (!courseId) return;
+    if (!courseId || !withProgress) return;
     try {
       const r = await apiFetch<{ enrollment: Enrollment; progress: Progress[] }>(`/api/v1/courses/${courseId}/progress`, { accessToken });
       setEnrollment(r.enrollment);
@@ -26,7 +26,7 @@ export function useCourse(courseId: string | undefined) {
       // 404 = not enrolled yet, which is fine.
       if (err instanceof ApiError && err.code === "PAYMENT_OVERDUE") setOverdue(true);
     }
-  }, [courseId, accessToken]);
+  }, [courseId, accessToken, withProgress]);
 
   const loadCourse = useCallback(async () => {
     if (!courseId) return;

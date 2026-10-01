@@ -182,7 +182,7 @@ export function ThreadView({ kind, id, people, inboxTitle, onBack, onChanged, on
       if (e.key === "ArrowDown") { e.preventDefault(); setMentionIndex((i) => (i + 1) % suggestions.length); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); setMentionIndex((i) => (i - 1 + suggestions.length) % suggestions.length); return; }
       if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickMention(suggestions[mentionIndex]); return; }
-      if (e.key === "Escape") { setMentionQuery(null); return; }
+      if (e.key === "Escape") { e.preventDefault(); setMentionQuery(null); return; }
     }
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();

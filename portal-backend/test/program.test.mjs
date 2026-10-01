@@ -52,12 +52,13 @@ after(async () => {
   if (uploadDir) rmSync(uploadDir, { recursive: true, force: true });
 });
 
-async function passedHr({ programFee = 4999, trialHours } = {}) {
+async function passedHr({ programFee = 4999, trialHours, skipReview = false, beforePass } = {}) {
   const opp = (await api.call("POST", "/opportunities", { token: hr.token, body: { title: `Program ${randomUUID().slice(0, 6)}`, description: "Paid internship program", programFee, ...(trialHours !== undefined ? { trialHours } : {}) } })).json.opportunity;
   await api.call("POST", `/opportunities/${opp.id}/publish`, { token: admin.token });
   const candidate = await api.createUser("candidate");
   const application = (await api.call("POST", `/applications/opportunities/${opp.id}/apply`, { token: candidate.token, body: {} })).json.application;
-  await api.call("POST", `/applications/${application.id}/transition`, { token: hr.token, body: { toStatus: "under_review" } });
+  if (!skipReview) await api.call("POST", `/applications/${application.id}/transition`, { token: hr.token, body: { toStatus: "under_review" } });
+  await beforePass?.(application);
   const interview = (await api.call("POST", `/applications/${application.id}/interviews`, { token: hr.token, body: { interviewerId: hr.id, scheduledAt: new Date(Date.now() + 3600_000).toISOString() } })).json.interview;
   const fb = await api.call("POST", `/interviews/${interview.id}/feedback`, { token: hr.token, body: { feedback: "Good communication", decision: "pass" } });
   assert.equal(fb.status, 200, JSON.stringify(fb.json));
@@ -234,6 +235,33 @@ describe("HR round to program", () => {
     assert.equal((await api.call("POST", `/documents/${aadhaar.id}/upload`, { token: candidate.token, body: { fileUrl: file.url } })).status, 200);
     assert.equal((await api.call("POST", `/documents/${aadhaar.id}/verify`, { token: hr.token, body: { approve: true } })).json.documentRequest.status, "verified");
     assert.equal((await api.call("POST", `/documents/${aadhaar.id}/verify`, { token: candidate.token, body: { approve: true } })).status, 403);
+  });
+
+  test("an HR round booked before review still moves the application on, and HR's own Aadhaar request isn't repeated", async () => {
+    const beforePass = async (application) => {
+      const asked = await api.call("POST", `/applications/${application.id}/documents`, { token: hr.token, body: { documentName: "Aadhar card", note: "Both sides please" } });
+      assert.equal(asked.status, 201, JSON.stringify(asked.json));
+    };
+    const { candidate, application, enrollment } = await passedHr({ programFee: null, skipReview: true, beforePass });
+    assert.equal(await status(application.id), "shortlisted", "submitted goes through review to shortlisted");
+
+    assert.equal((await api.call("PUT", `/program/enrollments/${enrollment.id}/joining`, { token: candidate.token, body: joining })).status, 200);
+    const docs = (await journey(candidate, application.id)).json.documents;
+    assert.deepEqual(docs.map((d) => d.documentName).sort(), ["Aadhaar card", "PAN card", "Passing certificate (Graduation)"]);
+    const aadhaar = docs.find((d) => d.documentType === "aadhaar");
+    assert.equal(aadhaar.note, "Both sides please", "HR's request is the one kept");
+    assert.ok(aadhaar.requestedBy, "and it stays HR's");
+
+    const hired = await api.call("POST", `/program/enrollments/${enrollment.id}/hire`, { token: hr.token, body: { joiningDate: "2026-11-02" } });
+    assert.equal(hired.status, 201, JSON.stringify(hired.json));
+    assert.equal(await status(application.id), "selected");
+  });
+
+  test("hiring repairs an application an earlier HR pass left unreviewed", async () => {
+    const { application, enrollment } = await passedHr({ programFee: null });
+    await api.pool.query("UPDATE applications SET status = 'submitted' WHERE id = $1", [application.id]);
+    assert.equal((await api.call("POST", `/program/enrollments/${enrollment.id}/hire`, { token: hr.token, body: { joiningDate: "2026-11-02" } })).status, 201);
+    assert.equal(await status(application.id), "selected");
   });
 
   test("staff can mark paid or waive; candidates can't; the applicants list shows it all", async () => {
