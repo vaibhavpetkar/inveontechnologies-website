@@ -28,11 +28,19 @@ export interface ApplicantRow {
 type Filter = "all" | "exam" | "hr" | "program" | "closed";
 const FILTERS: { key: Filter; label: string; match: (a: ApplicantRow) => boolean }[] = [
   { key: "all", label: "All", match: () => true },
-  { key: "exam", label: "Exam", match: (a) => ["submitted", "under_review", "assessment_invited"].includes(a.status) },
-  { key: "hr", label: "HR round", match: (a) => a.status === "assessment_completed" || (!a.enrollmentId && !["rejected", "withdrawn"].includes(a.status) && !!a.interview) },
-  { key: "program", label: "In program", match: (a) => !!a.enrollmentId },
-  { key: "closed", label: "Closed", match: (a) => ["rejected", "withdrawn"].includes(a.status) },
+  { key: "exam", label: "Exam", match: (a) => stage(a) === "exam" },
+  { key: "hr", label: "HR round", match: (a) => stage(a) === "hr" },
+  { key: "program", label: "In program", match: (a) => stage(a) === "program" },
+  { key: "closed", label: "Closed", match: (a) => stage(a) === "closed" },
 ];
+
+/** The one stage an open application is in, so each applicant shows under a single tab. */
+function stage(a: ApplicantRow): "exam" | "hr" | "program" | "closed" {
+  if (["rejected", "withdrawn"].includes(a.status)) return "closed";
+  if (a.enrollmentId) return "program";
+  if (a.interview || (a.status === "assessment_completed" && a.exam?.passed !== false)) return "hr";
+  return "exam";
+}
 
 /** Next thing staff need to do for an applicant, in a few words. */
 function nextUp(a: ApplicantRow): { text: string; tone: "warn" | "good" | "muted" } {

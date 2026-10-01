@@ -36,6 +36,22 @@ export async function expireTrialIfDue(db: Database, enrollment: ProgramEnrollme
 }
 
 /**
+ * Moves an open application to shortlisted after the HR round. Openings without an exam can go
+ * straight to the HR round while the application is still "submitted", so that walks through review first.
+ */
+export async function moveToShortlisted(db: Database, applicationId: string, from: ApplicationStatus, actorUserId: string) {
+  if (from === "submitted") {
+    await applyApplicationTransition(db, { applicationId, from, to: "under_review", actorUserId, note: "HR round held" });
+    from = "under_review";
+  }
+  if (from === "under_review" || from === "assessment_completed") {
+    await applyApplicationTransition(db, { applicationId, from, to: "shortlisted", actorUserId, note: "Passed the HR round" });
+    from = "shortlisted";
+  }
+  return from;
+}
+
+/**
  * The HR round was passed: the application is shortlisted and the
  * candidate is asked to pay the program fee or start a free trial (or,
  * when the opening has no fee, goes straight to the joining form).
@@ -47,10 +63,7 @@ export async function onHrRoundPassed(db: Database, applicationId: string, actor
   const opportunity = await db.query.opportunities.findFirst({ where: eq(opportunities.id, application.opportunityId) });
   if (!opportunity) return null;
 
-  const from = application.status as ApplicationStatus;
-  if (from === "under_review" || from === "assessment_completed") {
-    await applyApplicationTransition(db, { applicationId, from, to: "shortlisted", actorUserId, note: "Passed the HR round" });
-  }
+  await moveToShortlisted(db, applicationId, application.status as ApplicationStatus, actorUserId);
 
   const fee = Number(opportunity.programFee ?? 0);
   const [created] = await db

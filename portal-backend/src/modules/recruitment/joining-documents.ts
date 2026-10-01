@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
 import { documentRequests } from "../shared/db/schema.js";
 
@@ -59,7 +59,25 @@ export function requiredDocuments(a: EducationAnswers): RequiredDocument[] {
 export async function syncJoiningDocuments(db: Database, applicationId: string, answers: EducationAnswers) {
   const wanted = requiredDocuments(answers);
   const key = (d: { documentType: string | null; documentName: string }) => `${d.documentType}|${d.documentName}`;
-  const existing = await db.query.documentRequests.findMany({ where: and(eq(documentRequests.applicationId, applicationId), isNotNull(documentRequests.documentType)) });
+  let existing = await db.query.documentRequests.findMany({ where: and(eq(documentRequests.applicationId, applicationId), isNotNull(documentRequests.documentType)) });
+
+  // HR may already have asked for the same document by hand (say "Aadhaar card" before the form was
+  // filled in). Take that request over instead of asking the candidate for it twice; an automatic
+  // request for it that nobody has uploaded to yet gives way.
+  const manual = await db.query.documentRequests.findMany({ where: and(eq(documentRequests.applicationId, applicationId), isNull(documentRequests.documentType)) });
+  let adopted = 0;
+  for (const d of wanted) {
+    const auto = existing.find((e) => key(e) === key(d));
+    if (auto && auto.status !== "requested") continue;
+    const match = manual.find((m) => sameDocument(m.documentName, d));
+    if (!match) continue;
+    manual.splice(manual.indexOf(match), 1);
+    if (auto) await db.delete(documentRequests).where(eq(documentRequests.id, auto.id));
+    const [row] = await db.update(documentRequests).set({ documentType: d.documentType, documentName: d.documentName, updatedAt: new Date() }).where(eq(documentRequests.id, match.id)).returning();
+    existing = [...existing.filter((e) => e.id !== auto?.id), row];
+    adopted++;
+  }
+
   const have = new Set(existing.map(key));
   const want = new Set(wanted.map(key));
 
@@ -70,5 +88,18 @@ export async function syncJoiningDocuments(db: Database, applicationId: string, 
   // A millisecond apart, so they list in the order above (Aadhaar first).
   const now = Date.now();
   if (added.length) await db.insert(documentRequests).values(added.map((d, i) => ({ applicationId, ...d, createdAt: new Date(now + i), updatedAt: new Date(now + i) })));
-  return { added: added.length, removed: stale.length };
+  return { added: added.length, removed: stale.length, adopted };
+}
+
+const SAME_NAME: Partial<Record<JoiningDocumentType, RegExp>> = {
+  aadhaar: /\baadh?aa?r\b/i,
+  pan: /\bpan\b/i,
+};
+
+/** Whether a document HR named by hand is the one the joining form wants. */
+function sameDocument(name: string, doc: RequiredDocument) {
+  const pattern = SAME_NAME[doc.documentType];
+  if (pattern) return pattern.test(name);
+  const norm = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return norm(name) === norm(doc.documentName);
 }

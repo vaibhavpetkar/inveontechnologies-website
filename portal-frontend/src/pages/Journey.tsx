@@ -331,6 +331,21 @@ function JoiningForm({ enrollmentId, initial, onDone, onCancel }: { enrollmentId
   const [hasExperience, setHasExperience] = useState((initial?.experienceCompanies?.length ?? 0) > 0);
   const [companies, setCompanies] = useState<string[]>(initial?.experienceCompanies?.length ? initial.experienceCompanies : [""]);
   const willAsk = documentsFor({ ...form, experienceCompanies: hasExperience ? companies : [] });
+  // A first-time form starts from what the candidate already put on their profile.
+  useEffect(() => {
+    if (initial) return;
+    apiFetch<{ profile: { fullName?: string | null; phone?: string | null; degree?: string | null; graduationYear?: number | null } }>("/api/v1/profile/me", { accessToken })
+      .then(({ profile: p }) =>
+        setForm((f) => ({
+          ...f,
+          fullName: f.fullName || p.fullName || "",
+          phone: f.phone || p.phone || "",
+          degree: f.degree || p.degree || "",
+          graduationYear: f.graduationYear ?? p.graduationYear ?? null,
+        })),
+      )
+      .catch(() => {});
+  }, [initial, accessToken]);
   const toggleSlot = (s: SlotKey) => set("preferredSlots", form.preferredSlots.includes(s) ? form.preferredSlots.filter((x) => x !== s) : [...form.preferredSlots, s]);
 
   async function submit(e: FormEvent) {

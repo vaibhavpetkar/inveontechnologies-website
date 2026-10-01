@@ -20,6 +20,7 @@ import {
 } from "../shared/db/schema.js";
 import { createEmployeeRecord, resolveDesignation } from "../employees/onboarding.js";
 import { applyApplicationTransition } from "../applications/transition-helper.js";
+import type { ApplicationStatus } from "../applications/state-machine.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
@@ -30,7 +31,7 @@ import { PIPELINE_ROLES, assertCanManageApplication, canViewApplication, getAppl
 import { notifyHiringTeam } from "../assessments/exams.js";
 import { every } from "../shared/jobs.js";
 import { cashfreeConfig, createOrder, getOrder, normalisePhone, verifyWebhookSignature } from "./cashfree.js";
-import { expireTrialIfDue, markEnrollmentPaid, startProgram, sweepTrials, type ProgramEnrollment } from "./enrollments.js";
+import { expireTrialIfDue, markEnrollmentPaid, moveToShortlisted, startProgram, sweepTrials, type ProgramEnrollment } from "./enrollments.js";
 import { onProgramUnlocked, trackForOpportunity } from "../internships/service.js";
 import { EDUCATION_LEVELS, syncJoiningDocuments } from "../recruitment/joining-documents.js";
 
@@ -322,7 +323,9 @@ export function programRouter(db: Database, env: Env) {
         createdBy: req.user!.sub,
       });
     }
-    if (application.status === "shortlisted") {
+    // Applications that passed HR before it shortlisted them are still "submitted" or "under review".
+    const status = await moveToShortlisted(db, application.id, application.status as ApplicationStatus, req.user!.sub);
+    if (status === "shortlisted") {
       await applyApplicationTransition(db, { applicationId: application.id, from: "shortlisted", to: "selected", actorUserId: req.user!.sub, note: `Hired as ${employee.businessId}` });
     }
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "program.hire", entityType: "program_enrollment", entityId: enrollment.id, metadata: { employeeId: employee.id }, ipAddress: req.ip });
