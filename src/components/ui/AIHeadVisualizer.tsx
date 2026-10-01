@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { isSmallScreen, startCanvasLoop } from '@/lib/canvas-loop';
 
 const AIHeadVisualizer = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -10,12 +11,11 @@ const AIHeadVisualizer = () => {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    let animationFrameId: number;
     let width = (canvas.width = canvas.parentElement?.clientWidth || 800);
     let height = (canvas.height = canvas.parentElement?.clientHeight || 420);
 
-    // Particle settings
-    const numParticles = 220; // Increased for more "neural" feel
+    // Particle settings: every pair is compared each frame, so scale the count to the canvas size.
+    const numParticles = Math.max(60, Math.min(220, Math.round((width * height) / 1600)));
     const particles: Array<{
       x: number;
       y: number;
@@ -35,8 +35,8 @@ const AIHeadVisualizer = () => {
       particles.push({
         x: Math.random() * width,
         y: Math.random() * height,
-        vx: (Math.random() - 0.5) * 0.8,
-        vy: (Math.random() - 0.5) * 0.8,
+        vx: (Math.random() - 0.5) * 1.6,
+        vy: (Math.random() - 0.5) * 1.6,
         radius: Math.random() * 1.8 + 0.5,
         alpha: alpha,
         baseAlpha: alpha,
@@ -47,13 +47,13 @@ const AIHeadVisualizer = () => {
 
     let step = 0;
 
-    const render = () => {
+    const render = (_time: number) => {
       ctx.clearRect(0, 0, width, height);
 
       // Mouse-based speed control
       // If hovering, run forward. If not, run "opposite" (reverse/slow)
       const speedMultiplier = mouseRef.current.isHovering ? 1.5 : -0.4;
-      step += 0.015 * speedMultiplier;
+      step += 0.03 * speedMultiplier;
 
       // 1. Draw Animated Wave Lines
       ctx.lineWidth = 1;
@@ -194,10 +194,9 @@ const AIHeadVisualizer = () => {
         ctx.stroke();
       });
 
-      animationFrameId = requestAnimationFrame(render);
     };
 
-    render();
+    const stopLoop = startCanvasLoop(canvas, render, { still: isSmallScreen() });
 
     // Event Listeners
     const handleMouseMove = (e: MouseEvent) => {
@@ -229,7 +228,7 @@ const AIHeadVisualizer = () => {
     window.addEventListener('resize', handleResize);
 
     return () => {
-      cancelAnimationFrame(animationFrameId);
+      stopLoop();
       canvas.removeEventListener('mousemove', handleMouseMove);
       canvas.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('mouseup', handleMouseUp);

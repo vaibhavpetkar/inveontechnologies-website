@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
+import { isSmallScreen, startCanvasLoop } from '@/lib/canvas-loop';
 
 interface NeuralNode {
   x: number;
@@ -144,7 +145,9 @@ export default function AnimatedBackground({ className = '' }: AnimatedBackgroun
     if (!ctx) return;
 
     let lastTime = 0;
-    const benchmarkAnimProgress = { current: 0 };
+    const still = isSmallScreen();
+    // A still frame shows the finished bars; when animating they fill up.
+    const benchmarkAnimProgress = { current: still ? 1 : 0 };
 
     const animate = (time: number) => {
       const dt = Math.min((time - lastTime) / 1000, 1/30);
@@ -167,13 +170,9 @@ export default function AnimatedBackground({ className = '' }: AnimatedBackgroun
       drawParticles(ctx, width, height, time);
 
       ctx.restore();
-      animationRef.current = requestAnimationFrame(animate);
     };
 
-    animationRef.current = requestAnimationFrame(animate);
-    return () => {
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
-    };
+    return startCanvasLoop(canvas, animate, { still });
   }, [nodes, benchmarks, width, height]);
 
   return (
@@ -370,7 +369,7 @@ function drawBenchmarks(
   progress: { current: number }
 ) {
   // Animate progress
-  progress.current = Math.min(1, progress.current + 0.0005);
+  progress.current = Math.min(1, progress.current + 0.001);
 
   const panelWidth = 200;
   const panelHeight = benchmarks.length * 45 + 40;

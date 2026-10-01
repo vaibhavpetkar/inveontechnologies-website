@@ -8,6 +8,7 @@ import { isAdminTransitionAllowed, isCandidateTransitionAllowed, isSystemTransit
 import { isAssigneeTransitionAllowed, isReviewerTransitionAllowed } from "../dist/modules/tasks/state-machine.js";
 import { formatBusinessId } from "../dist/modules/shared/business-id.js";
 import { slugify } from "../dist/modules/shared/slugify.js";
+import { renderEmailHtml } from "../dist/modules/shared/email-html.js";
 
 test("scoreAttempt weights points and treats unanswered as wrong", () => {
   const questions = [
@@ -61,4 +62,20 @@ test("business ids and slugs", () => {
   assert.equal(formatBusinessId("OPP", 7), `OPP-${year}-00007`);
   assert.equal(formatBusinessId("INV-EMP", 12), "INV-EMP-000012");
   assert.equal(slugify("  Node.js & React!! "), "node-js-react");
+});
+
+test("emails get an HTML twin: escaped text, links as buttons, footer note moved down", () => {
+  const appUrl = "https://portal.example.in";
+  const html = renderEmailHtml({
+    appUrl,
+    subject: "Offer <for> you",
+    text: `Hi <b>Asha</b>, see https://example.com/a?x=1&y=2.\n\nOpen it in the portal:\n${appUrl}/journey/1\n\nYou can turn these emails off from the notifications menu in the portal.`,
+  });
+  assert.match(html, /Offer &lt;for&gt; you/);
+  assert.match(html, /Hi &lt;b&gt;Asha&lt;\/b&gt;/, "text is escaped, never rendered as HTML");
+  assert.match(html, /href="https:\/\/example.com\/a\?x=1&amp;y=2"/, "inline links are clickable, without the trailing full stop");
+  assert.match(html, />Open in the portal<\/a>/, "a link on its own line becomes a button");
+  assert.doesNotMatch(html, /Open it in the portal:/);
+  assert.ok(html.indexOf("You can turn these emails off") > html.indexOf("Open in the portal"), "the opt-out note sits in the footer");
+  assert.doesNotMatch(html, /Reply to this email/, "no reply line without a reply-to address");
 });

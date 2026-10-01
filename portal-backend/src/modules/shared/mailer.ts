@@ -1,9 +1,32 @@
 import nodemailer, { type Transporter } from "nodemailer";
 import type { Env } from "./env.js";
 import { logger } from "./logger.js";
+import { renderEmailHtml } from "./email-html.js";
 
 let transporter: Transporter | null = null;
 let fromAddress = "";
+let replyTo: string | undefined;
+let appUrl = "";
+
+/** The domain of the From address, e.g. inveontechnologies.in. */
+function fromDomain(from: string) {
+  return from.match(/@([^>\s]+)/)?.[1]?.toLowerCase();
+}
+
+/**
+ * Everything every message carries: the From and Reply-To, and an HTML twin
+ * of the text. Text-only mail with bare links is a common spam signal.
+ */
+function envelope(email: OutgoingEmail) {
+  return {
+    from: fromAddress,
+    replyTo,
+    to: email.to,
+    subject: email.subject,
+    text: email.text,
+    html: renderEmailHtml({ subject: email.subject, text: email.text, appUrl, canReply: !!replyTo }),
+  };
+}
 
 /**
  * Called once at startup. With PORTAL_SMTP_HOST set, mail goes out over SMTP
@@ -13,6 +36,8 @@ let fromAddress = "";
  */
 export function configureMailer(env: Env) {
   fromAddress = env.PORTAL_MAIL_FROM;
+  replyTo = env.PORTAL_MAIL_REPLY_TO || undefined;
+  appUrl = env.PORTAL_APP_URL.replace(/\/$/, "");
   if (!env.PORTAL_SMTP_HOST) {
     // In production this means password reset and verification silently
     // don't work, so make it stand out in `docker compose logs`.
@@ -24,6 +49,9 @@ export function configureMailer(env: Env) {
     host: env.PORTAL_SMTP_HOST,
     port: env.PORTAL_SMTP_PORT,
     secure: env.PORTAL_SMTP_SECURE,
+    // Greet the mail server as our own domain, not the container's random
+    // hostname: a HELO that doesn't match the sender counts against us.
+    name: fromDomain(env.PORTAL_MAIL_FROM),
     auth: env.PORTAL_SMTP_USER ? { user: env.PORTAL_SMTP_USER, pass: env.PORTAL_SMTP_PASSWORD } : undefined,
   });
   // Check the connection and login once at startup, so a wrong host, port
@@ -58,7 +86,7 @@ export function sendEmail(email: OutgoingEmail): void {
     return;
   }
   transporter
-    .sendMail({ from: fromAddress, to: email.to, subject: email.subject, text: email.text })
+    .sendMail(envelope(email))
     .then(() => logger.info({ toEmail: email.to, subject: email.subject }, "Email sent"))
     .catch((err: unknown) => logger.error({ err, toEmail: email.to, subject: email.subject }, "Email sending failed"));
 }
@@ -74,10 +102,7 @@ export async function deliverEmail(email: OutgoingEmail): Promise<void> {
     return;
   }
   await transporter.sendMail({
-    from: fromAddress,
-    to: email.to,
-    subject: email.subject,
-    text: email.text,
+    ...envelope(email),
     icalEvent: email.icalEvent ? { method: email.icalEvent.method, filename: "invite.ics", content: email.icalEvent.content } : undefined,
     attachments: email.attachments,
   });

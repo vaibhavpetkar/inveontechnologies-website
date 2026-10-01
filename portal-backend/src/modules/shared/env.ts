@@ -26,6 +26,8 @@ const envSchema = z.object({
   PORTAL_SMTP_USER: z.string().optional(),
   PORTAL_SMTP_PASSWORD: z.string().optional(),
   PORTAL_MAIL_FROM: z.string().default("Inveon Portal <no-reply@inveontechnologies.in>"),
+  // Where replies go, e.g. "Inveon HR <hr@inveontechnologies.in>". A real, read inbox helps delivery.
+  PORTAL_MAIL_REPLY_TO: z.string().optional(),
   // Google Meet links for calendar events: an OAuth client plus the refresh
   // token of the account that owns the meetings. Leave unset to hide the
   // Google Meet option. See docs/calendar-integrations.md.
