@@ -31,10 +31,13 @@ const services = [
 // array (and the "Our Offices" card below) entirely if the business is remote-first
 const offices: { city: string; country: string; address: string; email: string }[] = [];
 
-// Where lead submissions are sent. Set VITE_LEADS_API_URL in your .env file to point this at
-// your own backend/CRM endpoint. Never hardcode API keys or credentials here — if your endpoint
-// needs auth, add it server-side, not in this client-side form.
-const LEADS_API_URL = import.meta.env.VITE_LEADS_API_URL as string | undefined;
+// Where lead submissions are sent: the CRM's public website-lead endpoint, which
+// creates the lead, alerts the team and emails the visitor a confirmation.
+// VITE_LEADS_API_URL overrides it (e.g. for local testing). Never put API keys
+// here — anything in a VITE_ variable is visible in the public JS.
+const LEADS_API_URL =
+  (import.meta.env.VITE_LEADS_API_URL as string | undefined) ||
+  'https://api.inveontechnologies.in/api/public/website-leads';
 
 export default function Contact() {
   const [submitted, setSubmitted] = useState(false);
@@ -42,17 +45,12 @@ export default function Contact() {
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({
     name: '', company: '', email: '', phone: '', service: '', message: '',
+    website_url: '', // honeypot: hidden from people, bots fill it in
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-
-    if (!LEADS_API_URL) {
-      // No backend configured yet — tell the developer clearly instead of pretending it worked.
-      setError('Form is not connected to a backend yet. Set VITE_LEADS_API_URL in your .env file.');
-      return;
-    }
 
     setSubmitting(true);
     try {
@@ -61,9 +59,14 @@ export default function Contact() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...form, source: 'inveontechnologies.in/contact', submittedAt: new Date().toISOString() }),
       });
-      if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
+      if (!res.ok) {
+        // The CRM explains 400/429 errors in plain words; show those as they are.
+        const data = await res.json().catch(() => null);
+        setError(data?.message || 'Something went wrong sending your message. Please try again or email us directly.');
+        return;
+      }
       setSubmitted(true);
-    } catch (err) {
+    } catch {
       setError('Something went wrong sending your message. Please try again or email us directly.');
     } finally {
       setSubmitting(false);
@@ -114,7 +117,7 @@ export default function Contact() {
                       Thank you, <strong className="text-foreground">{form.name}</strong>. Our team will review your inquiry and get back to you soon.
                     </p>
                     <button
-                      onClick={() => { setSubmitted(false); setForm({ name: '', company: '', email: '', phone: '', service: '', message: '' }); }}
+                      onClick={() => { setSubmitted(false); setForm({ name: '', company: '', email: '', phone: '', service: '', message: '', website_url: '' }); }}
                       className="btn-secondary mt-4"
                     >
                       Send Another Message
@@ -122,6 +125,12 @@ export default function Contact() {
                   </div>
                 ) : (
                   <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+                    <input
+                      type="text" name="website_url" tabIndex={-1} autoComplete="off" aria-hidden="true"
+                      value={form.website_url}
+                      onChange={(e) => setForm({ ...form, website_url: e.target.value })}
+                      className="absolute -left-[9999px] h-0 w-0 opacity-0"
+                    />
                     <h2 className="text-xl font-bold mb-2" style={{ fontFamily: 'Outfit, sans-serif' }}>Send Us a Message</h2>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
