@@ -96,7 +96,7 @@ export default function Footer() {
 
           {/* Company */}
           <div>
-            <h4 className="text-sm font-semibold text-foreground mb-5 uppercase tracking-wider">Company</h4>
+            <h2 className="text-sm font-semibold text-foreground mb-5 uppercase tracking-wider">Company</h2>
             <ul className="flex flex-col gap-3">
               {links.company.map((l) => (
                 <li key={l.label}>
@@ -111,7 +111,7 @@ export default function Footer() {
 
           {/* Services */}
           <div>
-            <h4 className="text-sm font-semibold text-foreground mb-5 uppercase tracking-wider">Services</h4>
+            <h2 className="text-sm font-semibold text-foreground mb-5 uppercase tracking-wider">Services</h2>
             <ul className="flex flex-col gap-3">
               {links.services.map((l) => (
                 <li key={l.label}>
@@ -126,7 +126,7 @@ export default function Footer() {
 
           {/* Products */}
           <div>
-            <h4 className="text-sm font-semibold text-foreground mb-5 uppercase tracking-wider">Products</h4>
+            <h2 className="text-sm font-semibold text-foreground mb-5 uppercase tracking-wider">Products</h2>
             <ul className="flex flex-col gap-3">
               {links.products.map((l) => (
                 <li key={l.label}>
@@ -141,7 +141,7 @@ export default function Footer() {
 
           {/* Resources */}
           <div>
-            <h4 className="text-sm font-semibold text-foreground mb-5 uppercase tracking-wider">Resources</h4>
+            <h2 className="text-sm font-semibold text-foreground mb-5 uppercase tracking-wider">Resources</h2>
             <ul className="flex flex-col gap-3">
               {links.resources.map((l) => (
                 <li key={l.label}>
@@ -168,7 +168,7 @@ export default function Footer() {
             {/* Contact Info */}
             {/* TODO: replace with Inveon Technologies' real email, phone, and office address */}
             <div className="flex flex-col gap-4">
-              <h4 className="text-sm font-semibold text-foreground uppercase tracking-wider">Contact Us</h4>
+              <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider">Contact Us</h2>
               <div className="flex flex-col gap-3 text-sm text-muted-foreground">
                 <a href="mailto:inveontechnologies@gmail.com" className="flex items-center gap-3 hover:text-primary transition-colors group">
                   <Mail className="w-5 h-5 text-primary group-hover:scale-110 transition-transform" />
@@ -183,7 +183,7 @@ export default function Footer() {
 
             {/* Newsletter Signup */}
             <div>
-              <h4 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-4">Stay Updated</h4>
+              <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-4">Stay Updated</h2>
               <p className="text-sm text-muted-foreground mb-4">Get the latest insights, product updates, and industry news delivered to your inbox.</p>
               <form className="flex gap-2 max-w-xs" onSubmit={(e) => e.preventDefault()}>
                 <input
@@ -192,7 +192,7 @@ export default function Footer() {
                   className="flex-1 px-4 py-2.5 rounded-xl border border-border bg-white text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
                   aria-label="Email address"
                 />
-                <button type="submit" className="px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 transition-opacity flex items-center justify-center">
+                <button type="submit" aria-label="Subscribe" className="px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 transition-opacity flex items-center justify-center">
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </form>
@@ -201,7 +201,7 @@ export default function Footer() {
             {/* What We Offer */}
             {/* TODO: swap in real certifications/partnerships once confirmed */}
             <div>
-              <h4 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-4">What We Offer</h4>
+              <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider mb-4">What We Offer</h2>
               <div className="flex flex-wrap gap-2">
                 {['AI Development', 'ERP/CRM Solutions', 'Digital Transformation', 'Global Delivery'].map((badge) => (
                   <span key={badge} className="px-3 py-1.5 text-xs font-medium text-muted-foreground bg-muted/50 border border-border rounded-full hover:border-primary/50 hover:text-foreground transition-all">

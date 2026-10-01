@@ -145,7 +145,7 @@ export default function Home() {
           <div className="grid lg:grid-cols-2 gap-12 items-center">
             <div className="max-w-4xl">
               <motion.div
-                initial={{ opacity: 0, y: 16 }}
+                initial={false}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.5 }}
                 className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-primary/30 bg-primary/5 text-primary text-xs font-semibold uppercase tracking-widest mb-8"
@@ -155,7 +155,7 @@ export default function Home() {
               </motion.div>
 
               <motion.h1
-                initial={{ opacity: 0, y: 24 }}
+                initial={false}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.7, delay: 0.1 }}
                 className="text-5xl sm:text-6xl lg:text-7xl font-bold leading-[1.08] mb-6"
@@ -169,7 +169,7 @@ export default function Home() {
               </motion.h1>
 
               <motion.p
-                initial={{ opacity: 0, y: 20 }}
+                initial={false}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.7, delay: 0.2 }}
                 className="text-lg text-muted-foreground leading-relaxed mb-10 max-w-2xl"
@@ -179,7 +179,7 @@ export default function Home() {
               </motion.p>
 
               <motion.div
-                initial={{ opacity: 0, y: 20 }}
+                initial={false}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.7, delay: 0.3 }}
                 className="flex flex-wrap gap-4"
@@ -288,7 +288,7 @@ export default function Home() {
                   <p className="text-sm text-muted-foreground leading-relaxed">{s.desc}</p>
                 </div>
                 <Link href={s.href} className="mt-auto inline-flex items-center gap-1 text-xs font-semibold text-primary hover:gap-2 transition-all">
-                  Learn more <ArrowRight className="w-3 h-3" />
+                  Learn more<span className="sr-only"> about {s.title}</span> <ArrowRight className="w-3 h-3" />
                 </Link>
               </motion.div>
             ))}
@@ -344,7 +344,7 @@ export default function Home() {
                   ))}
                 </ul>
                 <Link href={p.href} className="mt-auto pt-4 border-t border-border inline-flex items-center gap-2 text-sm font-semibold text-primary hover:gap-3 transition-all">
-                  Learn more <ArrowRight className="w-4 h-4" />
+                  Learn more<span className="sr-only"> about {p.name}</span> <ArrowRight className="w-4 h-4" />
                 </Link>
               </motion.div>
             ))}

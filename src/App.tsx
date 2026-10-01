@@ -1,27 +1,14 @@
+import { Suspense, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HelmetProvider } from 'react-helmet-async';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import NotFound from '@/pages/not-found';
-import Home from '@/pages/Home';
-import Services from '@/pages/Services';
-import ServiceDetail from '@/pages/ServiceDetail';
-import Products from '@/pages/Products';
-import ProductDetail from '@/pages/ProductDetail';
-import Clients from '@/pages/Clients';
-import About from '@/pages/About';
-import Contact from '@/pages/Contact';
-import Careers from '@/pages/Careers';
-import Insights from '@/pages/Insights';
-import Privacy from '@/pages/Privacy';
-import Terms from '@/pages/Terms';
-import RedirectToPortal from '@/pages/careers/RedirectToPortal';
+import { ROUTES } from '@/routes';
 import { Route, Switch, Router as WouterRouter } from 'wouter';
 import Navbar from '@/components/layout/Navbar';
 import Footer from '@/components/layout/Footer';
 import ScrollToTop from '@/components/layout/ScrollToTop';
-
-const queryClient = new QueryClient();
 
 function Router() {
   return (
@@ -29,42 +16,31 @@ function Router() {
       <ScrollToTop />
       <Navbar />
       <main className="flex-1">
-        <Switch>
-          <Route path="/" component={Home} />
-          <Route path="/services" component={Services} />
-          <Route path="/services/:slug" component={ServiceDetail} />
-          <Route path="/products" component={Products} />
-          <Route path="/products/:id" component={ProductDetail} />
-          <Route path="/insights" component={Insights} />
-          <Route path="/clients" component={Clients} />
-          <Route path="/about" component={About} />
-          <Route path="/contact" component={Contact} />
-          <Route path="/careers" component={Careers} />
-          <Route path="/privacy" component={Privacy} />
-          <Route path="/terms" component={Terms} />
-          {/* Retired: this flow was a localStorage-only mock (plaintext
-              passwords, no real backend). Real candidate accounts,
-              opportunities, applications, and assessments now live on
-              the real portal — see RedirectToPortal.tsx. */}
-          <Route path="/careers/login" component={RedirectToPortal} />
-          <Route path="/careers/profile" component={RedirectToPortal} />
-          <Route path="/careers/apply/:roleId" component={RedirectToPortal} />
-          <Route path="/careers/test/:roleId" component={RedirectToPortal} />
-          <Route path="/careers/payment/:roleId" component={RedirectToPortal} />
-          <Route component={NotFound} />
-        </Switch>
+        <Suspense fallback={<div className="min-h-screen" />}>
+          <Switch>
+            {ROUTES.map(({ path, page }) => (
+              <Route key={path} path={path} component={page} />
+            ))}
+            <Route component={NotFound} />
+          </Switch>
+        </Suspense>
       </main>
       <Footer />
     </div>
   );
 }
 
-function App() {
+/**
+ * `ssrPath` and `helmetContext` are only set when the build pre-renders a
+ * page (see src/entry-server.tsx); in the browser both are left out.
+ */
+function App({ ssrPath, helmetContext }: { ssrPath?: string; helmetContext?: object }) {
+  const [queryClient] = useState(() => new QueryClient());
   return (
-    <HelmetProvider>
+    <HelmetProvider context={helmetContext}>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')} ssrPath={ssrPath}>
             <Router />
           </WouterRouter>
           <Toaster />

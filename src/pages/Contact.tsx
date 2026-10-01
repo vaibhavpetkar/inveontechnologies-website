@@ -172,7 +172,7 @@ export default function Contact() {
 
                     <div>
                       <label className="block text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Service Interest</label>
-                      <select
+                      <select aria-label="Service interest"
                         value={form.service}
                         onChange={(e) => setForm({ ...form, service: e.target.value })}
                         className="w-full px-4 py-3 rounded-xl border border-border bg-white text-sm focus:outline-none focus:border-primary/50 focus:ring-1 focus:ring-primary/30 transition-all text-muted-foreground"
