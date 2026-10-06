@@ -90,7 +90,7 @@ describe("file uploads", () => {
     const { application, candidate } = await createOpportunityWithApplication(api, { hr, admin });
     const request = (await api.call("POST", `/applications/${application.id}/documents`, { token: hr.token, body: { documentName: "ID proof" } })).json.documentRequest;
     const alert = (await api.call("GET", "/notifications", { token: candidate.token })).json.notifications.find((n) => n.kind === "document.requested");
-    assert.equal(alert.link, `/journey/${application.id}`);
+    assert.equal(alert.link, "/documents", "the candidate lands on My documents");
 
     const wrongPurpose = (await upload(candidate, "resume", "id.pdf", PDF)).json.file;
     assert.equal((await api.call("POST", `/documents/${request.id}/upload`, { token: candidate.token, body: { fileUrl: wrongPurpose.url } })).json.error.code, "INVALID_FILE");

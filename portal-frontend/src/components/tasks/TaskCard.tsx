@@ -56,6 +56,12 @@ export const TaskCard = forwardRef<HTMLDivElement, Props>(function TaskCard({ ta
           {assignee ? <Avatar email={assignee.email} size={24} /> : task.assigneeId ? null : <span className="task-unassigned">Unassigned</span>}
         </div>
         <div className="task-card-title">{task.title}</div>
+        {task.status === "in_progress" && (task.progressPercent ?? 0) > 0 && (
+          <div className="task-card-progress" aria-label={`${task.progressPercent}% done`}>
+            <span className="progress-bar"><motion.span className="progress-fill" initial={{ width: 0 }} animate={{ width: `${task.progressPercent}%` }} transition={{ duration: 0.5 }} /></span>
+            <span>{task.progressPercent}%</span>
+          </div>
+        )}
         <div className="task-card-meta">
           {task.dueDate && (
             <span className={overdue ? "meta-overdue" : ""}>

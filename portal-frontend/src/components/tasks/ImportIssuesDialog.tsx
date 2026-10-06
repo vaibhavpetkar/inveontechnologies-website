@@ -15,15 +15,17 @@ interface ProjectOption {
 interface Props {
   people: DirectoryUser[];
   defaultRepo: string | null;
+  /** Opened from a project: import straight into it. */
+  initialProjectId?: string;
   onClose: () => void;
   onImported: (created: number) => void;
 }
 
 /** Turns a repo's open GitHub issues into tasks, once each. */
-export function ImportIssuesDialog({ people, defaultRepo, onClose, onImported }: Props) {
+export function ImportIssuesDialog({ people, defaultRepo, initialProjectId, onClose, onImported }: Props) {
   const { accessToken } = useAuth();
   const [projects, setProjects] = useState<ProjectOption[]>([]);
-  const [projectId, setProjectId] = useState("");
+  const [projectId, setProjectId] = useState(initialProjectId ?? "");
   const [repo, setRepo] = useState(defaultRepo ?? "");
   const [assigneeId, setAssigneeId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -31,8 +33,14 @@ export function ImportIssuesDialog({ people, defaultRepo, onClose, onImported }:
   const [result, setResult] = useState<{ created: number; skipped: number } | null>(null);
 
   useEffect(() => {
-    apiFetch<{ projects: ProjectOption[] }>("/api/v1/github/projects", { accessToken }).then((r) => setProjects(r.projects)).catch(() => undefined);
-  }, [accessToken]);
+    apiFetch<{ projects: ProjectOption[] }>("/api/v1/github/projects", { accessToken })
+      .then((r) => {
+        setProjects(r.projects);
+        const preset = r.projects.find((p) => p.id === initialProjectId);
+        if (preset?.githubRepo) setRepo(preset.githubRepo);
+      })
+      .catch(() => undefined);
+  }, [accessToken, initialProjectId]);
 
   function pickProject(id: string) {
     setProjectId(id);

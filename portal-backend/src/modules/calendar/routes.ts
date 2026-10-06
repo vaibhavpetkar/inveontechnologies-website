@@ -248,29 +248,31 @@ export function calendarRouter(db: Database, env: Env, providers: Map<ProviderNa
     const meetings = await present(db, meetingRows.map((r) => r.event), me, req.user!.role);
 
     // Interviews I'm running or attending, straight from recruitment.
-    const interviewRows = await db.execute<{ id: string; scheduled_at: string; timezone: string; meeting_url: string | null; round_number: number; interviewer_id: string; candidate_id: string; title: string; }>(sql`
-      SELECT ir.id, ir.scheduled_at, ir.timezone, ir.meeting_url, ir.round_number, ir.interviewer_id, a.user_id AS candidate_id, o.title
+    const interviewRows = await db.execute<{ id: string; scheduled_at: string; timezone: string; meeting_url: string | null; round_number: number; interviewer_id: string; candidate_id: string; title: string; subject: string | null; kind: "interview" | "exam" | "hr"; duration_minutes: number; application_id: string; opportunity_id: string }>(sql`
+      SELECT ir.id, ir.scheduled_at, ir.timezone, ir.meeting_url, ir.round_number, ir.interviewer_id, ir.subject, ir.kind, ir.duration_minutes,
+        a.user_id AS candidate_id, a.id AS application_id, o.id AS opportunity_id, o.title
       FROM interview_rounds ir
       JOIN applications a ON a.id = ir.application_id
       JOIN opportunities o ON o.id = a.opportunity_id
       WHERE ir.status IN ('scheduled', 'rescheduled')
         AND (ir.interviewer_id = ${me} OR a.user_id = ${me})
-        AND ir.scheduled_at >= ${new Date(from.getTime() - INTERVIEW_MINUTES * 60000).toISOString()} AND ir.scheduled_at < ${to.toISOString()}
+        AND ir.scheduled_at >= ${new Date(from.getTime() - 8 * 60 * 60000).toISOString()} AND ir.scheduled_at < ${to.toISOString()}
     `);
     const interviews = interviewRows.rows.map((r) => {
       const start = new Date(r.scheduled_at);
       const asInterviewer = r.interviewer_id === me;
+      const what = r.subject ? `${r.subject}` : r.kind === "exam" ? "Exam" : r.kind === "hr" ? "HR round" : `Interview (round ${r.round_number})`;
       return {
         id: `interview:${r.id}`,
         kind: "interview" as const,
-        title: asInterviewer ? `Interview (round ${r.round_number}): ${r.title}` : `Your interview: ${r.title}`,
+        title: asInterviewer ? `${what}: ${r.title}` : `Your ${r.subject ? `${r.subject} ` : ""}${r.kind === "exam" ? "exam" : "interview"}: ${r.title}`,
         startsAt: start,
-        endsAt: new Date(start.getTime() + INTERVIEW_MINUTES * 60000),
+        endsAt: new Date(start.getTime() + (r.duration_minutes || INTERVIEW_MINUTES) * 60000),
         timezone: r.timezone,
         joinUrl: r.meeting_url,
-        link: asInterviewer ? "/admin" : "/candidate",
+        link: asInterviewer ? `/opportunities/${r.opportunity_id}?applicant=${r.application_id}` : `/journey/${r.application_id}`,
       };
-    });
+    }).filter((i) => i.endsAt > from);
 
     // My open tasks that fall due in the range.
     const taskRows = await db.execute<{ id: string; title: string; due_date: string; priority: string }>(sql`

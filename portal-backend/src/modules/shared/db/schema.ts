@@ -392,6 +392,13 @@ export const interviewRounds = pgTable("interview_rounds", {
   scheduledAt: timestamp("scheduled_at", { withTimezone: true }).notNull(),
   timezone: text("timezone").notNull().default("Asia/Kolkata"),
   meetingUrl: text("meeting_url"),
+  // What the round is about ("Java technical round", "Aptitude exam"), shown to everyone invited.
+  subject: text("subject"),
+  kind: text("kind", { enum: ["interview", "exam", "hr"] }).notNull().default("interview"),
+  durationMinutes: integer("duration_minutes").notNull().default(60),
+  // When Google Meet or Zoom made the link, so a reschedule or cancel updates it there too.
+  meetingProvider: text("meeting_provider", { enum: ["none", "manual", "google_meet", "zoom"] }).notNull().default("manual"),
+  externalMeetingId: text("external_meeting_id"),
   status: interviewStatusEnum("status").notNull().default("scheduled"),
   feedback: text("feedback"),
   scorecard: jsonb("scorecard"), // freeform { criteria: [{name, rating, comment}], ... }
@@ -489,6 +496,9 @@ export const courses = pgTable("courses", {
   // Null = certificates for this course are issued by hand, as before.
   certificateTemplateId: uuid("certificate_template_id"),
   category: text("category"),
+  // Set on courses installed from the practice-course catalog (e.g. "c"),
+  // so installing again adds new content instead of duplicating the course.
+  catalogKey: text("catalog_key").unique(),
   createdBy: uuid("created_by").notNull().references(() => users.id),
   publishedAt: timestamp("published_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -529,7 +539,55 @@ export const courseLessons = pgTable("course_lessons", {
   // when time runs out. null = untimed / unlimited.
   timeLimitMinutes: integer("time_limit_minutes"),
   maxAttempts: integer("max_attempts"),
+  // Lessons installed from the practice-course catalog ("c/loops/assignment").
+  catalogKey: text("catalog_key").unique(),
 });
+
+/**
+ * Coding questions of an "assignment" lesson (an assignment sheet): the
+ * learner uploads a file (or writes code) for each question, and it's
+ * reviewed automatically, line by line, and run against test cases. The
+ * reference solutions stay in code (courses/practice/) and never reach the
+ * browser.
+ */
+export const lessonCodeQuestions = pgTable(
+  "lesson_code_questions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    lessonId: uuid("lesson_id").notNull().references(() => courseLessons.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    title: text("title").notNull(),
+    brief: text("brief").notNull(),
+    steps: jsonb("steps").$type<string[]>().notNull().default([]),
+    level: text("level", { enum: ["basic", "intermediate", "advanced"] }).notNull().default("basic"),
+    spec: jsonb("spec").$type<ExerciseSpec>().notNull(),
+    orderIndex: integer("order_index").notNull().default(0),
+  },
+  (t) => ({ uniqLessonKey: unique("lesson_code_questions_lesson_key_unique").on(t.lessonId, t.key) }),
+);
+
+/**
+ * Every upload for a question is kept. status: passed (every check ran and
+ * passed, no line needs fixing), failed (something to fix; the learner is
+ * emailed the review), pending (the code couldn't be run right now but the
+ * line-by-line review found nothing wrong).
+ */
+export const lessonCodeSubmissions = pgTable(
+  "lesson_code_submissions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    questionId: uuid("question_id").notNull().references(() => lessonCodeQuestions.id, { onDelete: "cascade" }),
+    enrollmentId: uuid("enrollment_id").notNull().references(() => courseEnrollments.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    fileName: text("file_name"),
+    code: text("code").notNull(),
+    report: jsonb("report").$type<CheckReport>().notNull(),
+    status: text("status", { enum: ["passed", "failed", "pending"] }).notNull(),
+    emailedAt: timestamp("emailed_at", { withTimezone: true }),
+    submittedAt: timestamp("submitted_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ byQuestion: index("lesson_code_submissions_question_idx").on(t.questionId, t.enrollmentId, t.submittedAt) }),
+);
 
 /**
  * Auto-graded quizzes for "test" lessons (LMS phase D). Same multiple-choice
@@ -878,7 +936,11 @@ export const projectMilestones = pgTable("project_milestones", {
   id: uuid("id").primaryKey().defaultRandom(),
   projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
+  description: text("description"),
+  // A roadmap phase runs from startDate to dueDate.
+  startDate: timestamp("start_date", { withTimezone: true }),
   dueDate: timestamp("due_date", { withTimezone: true }),
+  orderIndex: integer("order_index").notNull().default(0),
   status: text("status", { enum: ["pending", "completed"] }).notNull().default("pending"),
   completedAt: timestamp("completed_at", { withTimezone: true }),
 });
@@ -927,6 +989,12 @@ export const tasks = pgTable("tasks", {
   actualHours: numeric("actual_hours", { precision: 6, scale: 2 }).notNull().default("0"),
   dueDate: timestamp("due_date", { withTimezone: true }),
   createdBy: uuid("created_by").notNull().references(() => users.id),
+  // The roadmap phase this task belongs to (projects only).
+  milestoneId: uuid("milestone_id").references(() => projectMilestones.id, { onDelete: "set null" }),
+  // Captured when the assignee starts work: their plan and when they expect to finish.
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  expectedFinishAt: timestamp("expected_finish_at", { withTimezone: true }),
+  progressPercent: integer("progress_percent").notNull().default(0),
   // Linked GitHub issue (see modules/github). Closing the issue finishes the task and vice versa.
   githubRepo: text("github_repo"),
   githubIssueNumber: integer("github_issue_number"),
@@ -983,6 +1051,26 @@ export const taskEvents = pgTable("task_events", {
   note: text("note"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Work updates on a task: the kickoff the assignee writes when starting
+ * (plan, approach, branch), progress check-ins and blockers. Shown on the
+ * task and on the team board so everyone can see what's being worked on.
+ */
+export const taskUpdates = pgTable(
+  "task_updates",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["start", "progress", "blocker"] }).notNull(),
+    body: text("body").notNull(),
+    progressPercent: integer("progress_percent"),
+    branchOrLink: text("branch_or_link"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ byTask: index("task_updates_task_idx").on(t.taskId, t.createdAt) }),
+);
 
 /**
  * Phase 10 schema: moderated communication. Scoping decisions recorded
@@ -1659,4 +1747,51 @@ export const participantOffers = pgTable("participant_offers", {
   fee: numeric("fee", { precision: 10, scale: 2 }).notNull(),
   issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
   emailedAt: timestamp("emailed_at", { withTimezone: true }),
+});
+
+/**
+ * Notes workspace: planning notes, important notes, bookmarks and shared
+ * secrets (passwords, keys). A note is private to its owner unless shared
+ * with named people. Secret values are encrypted at rest (AES-256-GCM, see
+ * notes/crypto.ts) and only decrypted when someone allowed to see them
+ * clicks reveal, which is audit-logged.
+ */
+export const notes = pgTable(
+  "notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ownerId: uuid("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["note", "plan", "bookmark", "secret"] }).notNull().default("note"),
+    title: text("title").notNull(),
+    body: text("body"), // plain text for notes and plans; a description for bookmarks and secrets
+    url: text("url"),
+    username: text("username"), // secrets: the login name, shown without reveal
+    secretCiphertext: text("secret_ciphertext"), // secrets only: iv.tag.ciphertext, base64
+    important: boolean("important").notNull().default(false),
+    tags: jsonb("tags").$type<string[]>().notNull().default([]),
+    projectId: uuid("project_id").references(() => projects.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ byOwner: index("notes_owner_idx").on(t.ownerId, t.updatedAt) }),
+);
+
+export const noteShares = pgTable(
+  "note_shares",
+  {
+    noteId: uuid("note_id").notNull().references(() => notes.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    canEdit: boolean("can_edit").notNull().default(false),
+    sharedBy: uuid("shared_by").notNull().references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.noteId, t.userId] }), byUser: index("note_shares_user_idx").on(t.userId) }),
+);
+
+/** Small admin-editable settings, one JSON value per key (e.g. "joining_terms"). */
+export const portalSettings = pgTable("portal_settings", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").notNull(),
+  updatedBy: uuid("updated_by").references(() => users.id),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

@@ -7,6 +7,7 @@ import { apiFetch, ApiError } from "../lib/api";
 import { formatDate } from "../lib/people";
 import { ISSUER_ROLES, openPdf, policySections, type Policy } from "../lib/letters";
 import { useToast } from "../components/Toast";
+import { JoiningTermsCard } from "../components/JoiningTermsCard";
 
 type Draft = { id?: string; title: string; summary: string; body: string };
 
@@ -65,6 +66,7 @@ export default function Policies() {
         {isAdmin && <button className="btn" onClick={() => setDraft({ title: "", summary: "", body: "" })}><Plus size={16} /> Add policy</button>}
       </div>
 
+      {user && ["hr", "admin", "super_admin"].includes(user.role) && <JoiningTermsCard />}
       {policies === null && <div className="skeleton" style={{ height: 200 }} />}
       <div className="policy-list">
         {policies?.map((p, i) => {

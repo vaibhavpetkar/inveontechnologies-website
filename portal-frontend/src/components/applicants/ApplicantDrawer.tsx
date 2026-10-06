@@ -5,7 +5,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../Toast";
 import { apiFetch, ApiError } from "../../lib/api";
 import { nextSlot, toLocalInput, type Colleague, type ProviderInfo } from "../../lib/calendar";
-import { EDUCATION_LEVEL_LABELS, ENROLLMENT_LABELS, formatDateTime, rupees, SLOT_LABELS, timeLeft, type Journey } from "../../lib/journey";
+import { EDUCATION_LEVEL_LABELS, ENROLLMENT_LABELS, formatDateTime, rupees, SLOT_LABELS, timeLeft, type InterviewRound, type Journey } from "../../lib/journey";
 import { Avatar } from "../Avatar";
 import { EventDialog } from "../calendar/EventDialog";
 import { FileChip } from "../files/FileChip";
@@ -105,13 +105,13 @@ export function ApplicantDrawer({ applicationId, opportunityTitle, onClose, onCh
             </section>
 
             <section>
-              <h3><MessagesSquare size={16} /> HR round</h3>
+              <h3><MessagesSquare size={16} /> Interviews and exams</h3>
               {data.interviews.length > 0 && (
                 <ul className="mini-list">
                   {data.interviews.map((i) => (
                     <li key={i.id} className="interview-item">
                       <span>
-                        <strong>Round {i.roundNumber}</strong> · {formatDateTime(i.scheduledAt)}
+                        <strong>{roundTitle(i)}</strong> · {formatDateTime(i.scheduledAt)}{i.durationMinutes ? ` · ${i.durationMinutes} min` : ""}
                         {i.decision && <span className={`score-pill ${i.decision === "pass" ? "good" : i.decision === "fail" ? "bad" : ""}`}>{i.decision}</span>}
                         {i.feedback && <span className="muted-small interview-feedback">{i.feedback}</span>}
                       </span>
@@ -128,7 +128,7 @@ export function ApplicantDrawer({ applicationId, opportunityTitle, onClose, onCh
                               run("feedback", async () => {
                                 await apiFetch(`/api/v1/interviews/${i.id}/feedback`, { method: "POST", body: { decision, feedback }, accessToken });
                                 setFeedbackFor(null);
-                              }, decision === "pass" ? `${name} passed. They've been asked to pay or start a trial.` : "Result saved")
+                              }, decision === "pass" && i.kind !== "exam" && !e ? `${name} passed. They've been asked to pay or start a trial.` : "Result saved")
                             }
                           />
                         )}
@@ -137,21 +137,23 @@ export function ApplicantDrawer({ applicationId, opportunityTitle, onClose, onCh
                   ))}
                 </ul>
               )}
-              {!CLOSED.includes(status) && !e && !data.interviews.some((i) => i.status === "scheduled") && (
+              {!CLOSED.includes(status) && (
                 scheduling ? (
                   <ScheduleForm
                     people={people}
+                    providers={providers}
+                    firstRound={data.interviews.length === 0}
                     busy={busy === "schedule"}
                     onCancel={() => setScheduling(false)}
                     onSubmit={(body) =>
                       run("schedule", async () => {
                         await apiFetch(`/api/v1/applications/${applicationId}/interviews`, { method: "POST", body: { ...body, roundNumber: data.interviews.length + 1 }, accessToken });
                         setScheduling(false);
-                      }, "HR round booked. The candidate has been emailed.")
+                      }, "Booked. The candidate and interviewer have been emailed.")
                     }
                   />
                 ) : (
-                  <button className="btn btn-sm" onClick={() => setScheduling(true)}><CalendarPlus size={14} /> Book HR round</button>
+                  <button className="btn btn-sm" onClick={() => setScheduling(true)}><CalendarPlus size={14} /> Schedule interview or exam</button>
                 )
               )}
             </section>
@@ -218,16 +220,29 @@ export function ApplicantDrawer({ applicationId, opportunityTitle, onClose, onCh
               </section>
             )}
 
-            {e && ["paid", "waived"].includes(e.status) && (data.employee || isHr) && (
+            {(data.employee || (isHr && (!CLOSED.includes(status) || status === "selected"))) && (
               <section>
                 <h3><UserPlus size={16} /> Hire</h3>
                 {data.employee ? (
                   <p className="hired-line"><BadgeCheck size={16} /> Hired as {data.employee.businessId}, starting {new Date(data.employee.joiningDate).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}.</p>
                 ) : (
-                  <HireForm
+                  <DirectHire
+                    applicationId={applicationId}
+                    feeSettled={!!e && ["paid", "waived"].includes(e.status)}
                     busy={busy === "hire"}
-                    defaultStart={e.joiningDetails?.preferredStartDate?.slice(0, 10)}
-                    onSubmit={(body) => run("hire", () => apiFetch(`/api/v1/program/enrollments/${e.id}/hire`, { method: "POST", body, accessToken }), `${name} is hired`)}
+                    onSubmit={(body) =>
+                      run(
+                        "hire",
+                        async () => {
+                          const r = await apiFetch<{ letterIssued: boolean; letterRequested: boolean }>(
+                            e && ["paid", "waived"].includes(e.status) ? `/api/v1/program/enrollments/${e.id}/hire` : `/api/v1/applications/${applicationId}/hire`,
+                            { method: "POST", body, accessToken },
+                          );
+                          if (r.letterRequested) toast("An admin has been asked to issue the join letter.");
+                        },
+                        body.sendLetter ? `${name} is hired. The join letter is on its way.` : `${name} is hired`,
+                      )
+                    }
                   />
                 )}
               </section>
@@ -272,24 +287,79 @@ export function ApplicantDrawer({ applicationId, opportunityTitle, onClose, onCh
   );
 }
 
-function ScheduleForm({ people, busy, onSubmit, onCancel }: { people: Colleague[]; busy: boolean; onSubmit: (b: { interviewerId: string; scheduledAt: string; meetingUrl?: string }) => void; onCancel: () => void }) {
+const KIND_WORD = { interview: "interview", exam: "exam", hr: "HR round" } as const;
+
+function roundTitle(i: InterviewRound) {
+  const kind = KIND_WORD[i.kind ?? "interview"];
+  return i.subject ? `${i.subject} ${kind}` : `Round ${i.roundNumber} ${kind}`;
+}
+
+type ScheduleBody = { interviewerId: string; scheduledAt: string; meetingUrl?: string; subject?: string; kind: "interview" | "exam" | "hr"; durationMinutes: number; provider: "manual" | "google_meet" | "zoom" };
+
+function ScheduleForm({ people, providers, firstRound, busy, onSubmit, onCancel }: { people: Colleague[]; providers: ProviderInfo[]; firstRound: boolean; busy: boolean; onSubmit: (b: ScheduleBody) => void; onCancel: () => void }) {
   const { user } = useAuth();
-  const staff = people.filter((p) => ["hr", "admin", "super_admin", "manager"].includes(p.role));
-  const [form, setForm] = useState({ interviewerId: user?.id ?? "", when: toLocalInput(nextSlot()), meetingUrl: "" });
+  const staff = people.filter((p) => p.role !== "candidate");
+  const meet = providers.find((p) => p.name === "google_meet" && p.configured);
+  const zoom = providers.find((p) => p.name === "zoom" && p.configured);
+  const [form, setForm] = useState({
+    interviewerId: user?.id ?? "",
+    when: toLocalInput(nextSlot()),
+    meetingUrl: "",
+    subject: "",
+    kind: (firstRound ? "hr" : "interview") as ScheduleBody["kind"],
+    duration: "45",
+    provider: (meet ? "google_meet" : zoom ? "zoom" : "manual") as ScheduleBody["provider"],
+  });
   function submit(ev: FormEvent) {
     ev.preventDefault();
-    onSubmit({ interviewerId: form.interviewerId, scheduledAt: new Date(form.when).toISOString(), ...(form.meetingUrl.trim() ? { meetingUrl: form.meetingUrl.trim() } : {}) });
+    onSubmit({
+      interviewerId: form.interviewerId,
+      scheduledAt: new Date(form.when).toISOString(),
+      subject: form.subject.trim() || undefined,
+      kind: form.kind,
+      durationMinutes: Number(form.duration),
+      provider: form.provider,
+      ...(form.provider === "manual" && form.meetingUrl.trim() ? { meetingUrl: form.meetingUrl.trim() } : {}),
+    });
   }
   return (
     <motion.form className="inline-form" onSubmit={submit} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
-      <div className="field"><label htmlFor="hr-who">Interviewer</label>
+      <div className="segmented small" role="radiogroup" aria-label="Type">
+        {(["hr", "interview", "exam"] as const).map((k) => (
+          <button type="button" key={k} role="radio" aria-checked={form.kind === k} className={form.kind === k ? "active" : ""} onClick={() => setForm({ ...form, kind: k })}>
+            {form.kind === k && <motion.span layoutId="round-kind" className="segmented-pill" />}
+            <span>{k === "hr" ? "HR round" : k === "exam" ? "Exam" : "Interview"}</span>
+          </button>
+        ))}
+      </div>
+      <div className="field"><label htmlFor="hr-subject">Subject {form.kind === "hr" ? "(optional)" : ""}</label>
+        <input id="hr-subject" list="hr-subjects" maxLength={200} required={form.kind !== "hr"} value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} placeholder={form.kind === "exam" ? "e.g. Java, Aptitude, SQL" : "e.g. React technical"} />
+        <datalist id="hr-subjects">{["Java", "Python", "JavaScript", "React", "Node.js", "SQL", "C#", "Aptitude", "Communication", "System design"].map((x) => <option key={x} value={x} />)}</datalist>
+      </div>
+      <div className="field"><label htmlFor="hr-who">{form.kind === "exam" ? "Invigilator" : "Interviewer"}</label>
         <select id="hr-who" required value={form.interviewerId} onChange={(e) => setForm({ ...form, interviewerId: e.target.value })}>
           {staff.length === 0 && user && <option value={user.id}>Me</option>}
           {staff.map((p) => <option key={p.id} value={p.id}>{p.id === user?.id ? `${p.name} (me)` : p.name}</option>)}
         </select>
       </div>
-      <div className="field"><label htmlFor="hr-when">When</label><input id="hr-when" type="datetime-local" required value={form.when} onChange={(e) => setForm({ ...form, when: e.target.value })} /></div>
-      <div className="field"><label htmlFor="hr-url">Meeting link (optional)</label><input id="hr-url" type="url" placeholder="https://meet.google.com/…" value={form.meetingUrl} onChange={(e) => setForm({ ...form, meetingUrl: e.target.value })} /></div>
+      <div className="field-row field-row-2 even">
+        <div className="field"><label htmlFor="hr-when">When</label><input id="hr-when" type="datetime-local" required value={form.when} onChange={(e) => setForm({ ...form, when: e.target.value })} /></div>
+        <div className="field"><label htmlFor="hr-len">Length</label>
+          <select id="hr-len" value={form.duration} onChange={(e) => setForm({ ...form, duration: e.target.value })}>
+            {[15, 30, 45, 60, 90, 120, 180].map((m) => <option key={m} value={m}>{m < 60 ? `${m} min` : `${m / 60} h`}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="field"><label htmlFor="hr-prov">Call</label>
+        <select id="hr-prov" value={form.provider} onChange={(e) => setForm({ ...form, provider: e.target.value as ScheduleBody["provider"] })}>
+          <option value="google_meet" disabled={!meet}>Google Meet, link made automatically{meet ? "" : " (not set up)"}</option>
+          <option value="zoom" disabled={!zoom}>Zoom, link made automatically{zoom ? "" : " (not set up)"}</option>
+          <option value="manual">Paste my own link, or in person</option>
+        </select>
+      </div>
+      {form.provider === "manual" && (
+        <div className="field"><label htmlFor="hr-url">Meeting link (optional)</label><input id="hr-url" type="url" placeholder="https://meet.google.com/…" value={form.meetingUrl} onChange={(e) => setForm({ ...form, meetingUrl: e.target.value })} /></div>
+      )}
       <div className="mini-actions"><button className="btn btn-sm" disabled={busy}>{busy ? "Booking…" : "Book and email"}</button><button type="button" className="btn btn-sm btn-secondary" onClick={onCancel}>Cancel</button></div>
     </motion.form>
   );
@@ -312,36 +382,106 @@ function FeedbackForm({ busy, onSubmit, onCancel }: { busy: boolean; onSubmit: (
   );
 }
 
-type HireBody = { employeeType: "intern" | "full_time" | "contract"; joiningDate: string; durationMonths?: number; designationTitle?: string; monthlyPay?: number };
+type HireBody = { employeeType: "intern" | "full_time" | "contract"; joiningDate: string; durationMonths?: number; designationTitle?: string; department?: string; monthlyPay?: number; sendLetter: boolean };
 
-function HireForm({ busy, defaultStart, onSubmit }: { busy: boolean; defaultStart?: string; onSubmit: (body: HireBody) => void }) {
-  const [type, setType] = useState<HireBody["employeeType"]>("intern");
-  const [start, setStart] = useState(defaultStart ?? new Date().toISOString().slice(0, 10));
-  const [months, setMonths] = useState("3");
-  const [title, setTitle] = useState("Software Intern");
-  const [pay, setPay] = useState("");
+interface HireDefaults {
+  candidate: { name: string; email: string; phone: string | null; city: string | null; education: string | null; githubUsername: string | null };
+  applicationStatus: string;
+  opportunity: { id: string; title: string; kind: string } | null;
+  enrollmentStatus: string | null;
+  canIssueLetter: boolean;
+  defaults: { employeeType: HireBody["employeeType"]; joiningDate: string; durationMonths: number | null; designationTitle: string; department: string; monthlyPay: number | null };
+}
+
+/**
+ * Hire someone straight from their application, at any stage: everything the
+ * portal already knows is filled in, and the join letter goes out with it.
+ */
+function DirectHire({ applicationId, feeSettled, busy, onSubmit }: { applicationId: string; feeSettled: boolean; busy: boolean; onSubmit: (body: HireBody) => void }) {
+  const { accessToken } = useAuth();
+  const [open, setOpen] = useState(feeSettled);
+  const [info, setInfo] = useState<HireDefaults | null>(null);
+  const [form, setForm] = useState<{ type: HireBody["employeeType"]; start: string; months: string; title: string; department: string; pay: string; sendLetter: boolean } | null>(null);
+
+  useEffect(() => {
+    if (!open || info) return;
+    apiFetch<HireDefaults>(`/api/v1/applications/${applicationId}/hire-defaults`, { accessToken })
+      .then((r) => {
+        setInfo(r);
+        setForm({
+          type: r.defaults.employeeType,
+          start: r.defaults.joiningDate,
+          months: r.defaults.durationMonths ? String(r.defaults.durationMonths) : "",
+          title: r.defaults.designationTitle,
+          department: r.defaults.department,
+          pay: r.defaults.monthlyPay ? String(r.defaults.monthlyPay) : "",
+          sendLetter: true,
+        });
+      })
+      .catch(() => setForm({ type: "intern", start: new Date().toISOString().slice(0, 10), months: "3", title: "", department: "", pay: "", sendLetter: true }));
+  }, [open, info, applicationId, accessToken]);
+
+  if (!open) {
+    return (
+      <div className="hire-direct">
+        <p className="muted-small">Skip the remaining steps and bring them on board now as an intern, employee or contractor.</p>
+        <button className="btn btn-sm btn-secondary" onClick={() => setOpen(true)}><UserPlus size={14} /> Hire directly</button>
+      </div>
+    );
+  }
+  if (!form) return <div className="skeleton" style={{ height: 180 }} />;
+
   const submit = (ev: FormEvent) => {
     ev.preventDefault();
     onSubmit({
-      employeeType: type,
-      joiningDate: start,
-      durationMonths: type === "full_time" || !months ? undefined : Number(months),
-      designationTitle: title.trim() || undefined,
-      monthlyPay: pay ? Number(pay) : undefined,
+      employeeType: form.type,
+      joiningDate: form.start,
+      durationMonths: form.type === "full_time" || !form.months ? undefined : Number(form.months),
+      designationTitle: form.title.trim() || undefined,
+      department: form.department.trim() || undefined,
+      monthlyPay: form.pay ? Number(form.pay) : undefined,
+      sendLetter: form.sendLetter,
     });
   };
+  const c = info?.candidate;
+
   return (
-    <form className="inline-form hire-form" onSubmit={submit}>
-      <div className="field"><label htmlFor="hire-type">Joins as</label>
-        <select id="hire-type" value={type} onChange={(ev) => { const t = ev.target.value as HireBody["employeeType"]; setType(t); if (t !== "intern" && title === "Software Intern") setTitle(""); }}>
-          <option value="intern">Intern</option><option value="full_time">Full-time employee</option><option value="contract">Contract</option>
-        </select>
+    <motion.form className="inline-form direct-hire" onSubmit={submit} initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }}>
+      {c && (
+        <dl className="joining-dl hire-facts">
+          <dt>Name</dt><dd>{c.name}</dd>
+          <dt>Email</dt><dd>{c.email}</dd>
+          {c.phone && <><dt>Phone</dt><dd>{c.phone}</dd></>}
+          {c.city && <><dt>City</dt><dd>{c.city}</dd></>}
+          {c.education && <><dt>Education</dt><dd>{c.education}</dd></>}
+          {c.githubUsername && <><dt>GitHub</dt><dd>@{c.githubUsername}</dd></>}
+        </dl>
+      )}
+      <div className="segmented small" role="radiogroup" aria-label="Joins as">
+        {(["intern", "full_time", "contract"] as const).map((t) => (
+          <button type="button" key={t} role="radio" aria-checked={form.type === t} className={form.type === t ? "active" : ""} onClick={() => setForm({ ...form, type: t })}>
+            {form.type === t && <motion.span layoutId="hire-type" className="segmented-pill" />}
+            <span>{t === "intern" ? "Intern" : t === "full_time" ? "Full-time" : "Contract"}</span>
+          </button>
+        ))}
       </div>
-      <div className="field"><label htmlFor="hire-start">Joining date</label><input id="hire-start" type="date" required value={start} onChange={(ev) => setStart(ev.target.value)} /></div>
-      {type !== "full_time" && <div className="field"><label htmlFor="hire-months">Months</label><input id="hire-months" type="number" min={1} max={60} value={months} onChange={(ev) => setMonths(ev.target.value)} /></div>}
-      <div className="field"><label htmlFor="hire-title">Designation</label><input id="hire-title" value={title} onChange={(ev) => setTitle(ev.target.value)} placeholder="e.g. Frontend Developer" /></div>
-      <div className="field"><label htmlFor="hire-pay">{type === "intern" ? "Monthly stipend (₹)" : "Monthly salary (₹)"}</label><input id="hire-pay" type="number" min={0} value={pay} onChange={(ev) => setPay(ev.target.value)} placeholder="Optional, can be set later" /></div>
-      <button className="btn" disabled={busy}><UserPlus size={16} /> {busy ? "Hiring…" : "Hire"}</button>
-    </form>
+      <div className="field-row field-row-2 even">
+        <div className="field"><label htmlFor="hire-start">Joining date</label><input id="hire-start" type="date" required value={form.start} onChange={(ev) => setForm({ ...form, start: ev.target.value })} /></div>
+        {form.type !== "full_time" && <div className="field"><label htmlFor="hire-months">Months</label><input id="hire-months" type="number" min={1} max={60} value={form.months} onChange={(ev) => setForm({ ...form, months: ev.target.value })} /></div>}
+      </div>
+      <div className="field-row field-row-2 even">
+        <div className="field"><label htmlFor="hire-title">Designation</label><input id="hire-title" value={form.title} onChange={(ev) => setForm({ ...form, title: ev.target.value })} placeholder="e.g. Frontend Developer" /></div>
+        <div className="field"><label htmlFor="hire-dept">Department</label><input id="hire-dept" value={form.department} onChange={(ev) => setForm({ ...form, department: ev.target.value })} placeholder="e.g. Engineering" /></div>
+      </div>
+      <div className="field"><label htmlFor="hire-pay">{form.type === "intern" ? "Monthly stipend (₹)" : "Monthly salary (₹)"}</label><input id="hire-pay" type="number" min={0} value={form.pay} onChange={(ev) => setForm({ ...form, pay: ev.target.value })} placeholder="Optional, can be set later" /></div>
+      <label className="check-field">
+        <input type="checkbox" checked={form.sendLetter} onChange={(ev) => setForm({ ...form, sendLetter: ev.target.checked })} />
+        <span>{info && !info.canIssueLetter ? "Ask an admin to issue the join letter" : "Email the join letter with the terms and conditions"}</span>
+      </label>
+      <div className="mini-actions">
+        <button className="btn" disabled={busy}><UserPlus size={16} /> {busy ? "Hiring…" : "Hire"}</button>
+        {!feeSettled && <button type="button" className="btn btn-secondary" onClick={() => setOpen(false)}>Cancel</button>}
+      </div>
+    </motion.form>
   );
 }

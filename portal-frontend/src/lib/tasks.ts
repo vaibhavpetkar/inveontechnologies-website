@@ -21,6 +21,10 @@ export interface Task {
   githubIssueUrl?: string | null;
   githubIssueState?: "open" | "closed" | null;
   githubSyncedAt?: string | null;
+  milestoneId?: string | null;
+  startedAt?: string | null;
+  expectedFinishAt?: string | null;
+  progressPercent?: number;
   createdAt: string;
   updatedAt: string;
 }

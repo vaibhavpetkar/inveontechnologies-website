@@ -81,6 +81,10 @@ export interface InterviewRound {
   scheduledAt: string;
   timezone: string;
   meetingUrl: string | null;
+  subject?: string | null;
+  kind?: "interview" | "exam" | "hr";
+  durationMinutes?: number;
+  meetingProvider?: "manual" | "google_meet" | "zoom";
   status: "scheduled" | "completed" | "cancelled" | "no_show";
   decision?: "pass" | "fail" | "hold" | null;
   feedback?: string | null;

@@ -75,6 +75,11 @@ const envSchema = z.object({
   GITHUB_DEFAULT_REPO: z.string().regex(/^[\w.-]+\/[\w.-]+$/).optional(),
   // Test-only override of the GitHub API base URL.
   GITHUB_API_BASE: z.string().optional(),
+  // Key that encrypts the passwords people keep in shared notes (any long
+  // random string, e.g. `openssl rand -base64 32`). Without it the key is
+  // derived from PORTAL_JWT_SECRET, so changing that secret would make
+  // stored passwords unreadable; set this once and keep it.
+  PORTAL_VAULT_KEY: z.string().min(32, "PORTAL_VAULT_KEY must be at least 32 characters").optional(),
   // Day of the month (India time) from which the payroll job drafts that month's payslips for HR to review.
   PAYROLL_DRAFT_DAY: z.coerce.number().int().min(1).max(28).default(25),
   // Require candidates to verify their email before applying. Off by

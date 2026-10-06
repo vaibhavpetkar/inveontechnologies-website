@@ -10,6 +10,7 @@ import { Avatar } from "../Avatar";
 import { useToast } from "../Toast";
 import { GithubPanel } from "./GithubPanel";
 import { AttachmentsPanel } from "./AttachmentsPanel";
+import { TaskUpdates } from "./TaskUpdates";
 import { CAN_ASSIGN_OTHERS } from "../../lib/tasks";
 
 interface Props {
@@ -20,7 +21,7 @@ interface Props {
   onChanged: () => void;
 }
 
-type Tab = "comments" | "activity";
+type Tab = "updates" | "comments" | "activity";
 
 export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged }: Props) {
   const { user, accessToken } = useAuth();
@@ -30,7 +31,7 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged }: Props) 
   const [comments, setComments] = useState<TaskComment[]>([]);
   const [timeline, setTimeline] = useState<TaskEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("comments");
+  const [tab, setTab] = useState<Tab>("updates");
   const [comment, setComment] = useState("");
   const [hours, setHours] = useState("");
   const [busy, setBusy] = useState(false);
@@ -229,16 +230,28 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged }: Props) 
             )}
 
             <div className="tabs" role="tablist">
-              {(["comments", "activity"] as Tab[]).map((t) => (
+              {(["updates", "comments", "activity"] as Tab[]).map((t) => (
                 <button key={t} role="tab" aria-selected={tab === t} className={`tab${tab === t ? " active" : ""}`} onClick={() => setTab(t)}>
                   {tab === t && <motion.span layoutId="drawer-tab" className="tab-underline" />}
-                  {t === "comments" ? `Comments (${comments.length})` : "Activity"}
+                  {t === "updates" ? "Work updates" : t === "comments" ? `Comments (${comments.length})` : "Activity"}
                 </button>
               ))}
             </div>
 
             <AnimatePresence mode="wait">
-              {tab === "comments" ? (
+              {tab === "updates" ? (
+                <motion.div key="updates" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }}>
+                  <TaskUpdates
+                    task={task}
+                    canPost={!!user && (task.assigneeId === user.id || task.createdBy === user.id || CAN_ASSIGN_OTHERS.includes(user.role))}
+                    name={name}
+                    onChanged={() => {
+                      load();
+                      onChanged();
+                    }}
+                  />
+                </motion.div>
+              ) : tab === "comments" ? (
                 <motion.div key="comments" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }}>
                   {comments.length === 0 && <p className="muted-small">No comments yet.</p>}
                   {comments.map((c) => (
@@ -294,6 +307,10 @@ function describeEvent(ev: TaskEvent): string {
       return "commented";
     case "attachment_added":
       return "added an attachment";
+    case "progress":
+      return "posted a progress update";
+    case "blocker":
+      return "raised a blocker";
     default:
       if (ev.action === "github_link") return "linked a GitHub issue";
       if (ev.action === "github_unlink") return "unlinked the GitHub issue";
