@@ -8,6 +8,7 @@ import { TaskCard } from "../components/tasks/TaskCard";
 import { TaskDrawer } from "../components/tasks/TaskDrawer";
 import { NewTaskDialog } from "../components/tasks/NewTaskDialog";
 import { ImportIssuesDialog } from "../components/tasks/ImportIssuesDialog";
+import { StartWorkDialog, type Kickoff } from "../components/tasks/StartWorkDialog";
 import { useGithubStatus } from "../lib/github";
 import { useToast } from "../components/Toast";
 import { useAuth } from "../context/AuthContext";
@@ -37,6 +38,9 @@ export default function Tasks() {
   const { status: github } = useGithubStatus(accessToken);
   const [dragging, setDragging] = useState<Task | null>(null);
   const [overColumn, setOverColumn] = useState<TaskStatus | null>(null);
+  // Starting work asks for a short plan first; the promise resolves once they start or back out.
+  const [starting, setStarting] = useState<{ task: Task; resolve: (k: Kickoff | undefined | false) => void } | null>(null);
+  const askKickoff = (task: Task) => new Promise<Kickoff | undefined | false>((resolve) => setStarting({ task, resolve }));
 
   const isStaff = !!user && CAN_ASSIGN_OTHERS.includes(user.role);
 
@@ -89,10 +93,16 @@ export default function Tasks() {
   /** Optimistically moves the card, rolling back if the API refuses. */
   const move = useCallback(
     async (task: Task, to: TaskStatus, note?: string) => {
+      let kickoff: Kickoff | undefined;
+      if (to === "in_progress" && task.assigneeId === user?.id) {
+        const answer = await askKickoff(task);
+        if (answer === false) return false;
+        kickoff = answer;
+      }
       const before = tasks;
       setTasks((ts) => ts?.map((t) => (t.id === task.id ? { ...t, status: to } : t)) ?? ts);
       try {
-        await apiFetch(`/api/v1/tasks/${task.id}/transition`, { method: "POST", body: { toStatus: to, note }, accessToken });
+        await apiFetch(`/api/v1/tasks/${task.id}/transition`, { method: "POST", body: { toStatus: to, note, kickoff }, accessToken });
         toast(`Moved to ${STATUS_META[to].label.toLowerCase()}`);
         return true;
       } catch (err) {
@@ -101,7 +111,7 @@ export default function Tasks() {
         return false;
       }
     },
-    [tasks, accessToken, toast],
+    [tasks, accessToken, toast, user?.id],
   );
 
   function onDrop(to: TaskStatus) {
@@ -283,6 +293,19 @@ export default function Tasks() {
               setTasks((ts) => [task, ...(ts ?? [])]);
               const who = task.assigneeId && task.assigneeId !== user?.id ? byId.get(task.assigneeId) : undefined;
               toast(who ? `Assigned to ${displayName(who.email)}` : "Task created");
+            }}
+          />
+        )}
+        {starting && (
+          <StartWorkDialog
+            task={starting.task}
+            onCancel={() => {
+              starting.resolve(false);
+              setStarting(null);
+            }}
+            onStart={(k) => {
+              starting.resolve(k);
+              setStarting(null);
             }}
           />
         )}

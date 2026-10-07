@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, CalendarCheck, CalendarDays, Briefcase, ClipboardCheck, FileCheck2, FileText, GraduationCap, IndianRupee, KanbanSquare, LayoutDashboard, MessagesSquare, ReceiptIndianRupee, ScrollText, UserRound, Users, type LucideIcon } from "lucide-react";
+import { BarChart3, FolderKanban, FolderOpen, NotebookPen, UsersRound, BookOpen, CalendarCheck, CalendarDays, Briefcase, ClipboardCheck, FileCheck2, FileText, GraduationCap, IndianRupee, KanbanSquare, LayoutDashboard, MessagesSquare, ReceiptIndianRupee, ScrollText, UserRound, Users, type LucideIcon } from "lucide-react";
 import type { UserRole } from "../context/AuthContext";
 
 export interface NavItem {
@@ -16,6 +16,7 @@ export function navForRole(role: UserRole): NavItem[] {
       { href: "/internships", label: "Internships", icon: GraduationCap },
       { href: "/opportunities", label: "Opportunities", icon: Briefcase },
       { href: "/candidate", label: "My applications", icon: FileText },
+      { href: "/documents", label: "My documents", icon: FolderOpen },
       { href: "/assessments", label: "Exams", icon: ClipboardCheck },
       { href: "/calendar", label: "Calendar", icon: CalendarDays },
       { href: "/courses", label: "Courses", icon: BookOpen },
@@ -28,15 +29,19 @@ export function navForRole(role: UserRole): NavItem[] {
       { href: "/admin", label: "Console", icon: LayoutDashboard },
       { href: "/people", label: role === "manager" ? "My team" : "People", icon: Users },
       { href: "/tasks", label: "Tasks", icon: KanbanSquare },
+      { href: "/projects", label: "Projects", icon: FolderKanban },
+      { href: "/team", label: "Team board", icon: UsersRound },
       { href: "/reviews", label: "Reviews", icon: FileCheck2 },
       { href: "/attendance", label: "Attendance", icon: CalendarCheck },
       ...(role === "manager" ? [] : [{ href: "/opportunities", label: "Openings", icon: Briefcase }]),
+      { href: "/documents", label: "Documents", icon: FolderOpen },
       ...(role === "manager" ? [] : [{ href: "/payroll", label: "Payroll", icon: IndianRupee }]),
       ...(role === "manager" ? [] : [{ href: "/reports", label: "Reports", icon: BarChart3 }]),
       { href: "/calendar", label: "Calendar", icon: CalendarDays },
       { href: "/courses", label: "Courses", icon: BookOpen },
       { href: "/internships", label: "Internships", icon: GraduationCap },
       { href: "/chat", label: "Chat", icon: MessagesSquare },
+      { href: "/notes", label: "Notes", icon: NotebookPen },
       { href: "/policies", label: "Policies", icon: ScrollText },
     ];
   }
@@ -44,11 +49,14 @@ export function navForRole(role: UserRole): NavItem[] {
     { href: "/employee", label: "Workspace", icon: LayoutDashboard },
     { href: "/internships", label: "Internship", icon: GraduationCap },
     { href: "/tasks", label: "My tasks", icon: KanbanSquare },
+    { href: "/projects", label: "Projects", icon: FolderKanban },
+    { href: "/team", label: "Team board", icon: UsersRound },
     { href: "/attendance", label: "Attendance", icon: CalendarCheck },
     { href: "/payslips", label: "Pay", icon: ReceiptIndianRupee },
     { href: "/calendar", label: "Calendar", icon: CalendarDays },
     { href: "/courses", label: "Courses", icon: BookOpen },
     { href: "/chat", label: "Chat", icon: MessagesSquare },
+    { href: "/notes", label: "Notes", icon: NotebookPen },
     { href: "/policies", label: "Policies", icon: ScrollText },
   ];
 }

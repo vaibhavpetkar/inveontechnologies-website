@@ -1,23 +1,20 @@
 import { Router } from "express";
 import { z } from "zod";
-import { and, asc, desc, eq, inArray, lte } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
-import { companyPolicies, departments, designations, employeeLetters, employees, salaryStructures, type AppointmentDetails } from "../shared/db/schema.js";
+import { companyPolicies, employeeLetters, employees } from "../shared/db/schema.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import { slugify } from "../shared/slugify.js";
 import { notify } from "../notifications/service.js";
-import { monthlyGross } from "../payroll/calc.js";
-import { internshipEnd } from "../payroll/service.js";
 import type { Env } from "../shared/env.js";
 import { displayNameFor } from "./onboarding.js";
+import { appointmentDefaults, getJoiningTerms, issueAppointmentLetter, issueLetterSchema, joiningTermsSchema, saveJoiningTerms } from "./hiring.js";
 import {
   activePolicies,
   appointmentFilename,
   appointmentPdf,
-  appointmentReference,
-  appointmentText,
   completeLetterChecklistItems,
   employeeWithUser,
   ensureDefaultPolicies,
@@ -25,7 +22,6 @@ import {
   policyFilename,
   queueAppointmentEmail,
   renderPolicyPdf,
-  snapshotPolicy,
 } from "./appointment.js";
 
 // Issuing an appointment letter is an admin act (it binds the company);
@@ -34,36 +30,11 @@ const ISSUER_ROLES = ["admin", "super_admin"] as const;
 const READER_ROLES = ["hr", "admin", "super_admin"] as const;
 const isReader = (role: string) => (READER_ROLES as readonly string[]).includes(role);
 
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD");
-
-const issueSchema = z.object({
-  designation: z.string().trim().min(2).max(200),
-  department: z.string().trim().min(2).max(200),
-  joiningDate: isoDate,
-  durationMonths: z.number().int().min(1).max(60).nullable().optional(),
-  reportingTo: z.string().trim().max(200).nullable().optional(),
-  workLocation: z.string().trim().min(2).max(300),
-  workHours: z.string().trim().min(2).max(300),
-  monthlyPay: z.number().min(0).max(100_000_000).nullable().optional(),
-  probationMonths: z.number().int().min(0).max(24).nullable().optional(),
-  noticeDays: z.number().int().min(0).max(180),
-  additionalTerms: z.string().trim().max(3000).nullable().optional(),
-  signatoryName: z.string().trim().min(2).max(200),
-  signatoryTitle: z.string().trim().min(2).max(200),
-  policyIds: z.array(z.string().uuid()).max(50).optional(),
-  sendEmail: z.boolean().default(true),
-});
-
 const policySchema = z.object({
   title: z.string().trim().min(3).max(200),
   summary: z.string().trim().min(3).max(500),
   body: z.string().trim().min(20).max(50_000),
 });
-
-function endDateFor(joiningDate: string, durationMonths: number | null | undefined) {
-  if (!durationMonths) return null;
-  return internshipEnd({ joiningDate: new Date(`${joiningDate}T00:00:00Z`), durationMonths })!.toISOString().slice(0, 10);
-}
 
 export function appointmentRouter(db: Database, env: Env) {
   const router = Router();
@@ -119,102 +90,33 @@ export function appointmentRouter(db: Database, env: Env) {
 
   // ---- Appointment letters ----
 
-  /** Suggested terms for the issue form, from the person's record and pay. */
+  /** Suggested terms for the issue form, from the person's record, pay and the joining terms. */
   router.get("/employees/:id/appointment-defaults", requireAuth(env), requireRole(...READER_ROLES), async (req, res) => {
-    const found = await employeeWithUser(db, req.params.id);
-    if (!found) throw new NotFoundError("Employee not found");
-    const { employee, user } = found;
-    const [department, designation, pay] = await Promise.all([
-      employee.departmentId ? db.query.departments.findFirst({ where: eq(departments.id, employee.departmentId) }) : null,
-      employee.designationId ? db.query.designations.findFirst({ where: eq(designations.id, employee.designationId) }) : null,
-      db.query.salaryStructures.findFirst({ where: and(eq(salaryStructures.employeeId, employee.id), lte(salaryStructures.effectiveFrom, new Date(Date.now() + 366 * 86400000))), orderBy: [desc(salaryStructures.effectiveFrom), desc(salaryStructures.createdAt)] }),
-    ]);
-    const intern = employee.employeeType === "intern";
-    const joiningDate = employee.joiningDate.toISOString().slice(0, 10);
+    const { defaults, signatoryName, signatoryTitle } = await appointmentDefaults(db, req.params.id);
     res.json({
-      defaults: {
-        name: await displayNameFor(db, employee.userId),
-        email: user.email,
-        employeeId: employee.businessId,
-        employeeType: employee.employeeType,
-        designation: designation?.title ?? (intern ? "Software Development Intern" : ""),
-        department: department?.name ?? "Engineering",
-        joiningDate,
-        durationMonths: employee.durationMonths ?? (intern ? 6 : null),
-        reportingTo: employee.managerId ? await displayNameFor(db, employee.managerId) : null,
-        workLocation: intern ? "Remote (India)" : "Inveon Technologies office, or remote as agreed",
-        workHours: intern ? "Monday to Friday, 6 hours a day between 10:00 AM and 7:00 PM IST" : "Monday to Friday, 10:00 AM to 6:00 PM IST",
-        monthlyPay: pay ? monthlyGross(pay.components) : null,
-        probationMonths: employee.employeeType === "full_time" ? 6 : null,
-        noticeDays: intern ? 7 : 30,
-        additionalTerms: null,
-      },
+      defaults,
+      signatory: { name: signatoryName, title: signatoryTitle },
       policies: (await activePolicies(db)).map((p) => ({ id: p.id, title: p.title, summary: p.summary, version: p.version })),
     });
   });
 
   router.post("/employees/:id/appointment-letter", requireAuth(env), requireRole(...ISSUER_ROLES), async (req, res) => {
-    const body = issueSchema.parse(req.body);
-    const found = await employeeWithUser(db, req.params.id);
-    if (!found) throw new NotFoundError("Employee not found");
-    const { employee, user } = found;
-    if (employee.status === "offboarded") throw new AppError("EMPLOYEE_OFFBOARDED", "This person has left; issue letters only to current staff", 409);
+    const body = issueLetterSchema.parse(req.body);
+    const letter = await issueAppointmentLetter(db, { employeeId: req.params.id, body, actorUserId: req.user!.sub, ipAddress: req.ip });
+    res.status(201).json({ letter, emailQueued: body.sendEmail });
+  });
 
-    const chosen = body.policyIds
-      ? await db.query.companyPolicies.findMany({ where: and(inArray(companyPolicies.id, body.policyIds.length ? body.policyIds : ["00000000-0000-0000-0000-000000000000"]), eq(companyPolicies.active, true)), orderBy: asc(companyPolicies.orderIndex) })
-      : await activePolicies(db);
-    const policies = chosen.map(snapshotPolicy);
+  // ---- Joining terms: the standard terms every join letter starts from ----
 
-    const details: AppointmentDetails = {
-      name: await displayNameFor(db, employee.userId),
-      email: user.email,
-      employeeId: employee.businessId ?? "",
-      employeeType: employee.employeeType,
-      designation: body.designation,
-      department: body.department,
-      joiningDate: body.joiningDate,
-      durationMonths: body.durationMonths ?? null,
-      endDate: endDateFor(body.joiningDate, body.durationMonths),
-      reportingTo: body.reportingTo || null,
-      workLocation: body.workLocation,
-      workHours: body.workHours,
-      monthlyPay: body.monthlyPay ?? null,
-      probationMonths: employee.employeeType === "intern" ? null : body.probationMonths ?? null,
-      noticeDays: body.noticeDays,
-      additionalTerms: body.additionalTerms || null,
-    };
+  router.get("/settings/joining-terms", requireAuth(env), requireRole(...READER_ROLES), async (req, res) => {
+    res.json({ terms: await getJoiningTerms(db), canEdit: (ISSUER_ROLES as readonly string[]).includes(req.user!.role) });
+  });
 
-    const previous = await db.query.employeeLetters.findMany({ where: and(eq(employeeLetters.employeeId, employee.id), eq(employeeLetters.letterType, "appointment")), columns: { version: true } });
-    const version = previous.length ? Math.max(...previous.map((l) => l.version)) + 1 : 1;
-    const signatory = { signatoryName: body.signatoryName, signatoryTitle: body.signatoryTitle };
-
-    const letter = await db.transaction(async (tx) => {
-      const [created] = await tx
-        .insert(employeeLetters)
-        .values({ employeeId: employee.id, letterType: "appointment", version, content: appointmentText(signatory, details, policies), ...signatory, generatedBy: req.user!.sub, details, policies })
-        .returning();
-      const [withRef] = await tx.update(employeeLetters).set({ referenceNo: appointmentReference(created.seqNumber, created.generatedAt) }).where(eq(employeeLetters.id, created.id)).returning();
-      return withRef;
-    });
-
-    if (body.sendEmail) await queueAppointmentEmail(db, letter.id, user.email);
-    await notify(db, {
-      userIds: [employee.userId],
-      actorUserId: req.user!.sub,
-      kind: "letter.appointment",
-      title: version > 1 ? "Your updated appointment letter is ready" : "Your appointment letter is ready",
-      body: `${details.designation}, joining ${details.joiningDate}. Read it and the company policies, then accept it from your workspace.`,
-      link: "/employee",
-    });
-    await writeAuditLog(db, {
-      actorUserId: req.user!.sub,
-      action: "employee_letter.appointment_issue",
-      entityType: "employee_letter",
-      entityId: letter.id,
-      metadata: { employeeId: employee.id, version, referenceNo: letter.referenceNo, policies: policies.map((p) => `${p.slug}@${p.version}`), emailed: body.sendEmail },
-      ipAddress: req.ip,
-    });
-    res.status(201).json({ letter: (await lettersFor(db, employee.id)).find((l) => l.id === letter.id), emailQueued: body.sendEmail });
+  router.put("/settings/joining-terms", requireAuth(env), requireRole(...ISSUER_ROLES), async (req, res) => {
+    const terms = joiningTermsSchema.parse(req.body);
+    await saveJoiningTerms(db, terms, req.user!.sub);
+    await writeAuditLog(db, { actorUserId: req.user!.sub, action: "settings.joining_terms", entityType: "portal_setting", entityId: null, ipAddress: req.ip });
+    res.json({ terms });
   });
 
   router.get("/employees/:id/appointment-letters", requireAuth(env), async (req, res) => {

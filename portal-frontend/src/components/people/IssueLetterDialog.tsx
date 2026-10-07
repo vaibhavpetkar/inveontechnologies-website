@@ -26,10 +26,13 @@ export function IssueLetterDialog({ employeeId, onClose, onIssued }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    apiFetch<{ defaults: AppointmentDetails; policies: PolicyChoice[] }>(`/api/v1/employees/${employeeId}/appointment-defaults`, { accessToken })
+    apiFetch<{ defaults: AppointmentDetails; policies: PolicyChoice[]; signatory?: { name: string; title: string } }>(`/api/v1/employees/${employeeId}/appointment-defaults`, { accessToken })
       .then((r) => {
         setForm(r.defaults);
         setPolicies(r.policies);
+        // The signatory set in Policies, unless it's still the placeholder.
+        if (r.signatory && r.signatory.name !== "Authorised Signatory") setSignatory(r.signatory);
+        else if (r.signatory) setSignatory((s) => ({ ...s, title: r.signatory!.title }));
         setPicked(new Set(r.policies.map((p) => p.id)));
       })
       .catch(() => setError("Couldn't load this person's details."));

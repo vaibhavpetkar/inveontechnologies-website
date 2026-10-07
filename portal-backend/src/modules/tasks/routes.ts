@@ -10,6 +10,8 @@ import {
   taskComments,
   taskTimeEntries,
   taskEvents,
+  taskUpdates,
+  projectMilestones,
   courseEnrollments,
   employees,
   projects,
@@ -42,6 +44,7 @@ const createTaskSchema = z.object({
   priority: z.enum(["low", "medium", "high", "urgent"]).default("medium"),
   estimateHours: z.number().min(0).optional(),
   dueDate: z.string().datetime().optional(),
+  milestoneId: z.string().uuid().optional(),
 });
 
 const updateTaskSchema = z.object({
@@ -51,6 +54,7 @@ const updateTaskSchema = z.object({
   priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
   estimateHours: z.number().min(0).optional(),
   dueDate: z.string().datetime().optional(),
+  milestoneId: z.string().uuid().nullable().optional(),
 });
 
 const listQuerySchema = z.object({
@@ -61,13 +65,32 @@ const listQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
 
-const transitionSchema = z.object({ toStatus: z.enum(["in_progress", "in_review", "done", "changes_requested", "cancelled"]), note: z.string().max(2000).optional() });
+// Starting work can carry a kickoff: the plan, when it should be finished, and a branch or PR link.
+const kickoffSchema = z.object({
+  plan: z.string().trim().min(3).max(4000),
+  expectedFinishAt: z.string().datetime({ offset: true }).optional(),
+  branchOrLink: z.string().trim().max(500).optional(),
+});
+const transitionSchema = z.object({ toStatus: z.enum(["in_progress", "in_review", "done", "changes_requested", "cancelled"]), note: z.string().max(2000).optional(), kickoff: kickoffSchema.optional() });
+const updateSchema = z.object({
+  kind: z.enum(["progress", "blocker"]).default("progress"),
+  body: z.string().trim().min(2).max(4000),
+  progressPercent: z.number().int().min(0).max(100).optional(),
+  branchOrLink: z.string().trim().max(500).optional(),
+});
 const commentSchema = z.object({ body: z.string().min(1).max(5000) });
 const attachmentSchema = z.object({ fileName: z.string().min(1).max(300), fileUrl: z.string().min(1).max(2000) });
 const timeEntrySchema = z.object({ hours: z.number().min(0.1).max(24), entryDate: z.string().datetime(), note: z.string().max(1000).optional() });
 const templateSchema = z.object({ title: z.string().min(2).max(200), description: z.string().max(5000).optional(), defaultEstimateHours: z.number().min(0).optional() });
 const fromTemplateSchema = z.object({ templateId: z.string().uuid(), projectId: z.string().uuid().optional(), assigneeId: z.string().uuid().optional(), dueDate: z.string().datetime().optional() });
 const recurrenceSchema = z.object({ frequency: z.enum(["daily", "weekly", "monthly"]), nextRunAt: z.string().datetime() });
+
+/** A task's roadmap phase must belong to the task's own project. */
+async function assertMilestoneFits(db: Database, milestoneId: string | null | undefined, projectId: string | null | undefined) {
+  if (!milestoneId) return;
+  const milestone = await db.query.projectMilestones.findFirst({ where: eq(projectMilestones.id, milestoneId) });
+  if (!milestone || milestone.projectId !== projectId) throw new AppError("INVALID_MILESTONE", "That roadmap phase isn't part of this task's project", 400);
+}
 
 function addInterval(date: Date, frequency: "daily" | "weekly" | "monthly"): Date {
   const d = new Date(date);
@@ -124,6 +147,7 @@ export function tasksRouter(db: Database, env: Env) {
     if (body.projectId && !(await canAccessProject(db, req.user!.sub, req.user!.role, body.projectId))) throw new ForbiddenError();
     await assertCanAssign(db, req.user!, body.assigneeId, body.projectId);
 
+    await assertMilestoneFits(db, body.milestoneId, body.projectId);
     if (body.parentTaskId) {
       const parent = await db.query.tasks.findFirst({ where: eq(tasks.id, body.parentTaskId) });
       if (!parent) throw new NotFoundError("Parent task not found");
@@ -140,6 +164,7 @@ export function tasksRouter(db: Database, env: Env) {
         priority: body.priority,
         estimateHours: body.estimateHours?.toString(),
         dueDate: body.dueDate ? new Date(body.dueDate) : undefined,
+        milestoneId: body.milestoneId,
         createdBy: req.user!.sub,
       })
       .returning();
@@ -185,15 +210,72 @@ export function tasksRouter(db: Database, env: Env) {
       throw new AppError("INVALID_TRANSITION", `Cannot move task from "${from}" to "${body.toStatus}" as this user`, 400);
     }
 
+    const starting = body.toStatus === "in_progress";
+    const kickoff = starting ? body.kickoff : undefined;
     await db.transaction(async (tx) => {
-      await tx.update(tasks).set({ status: body.toStatus, updatedAt: new Date() }).where(eq(tasks.id, task.id));
-      await tx.insert(taskEvents).values({ taskId: task.id, actorUserId: req.user!.sub, action: "status_change", fromStatus: from, toStatus: body.toStatus, note: body.note });
+      await tx
+        .update(tasks)
+        .set({
+          status: body.toStatus,
+          updatedAt: new Date(),
+          ...(starting && !task.startedAt ? { startedAt: new Date() } : {}),
+          ...(kickoff?.expectedFinishAt ? { expectedFinishAt: new Date(kickoff.expectedFinishAt) } : {}),
+          ...(body.toStatus === "done" ? { progressPercent: 100 } : {}),
+        })
+        .where(eq(tasks.id, task.id));
+      await tx.insert(taskEvents).values({ taskId: task.id, actorUserId: req.user!.sub, action: "status_change", fromStatus: from, toStatus: body.toStatus, note: body.note ?? kickoff?.plan });
+      if (kickoff) {
+        await tx.insert(taskUpdates).values({ taskId: task.id, userId: req.user!.sub, kind: "start", body: kickoff.plan, branchOrLink: kickoff.branchOrLink || null, progressPercent: task.progressPercent });
+      }
     });
 
     await notifyTransition(db, task, body.toStatus, req.user!.sub, body.note);
+    if (kickoff && task.createdBy !== req.user!.sub) {
+      await notify(db, {
+        userIds: [task.createdBy],
+        actorUserId: req.user!.sub,
+        kind: "task.started",
+        title: `Work started: ${task.title}`,
+        body: `${kickoff.plan.length > 240 ? `${kickoff.plan.slice(0, 240)}…` : kickoff.plan}${kickoff.expectedFinishAt ? `\n\nExpected to finish ${formatWhen(new Date(kickoff.expectedFinishAt))}.` : ""}`,
+        link: `/tasks/${task.id}`,
+      });
+    }
     await pushTaskStatusToGithub(env, task, body.toStatus);
 
     res.json({ message: `Task moved to ${body.toStatus}.` });
+  });
+
+  /** Kickoff, progress check-ins and blockers, newest first. */
+  router.get("/:id/updates", requireAuth(env), async (req, res) => {
+    const task = await db.query.tasks.findFirst({ where: eq(tasks.id, req.params.id) });
+    if (!task) throw new NotFoundError("Task not found");
+    if (!(await canAccessTask(db, req.user!.sub, req.user!.role, task))) throw new ForbiddenError();
+    res.json({ updates: await db.query.taskUpdates.findMany({ where: eq(taskUpdates.taskId, task.id), orderBy: (u, { desc }) => [desc(u.createdAt)] }) });
+  });
+
+  router.post("/:id/updates", requireAuth(env), async (req, res) => {
+    const task = await db.query.tasks.findFirst({ where: eq(tasks.id, req.params.id) });
+    if (!task) throw new NotFoundError("Task not found");
+    const canWrite = task.assigneeId === req.user!.sub || (await canEditTask(db, req.user!.sub, req.user!.role, task));
+    if (!canWrite) throw new ForbiddenError("Only the assignee or the task's reviewers can post updates");
+    if (["done", "cancelled"].includes(task.status)) throw new AppError("INVALID_STATE", "This task is closed", 400);
+    const body = updateSchema.parse(req.body);
+    const [update] = await db.insert(taskUpdates).values({ taskId: task.id, userId: req.user!.sub, kind: body.kind, body: body.body, progressPercent: body.progressPercent ?? null, branchOrLink: body.branchOrLink || null }).returning();
+    if (body.progressPercent !== undefined) await db.update(tasks).set({ progressPercent: body.progressPercent, updatedAt: new Date() }).where(eq(tasks.id, task.id));
+    await db.insert(taskEvents).values({ taskId: task.id, actorUserId: req.user!.sub, action: body.kind === "blocker" ? "blocker" : "progress", note: body.body });
+    const others = [task.assigneeId, task.createdBy].filter((id): id is string => !!id && id !== req.user!.sub);
+    if (others.length) {
+      await notify(db, {
+        userIds: others,
+        actorUserId: req.user!.sub,
+        kind: body.kind === "blocker" ? "task.blocked" : "task.progress",
+        title: body.kind === "blocker" ? `Blocked: ${task.title}` : `Update on ${task.title}${body.progressPercent !== undefined ? ` (${body.progressPercent}%)` : ""}`,
+        body: body.body.length > 240 ? `${body.body.slice(0, 240)}…` : body.body,
+        link: `/tasks/${task.id}`,
+        email: body.kind === "blocker",
+      });
+    }
+    res.status(201).json({ update });
   });
 
   router.get("/:id/timeline", requireAuth(env), async (req, res) => {
@@ -423,6 +505,11 @@ export function tasksRouter(db: Database, env: Env) {
     if (body.assigneeId !== undefined && body.assigneeId !== task.assigneeId) {
       if (!isEditor) throw new ForbiddenError("Only the task's creator or a project lead can reassign it");
       await assertCanAssign(db, req.user!, body.assigneeId, task.projectId);
+    }
+
+    if (body.milestoneId !== undefined && body.milestoneId !== task.milestoneId) {
+      if (!isEditor) throw new ForbiddenError("Only the task's creator or a project lead can move it between roadmap phases");
+      await assertMilestoneFits(db, body.milestoneId, task.projectId);
     }
 
     const [updated] = await db

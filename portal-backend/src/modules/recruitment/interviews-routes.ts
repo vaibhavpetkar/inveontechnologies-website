@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
-import { interviewRounds, users } from "../shared/db/schema.js";
+import { interviewRounds, opportunities, users } from "../shared/db/schema.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
@@ -12,6 +12,8 @@ import { notifyCandidate } from "../notifications/recruitment.js";
 import { formatWhen } from "../shared/format.js";
 import { notify } from "../notifications/service.js";
 import { onHrRoundPassed } from "../payments/enrollments.js";
+import { meetingProviders, type MeetingProvider, type ProviderName } from "../calendar/providers.js";
+import { people } from "../calendar/routes.js";
 
 const TERMINAL_APPLICATION_STATUSES = ["rejected", "withdrawn"] as const;
 
@@ -21,10 +23,24 @@ const scheduleSchema = z.object({
   scheduledAt: z.string().datetime(),
   timezone: z.string().default("Asia/Kolkata"),
   meetingUrl: z.string().url().optional(),
+  // "Java technical round", "Aptitude exam": what the round is about.
+  subject: z.string().trim().max(200).optional(),
+  kind: z.enum(["interview", "exam", "hr"]).default("interview"),
+  durationMinutes: z.number().int().min(10).max(480).default(60),
+  // google_meet / zoom create the meeting link automatically when the portal has them set up.
+  provider: z.enum(["manual", "google_meet", "zoom"]).optional(),
 });
+
+const KIND_LABEL = { interview: "interview", exam: "exam", hr: "HR round" } as const;
+
+/** "Java technical round (interview)" or "round 2 interview": how a round is named in messages. */
+export function roundLabel(r: { subject: string | null; kind: "interview" | "exam" | "hr"; roundNumber: number }) {
+  return r.subject ? `${r.subject} ${KIND_LABEL[r.kind]}` : `round ${r.roundNumber} ${KIND_LABEL[r.kind]}`;
+}
 
 const rescheduleSchema = z.object({
   scheduledAt: z.string().datetime(),
+  durationMinutes: z.number().int().min(10).max(480).optional(),
   timezone: z.string().optional(),
   meetingUrl: z.string().url().optional(),
   note: z.string().max(1000).optional(),
@@ -36,8 +52,16 @@ const feedbackSchema = z.object({
   decision: z.enum(["pass", "fail", "hold"]),
 });
 
-export function interviewsRouter(db: Database, env: Env) {
+export function interviewsRouter(db: Database, env: Env, providers: Map<ProviderName, MeetingProvider> = meetingProviders(env)) {
   const router = Router();
+
+  /** Creates the Meet/Zoom meeting for a round, inviting the candidate and interviewer. */
+  async function createMeeting(name: "google_meet" | "zoom", input: { title: string; startsAt: Date; minutes: number; timezone: string; userIds: string[] }) {
+    const provider = providers.get(name);
+    if (!provider?.configured) throw new AppError("PROVIDER_NOT_CONFIGURED", `${provider?.label ?? name} isn't set up for this portal yet. Paste a link instead.`, 400);
+    const emails = [...(await people(db, input.userIds)).values()].map((p) => p.email);
+    return provider.create({ title: input.title, startsAt: input.startsAt, endsAt: new Date(input.startsAt.getTime() + input.minutes * 60000), timezone: input.timezone, attendeeEmails: emails });
+  }
 
   router.post("/applications/:applicationId/interviews", requireAuth(env), requireRole(...PIPELINE_ROLES), async (req, res) => {
     const body = scheduleSchema.parse(req.body);
@@ -50,28 +74,46 @@ export function interviewsRouter(db: Database, env: Env) {
     const interviewer = await db.query.users.findFirst({ where: eq(users.id, body.interviewerId) });
     if (!interviewer) throw new AppError("INVALID_INTERVIEWER", "Interviewer not found", 400);
 
+    const scheduledAt = new Date(body.scheduledAt);
+    const provider = body.provider ?? "manual";
+    let meetingUrl = body.meetingUrl ?? null;
+    let externalMeetingId: string | null = null;
+    if (provider === "google_meet" || provider === "zoom") {
+      const opportunity = await db.query.opportunities.findFirst({ where: eq(opportunities.id, application.opportunityId), columns: { title: true } });
+      const label = roundLabel({ subject: body.subject ?? null, kind: body.kind, roundNumber: body.roundNumber });
+      const made = await createMeeting(provider, { title: `${opportunity?.title ?? "Inveon"}: ${label}`, startsAt: scheduledAt, minutes: body.durationMinutes, timezone: body.timezone, userIds: [application.userId, body.interviewerId] });
+      meetingUrl = made.joinUrl;
+      externalMeetingId = made.externalId;
+    }
+
     const [created] = await db
       .insert(interviewRounds)
       .values({
         applicationId: application.id,
         roundNumber: body.roundNumber,
         interviewerId: body.interviewerId,
-        scheduledAt: new Date(body.scheduledAt),
+        scheduledAt,
         timezone: body.timezone,
-        meetingUrl: body.meetingUrl,
+        meetingUrl,
+        subject: body.subject || null,
+        kind: body.kind,
+        durationMinutes: body.durationMinutes,
+        meetingProvider: meetingUrl ? provider : "none",
+        externalMeetingId,
         createdBy: req.user!.sub,
       })
       .returning();
 
-    await writeAuditLog(db, { actorUserId: req.user!.sub, action: "interview.schedule", entityType: "interview_round", entityId: created.id, ipAddress: req.ip });
+    const label = roundLabel(created);
+    await writeAuditLog(db, { actorUserId: req.user!.sub, action: "interview.schedule", entityType: "interview_round", entityId: created.id, metadata: { kind: created.kind, subject: created.subject, provider: created.meetingProvider }, ipAddress: req.ip });
     await notifyCandidate(db, application.id, {
       kind: "interview.scheduled",
-      title: "Interview scheduled",
-      body: (opp) => `Your round ${created.roundNumber} interview for ${opp} is on ${formatWhen(created.scheduledAt, created.timezone)}.${created.meetingUrl ? `\n\nJoin here: ${created.meetingUrl}` : ""}`,
+      title: created.kind === "exam" ? "Exam scheduled" : "Interview scheduled",
+      body: (opp) => `Your ${label} for ${opp} is on ${formatWhen(created.scheduledAt, created.timezone)} (${created.durationMinutes} minutes).${created.meetingUrl ? `\n\nJoin here: ${created.meetingUrl}` : ""}`,
       email: true,
       actorUserId: req.user!.sub,
     });
-    await notify(db, { userIds: [created.interviewerId], actorUserId: req.user!.sub, kind: "interview.assigned", title: "You're interviewing", body: `You've been added as interviewer for round ${created.roundNumber} on ${formatWhen(created.scheduledAt, created.timezone)}.`, link: "/admin", email: true });
+    await notify(db, { userIds: [created.interviewerId], actorUserId: req.user!.sub, kind: "interview.assigned", title: created.kind === "exam" ? "You're invigilating" : "You're interviewing", body: `You've been added to the ${label} on ${formatWhen(created.scheduledAt, created.timezone)}.${created.meetingUrl ? ` Join: ${created.meetingUrl}` : ""}`, link: "/calendar", email: true });
     res.status(201).json({ interview: created });
   });
 
@@ -103,12 +145,26 @@ export function interviewsRouter(db: Database, env: Env) {
       throw new AppError("INVALID_STATE", `Cannot reschedule an interview in status "${interview.status}"`, 400);
     }
 
+    const scheduledAt = new Date(body.scheduledAt);
+    const timezone = body.timezone ?? interview.timezone;
+    const durationMinutes = body.durationMinutes ?? interview.durationMinutes;
+    // A Meet/Zoom link moves with the round; a pasted link is replaced only if a new one is given.
+    if (interview.externalMeetingId && !body.meetingUrl && (interview.meetingProvider === "google_meet" || interview.meetingProvider === "zoom")) {
+      const application = await getApplicationOr404(db, interview.applicationId);
+      const emails = [...(await people(db, [application.userId, interview.interviewerId])).values()].map((p) => p.email);
+      await providers
+        .get(interview.meetingProvider)
+        ?.update?.(interview.externalMeetingId, { title: roundLabel(interview), startsAt: scheduledAt, endsAt: new Date(scheduledAt.getTime() + durationMinutes * 60000), timezone, attendeeEmails: emails })
+        .catch(() => undefined);
+    }
     const [updated] = await db
       .update(interviewRounds)
       .set({
-        scheduledAt: new Date(body.scheduledAt),
-        timezone: body.timezone ?? interview.timezone,
+        scheduledAt,
+        timezone,
+        durationMinutes,
         meetingUrl: body.meetingUrl ?? interview.meetingUrl,
+        ...(body.meetingUrl ? { meetingProvider: "manual" as const, externalMeetingId: null } : {}),
         status: "scheduled",
         updatedAt: new Date(),
       })
@@ -118,8 +174,8 @@ export function interviewsRouter(db: Database, env: Env) {
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "interview.reschedule", entityType: "interview_round", entityId: interview.id, metadata: { note: body.note }, ipAddress: req.ip });
     await notifyCandidate(db, interview.applicationId, {
       kind: "interview.rescheduled",
-      title: "Interview moved",
-      body: (opp) => `Your interview for ${opp} has moved to ${formatWhen(updated.scheduledAt, updated.timezone)}.${updated.meetingUrl ? `\n\nJoin here: ${updated.meetingUrl}` : ""}`,
+      title: updated.kind === "exam" ? "Exam moved" : "Interview moved",
+      body: (opp) => `Your ${roundLabel(updated)} for ${opp} has moved to ${formatWhen(updated.scheduledAt, updated.timezone)}.${updated.meetingUrl ? `\n\nJoin here: ${updated.meetingUrl}` : ""}`,
       email: true,
       actorUserId: req.user!.sub,
     });
@@ -152,6 +208,9 @@ export function interviewsRouter(db: Database, env: Env) {
       throw new AppError("INVALID_STATE", `Cannot cancel an interview in status "${interview.status}"`, 400);
     }
 
+    if (interview.externalMeetingId && (interview.meetingProvider === "google_meet" || interview.meetingProvider === "zoom")) {
+      await providers.get(interview.meetingProvider)?.cancel?.(interview.externalMeetingId).catch(() => undefined);
+    }
     const [updated] = await db
       .update(interviewRounds)
       .set({ status: "cancelled", updatedAt: new Date() })
@@ -159,7 +218,7 @@ export function interviewsRouter(db: Database, env: Env) {
       .returning();
 
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "interview.cancel", entityType: "interview_round", entityId: interview.id, ipAddress: req.ip });
-    await notifyCandidate(db, interview.applicationId, { kind: "interview.cancelled", title: "Interview cancelled", body: (opp) => `Your round ${interview.roundNumber} interview for ${opp} has been cancelled. The team will be in touch if it's rescheduled.`, email: true, actorUserId: req.user!.sub });
+    await notifyCandidate(db, interview.applicationId, { kind: "interview.cancelled", title: interview.kind === "exam" ? "Exam cancelled" : "Interview cancelled", body: (opp) => `Your ${roundLabel(interview)} for ${opp} has been cancelled. The team will be in touch if it's rescheduled.`, email: true, actorUserId: req.user!.sub });
     res.json({ interview: updated });
   });
 
@@ -190,7 +249,8 @@ export function interviewsRouter(db: Database, env: Env) {
       ipAddress: req.ip,
     });
     // A pass moves the candidate on: shortlisted, then pay or start a trial.
-    const enrollment = body.decision === "pass" ? await onHrRoundPassed(db, interview.applicationId, req.user!.sub) : null;
+    // A scheduled subject exam is one step among others, so it doesn't.
+    const enrollment = body.decision === "pass" && interview.kind !== "exam" ? await onHrRoundPassed(db, interview.applicationId, req.user!.sub) : null;
     res.json({ interview: updated, enrollment });
   });
 
