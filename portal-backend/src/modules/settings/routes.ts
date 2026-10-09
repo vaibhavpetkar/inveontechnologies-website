@@ -125,7 +125,7 @@ export function settingsRouter(db: Database, env: Env) {
     if (!row) throw new NotFoundError("Email not found");
     const by = req.user!.sub;
     if (row.kind === "appointment_letter" && row.refId) await queueAppointmentEmail(db, row.refId, row.toEmail, by);
-    else if (row.kind === "internship_offer" && row.refId) await queueOfferEmail(db, row.refId, by);
+    else if (row.kind === "internship_offer" && row.refId) await queueOfferEmail(db, row.refId, by, row.toEmail);
     else if (row.kind === "policies" && row.refId) await enqueueJob(db, "policies.email", { to: row.toEmail, slugs: row.refId.split(","), by });
     else if (row.body && row.attachments.length === 0) await enqueueJob(db, "email.send", { to: row.toEmail, subject: row.subject, text: row.body, kind: row.kind, refId: row.refId, triggeredBy: by });
     else throw new AppError("CANNOT_RESEND", "This email can't be sent again from the log", 400);
@@ -170,7 +170,7 @@ export function settingsRouter(db: Database, env: Env) {
     if (body.internshipOffer) {
       const [offer] = await db.query.participantOffers.findMany({ where: eq(participantOffers.userId, user.id), orderBy: desc(participantOffers.issuedAt), limit: 1 });
       if (!offer) throw new AppError("NO_OFFER", "This person has no internship offer", 400);
-      await queueOfferEmail(db, offer.id, by);
+      await queueOfferEmail(db, offer.id, by, to);
       queued.push("internship offer");
     }
     if (body.policies.length) {

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { CalendarClock, Clock, Send, X } from "lucide-react";
+import { CalendarClock, Clock, Send, Star, X } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { apiFetch, ApiError } from "../../lib/api";
 import { displayName } from "../../lib/nav";
-import { allowedMoves, formatDue, isOverdue, MOVE_LABELS, PRIORITY_META, STATUS_META, timeAgo, type Task, type TaskComment, type TaskEvent, type TaskStatus } from "../../lib/tasks";
+import { allowedMoves, formatDue, isOverdue, MOVE_LABELS, PRIORITY_META, STATUS_META, timeAgo, type Task, type TaskComment, type TaskEvent, type TaskRequest, type TaskStatus } from "../../lib/tasks";
 import type { DirectoryUser } from "../../lib/useDirectory";
 import { Avatar } from "../Avatar";
 import { useToast } from "../Toast";
@@ -12,6 +12,10 @@ import { GithubPanel } from "./GithubPanel";
 import { AttachmentsPanel } from "./AttachmentsPanel";
 import { TaskUpdates } from "./TaskUpdates";
 import { CAN_ASSIGN_OTHERS } from "../../lib/tasks";
+import { RatingDialog } from "./RatingDialog";
+import { Stars } from "./StarRating";
+import { TaskRequestsPanel } from "./TaskRequestsPanel";
+import { useColleagues } from "./useColleagues";
 
 interface Props {
   taskId: string;
@@ -35,6 +39,10 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged }: Props) 
   const [comment, setComment] = useState("");
   const [hours, setHours] = useState("");
   const [busy, setBusy] = useState(false);
+  const [requests, setRequests] = useState<TaskRequest[]>([]);
+  const [canDecide, setCanDecide] = useState(false);
+  const [rating, setRating] = useState<"approve" | "rate" | null>(null);
+  const colleagues = useColleagues();
 
   const load = useCallback(async () => {
     try {
@@ -47,6 +55,13 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged }: Props) 
       setSubtasks(t.subtasks);
       setComments(c.comments);
       setTimeline(tl.timeline);
+      // Requests are extra: the drawer still works if they can't be read.
+      apiFetch<{ requests: TaskRequest[]; canDecide: boolean }>(`/api/v1/tasks/${taskId}/requests`, { accessToken })
+        .then((r) => {
+          setRequests(r.requests);
+          setCanDecide(r.canDecide);
+        })
+        .catch(() => undefined);
     } catch (err) {
       setError(err instanceof ApiError && err.status === 404 ? "This task no longer exists." : err instanceof ApiError && err.status === 403 ? "You don't have access to this task." : "Couldn't load this task.");
     }
@@ -59,6 +74,8 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged }: Props) 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      // A dialog on top of the drawer closes first.
+      if (document.querySelector(".modal-scrim")) return;
       e.preventDefault();
       onClose();
     };
@@ -69,6 +86,8 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged }: Props) 
   const name = (id: string | null) => {
     if (!id) return "Someone";
     if (id === user?.id) return "You";
+    const c = colleagues.byId.get(id);
+    if (c) return c.name;
     const p = byId.get(id);
     return p ? displayName(p.email) : "A teammate";
   };
@@ -79,6 +98,11 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged }: Props) 
     if (to === "changes_requested") {
       note = window.prompt("What needs to change?") ?? undefined;
       if (note === undefined) return;
+    }
+    // Approving someone else's work asks for a star rating first.
+    if (to === "done" && task.assigneeId && task.assigneeId !== user?.id) {
+      setRating("approve");
+      return;
     }
     setBusy(true);
     if (await onMove(task, to, note || undefined)) await load();
@@ -117,6 +141,13 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged }: Props) 
   }
 
   const moves = task && user ? allowedMoves(task, user) : [];
+  // Reviewers (per the server) rate done work; nobody rates their own.
+  const canRate = !!task && !!user && task.status === "done" && canDecide && !!task.assigneeId && task.assigneeId !== user.id;
+
+  function changed() {
+    load();
+    onChanged();
+  }
   const assignee = task?.assigneeId ? byId.get(task.assigneeId) : undefined;
 
   return (
@@ -194,6 +225,32 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged }: Props) 
             />
 
             <AttachmentsPanel taskId={task.id} onChanged={() => load()} />
+
+            <TaskRequestsPanel task={task} requests={requests} canDecide={canDecide} name={name} onChanged={changed} />
+
+            {task.status === "done" && (task.rating || canRate) && (
+              <div className="rating-card">
+                <div className="rating-card-head">
+                  <h3>Reviewer's rating</h3>
+                  {canRate && (
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={() => setRating("rate")}>
+                      <Star size={14} /> {task.rating ? "Change rating" : "Rate this work"}
+                    </button>
+                  )}
+                </div>
+                {task.rating ? (
+                  <>
+                    <div className="rating-card-stars">
+                      <Stars value={task.rating} size={20} />
+                      <span className="muted-small">{task.rating}/5{task.ratedBy ? ` from ${name(task.ratedBy)}` : ""}{task.ratedAt ? ` · ${timeAgo(task.ratedAt)}` : ""}</span>
+                    </div>
+                    {task.ratingNote && <p className="rating-card-note">“{task.ratingNote}”</p>}
+                  </>
+                ) : (
+                  <p className="muted-small">Not rated yet. Unrated work counts as 3 stars.</p>
+                )}
+              </div>
+            )}
 
             {moves.length > 0 && (
               <div className="drawer-actions">
@@ -290,6 +347,21 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged }: Props) 
           </div>
         )}
       </motion.aside>
+      <AnimatePresence>
+        {task && rating && (
+          <RatingDialog
+            key="rating"
+            task={task}
+            mode={rating}
+            assigneeName={name(task.assigneeId)}
+            onCancel={() => setRating(null)}
+            onDone={() => {
+              setRating(null);
+              changed();
+            }}
+          />
+        )}
+      </AnimatePresence>
     </>
   );
 }
@@ -311,6 +383,20 @@ function describeEvent(ev: TaskEvent): string {
       return "posted a progress update";
     case "blocker":
       return "raised a blocker";
+    case "rated":
+      return "rated the work";
+    case "extension_requested":
+      return "asked for more time";
+    case "reassign_requested":
+      return "asked to hand the task over";
+    case "extension_approved":
+      return "gave more time";
+    case "extension_declined":
+      return "kept the due date as it was";
+    case "reassign_approved":
+      return "handed the task to someone else";
+    case "reassign_declined":
+      return "declined the hand-over";
     default:
       if (ev.action === "github_link") return "linked a GitHub issue";
       if (ev.action === "github_unlink") return "unlinked the GitHub issue";

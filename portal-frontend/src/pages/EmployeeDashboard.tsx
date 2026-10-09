@@ -10,6 +10,10 @@ import { MyTasksWidget } from "../components/tasks/MyTasksWidget";
 import { UpcomingWidget } from "../components/calendar/UpcomingWidget";
 import { OnboardingCard, type MyEmployee } from "../components/people/OnboardingCard";
 import { MyAppointmentLetter } from "../components/people/MyAppointmentLetter";
+import { EmployeeOfMonthBanner } from "../components/performance/EmployeeOfMonthBanner";
+import { MyGrowthWidget } from "../components/performance/MyGrowthWidget";
+import { LeaderboardWidget } from "../components/performance/LeaderboardWidget";
+import { TaskRequestsWidget } from "../components/tasks/TaskRequestsWidget";
 
 export default function EmployeeDashboard() {
   const { user, accessToken } = useAuth();
@@ -41,6 +45,8 @@ export default function EmployeeDashboard() {
         </div>
       </div>
 
+      <EmployeeOfMonthBanner />
+
       {error && <div className="error-banner">{error}</div>}
       {employee === null && !error && <div className="skeleton" style={{ height: 90 }} />}
       {employee === "none" && <p className="muted-small">No employee record is linked to your account yet. It appears here once HR sets you up.</p>}
@@ -69,7 +75,10 @@ export default function EmployeeDashboard() {
                 load();
               }} />
             <OnboardingCard key={`onboarding-${letterTick}`} employee={employee} onChanged={load} />
+            <TaskRequestsWidget />
             <MyTasksWidget />
+            <MyGrowthWidget />
+            <LeaderboardWidget />
             <UpcomingWidget />
           </div>
         </>
@@ -77,7 +86,10 @@ export default function EmployeeDashboard() {
 
       {employee === "none" && (
         <div className="stack">
+          <TaskRequestsWidget />
           <MyTasksWidget />
+          <MyGrowthWidget />
+          <LeaderboardWidget />
           <UpcomingWidget />
         </div>
       )}

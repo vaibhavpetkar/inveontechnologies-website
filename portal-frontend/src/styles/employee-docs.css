@@ -1,0 +1,43 @@
+/* Employee documents: "My documents" for interns/employees and the staff review tab. */
+
+.docs-tabs { margin: 0 0 1.1rem; }
+
+.edoc-desc { font-size: 0.88rem; color: var(--ink); margin: 0.1rem 0 0; overflow-wrap: anywhere; }
+.edoc-who { font-weight: 600; color: var(--ink); }
+.edoc-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; }
+
+.edoc-review { font-size: 0.8rem; color: var(--muted); margin: 0.15rem 0 0; overflow-wrap: anywhere; }
+.edoc-review q { font-style: italic; }
+
+/* The "what needs fixing" note, shown big when a document is sent back. */
+.edoc-fix {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+  margin-top: 0.4rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 10px;
+  background: var(--danger-surface);
+  color: #991b1b;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.edoc-fix svg { flex: none; margin-top: 0.1rem; color: var(--danger); }
+.edoc-fix strong { display: block; color: var(--danger); font-size: 0.8rem; }
+
+.edoc-row .file-chip { max-width: 100%; }
+.edoc-row .doc-actions { flex-wrap: wrap; }
+
+.edoc-dialog textarea { min-height: 84px; }
+.edoc-hint { display: flex; gap: 0.45rem; align-items: flex-start; padding: 0.6rem 0.75rem; border-radius: 10px; background: var(--surface); color: var(--muted); font-size: 0.85rem; line-height: 1.45; margin: 0 0 1rem; }
+.edoc-hint svg { flex: none; margin-top: 0.12rem; color: var(--primary); }
+
+.edoc-subject { margin: -0.4rem 0 1rem; color: var(--muted); font-size: 0.9rem; }
+
+@media (max-width: 640px) {
+  .edoc-row .file-chip { width: 100%; }
+  .edoc-dialog .modal-actions { flex-direction: column-reverse; }
+  .edoc-dialog .modal-actions .btn { width: 100%; justify-content: center; }
+  .docs-tabs { margin-bottom: 0.9rem; }
+}

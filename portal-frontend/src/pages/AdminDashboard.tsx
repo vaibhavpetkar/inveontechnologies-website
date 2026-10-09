@@ -6,6 +6,9 @@ import { TeamAccounts } from "../components/TeamAccounts";
 import { WorkloadWidget } from "../components/tasks/WorkloadWidget";
 import { MyTasksWidget } from "../components/tasks/MyTasksWidget";
 import { UpcomingWidget } from "../components/calendar/UpcomingWidget";
+import { EmployeeOfMonthBanner } from "../components/performance/EmployeeOfMonthBanner";
+import { LeaderboardWidget } from "../components/performance/LeaderboardWidget";
+import { TaskRequestsWidget } from "../components/tasks/TaskRequestsWidget";
 
 export default function AdminDashboard() {
   const { user, accessToken } = useAuth();
@@ -25,6 +28,7 @@ export default function AdminDashboard() {
 
   return (
     <DashboardShell>
+      <EmployeeOfMonthBanner />
       <h1>Staff console</h1>
       <p>Recruitment, employees, and reporting for the team.</p>
 
@@ -46,7 +50,9 @@ export default function AdminDashboard() {
       )}
 
       <div className="panel-grid">
+        <TaskRequestsWidget />
         <WorkloadWidget />
+        <LeaderboardWidget />
         <MyTasksWidget />
         <UpcomingWidget />
       </div>

@@ -449,8 +449,8 @@ async function programPolicyAttachment(db: Database) {
   return policy ? [{ filename: policyFilename(policy), content: Buffer.from(await renderPolicyPdf(policy, policy.updatedAt)), contentType: "application/pdf" }] : [];
 }
 
-export async function queueOfferEmail(db: Database, offerId: string, by?: string) {
-  await enqueueJob(db, "internship.offer_email", { offerId, by });
+export async function queueOfferEmail(db: Database, offerId: string, by?: string, to?: string) {
+  await enqueueJob(db, "internship.offer_email", { offerId, by, to });
 }
 
 export const offerUpdateSchema = z.object({
@@ -492,7 +492,7 @@ export function registerInternshipJobs(db: Database, appUrl: string) {
     const user = (await db.query.users.findFirst({ where: eq(users.id, offer.userId) }))!;
     const first = (await displayNameFor(db, offer.userId)).split(" ")[0];
     await deliverEmail({
-      to: user.email,
+      to: payload.to ? String(payload.to) : user.email,
       subject: `Your offer: ${track.title} Internship Program (${track.durationMonths} months)`,
       kind: "internship_offer",
       refId: offer.id,

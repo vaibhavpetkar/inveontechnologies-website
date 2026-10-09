@@ -39,6 +39,8 @@ import ProjectDetail from "./pages/ProjectDetail";
 import Notes from "./pages/Notes";
 import Team from "./pages/Team";
 import Documents from "./pages/Documents";
+import Settings from "./pages/Settings";
+import Performance from "./pages/Performance";
 import { MotionConfig } from "framer-motion";
 import { ToastProvider } from "./components/Toast";
 import { NotificationsProvider } from "./context/NotificationsContext";
@@ -103,6 +105,8 @@ function AppRoutes() {
       <Route path="/notes"><Protected><Notes /></Protected></Route>
       <Route path="/team"><Protected><Team /></Protected></Route>
       <Route path="/documents"><Protected><Documents /></Protected></Route>
+      <Route path="/settings/:tab?"><Protected><Settings /></Protected></Route>
+      <Route path="/performance"><Protected><Performance /></Protected></Route>
 
       <Route><div className="page-loading">Page not found.</div></Route>
     </Switch>
