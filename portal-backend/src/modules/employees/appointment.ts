@@ -1,4 +1,5 @@
 import { and, asc, eq, ilike, inArray, or } from "drizzle-orm";
+import { signatureFor } from "../signature/routes.js";
 import type { Database } from "../shared/db/client.js";
 import { companyPolicies, employeeLetters, employeeOnboardingTasks, employees, users, type AppointmentDetails, type PolicySnapshot } from "../shared/db/schema.js";
 import { blocksToText, longDate, parseRichText, renderLetterPdf, type LetterBlock } from "../shared/letter-pdf.js";
@@ -84,7 +85,7 @@ export function appointmentReference(seq: number, issuedAt: Date) {
 }
 
 /** The letter itself as layout blocks: terms table, numbered clauses, policies, signatures. */
-export function appointmentBlocks(d: AppointmentDetails, letter: { signatoryName: string; signatoryTitle: string; policies: PolicySnapshot[]; acceptedAt?: Date | null; acceptedName?: string | null }): LetterBlock[] {
+export function appointmentBlocks(d: AppointmentDetails, letter: { signatoryName: string; signatoryTitle: string; policies: PolicySnapshot[]; acceptedAt?: Date | null; acceptedName?: string | null; signature?: string | null }): LetterBlock[] {
   const intern = d.employeeType === "intern";
   const first = d.name.split(" ")[0] || d.name;
   const role = roleTitle(d);
@@ -178,12 +179,12 @@ export function appointmentBlocks(d: AppointmentDetails, letter: { signatoryName
     {
       kind: "signatories",
       left: { caption: `For ${companyProfile().name.toUpperCase()}`, people: [{ name: letter.signatoryName, title: letter.signatoryTitle }], seal: true },
-      right: [{ caption: "Accepted by:", name: d.name, title: role, note: accepted }],
+      right: [{ caption: "Accepted by:", name: d.name, title: role, note: accepted, signature: letter.acceptedAt ? letter.signature : null }],
     },
   ];
 }
 
-export function appointmentDocument(letter: EmployeeLetter) {
+export function appointmentDocument(letter: EmployeeLetter, signature: string | null = null) {
   const d = letter.details!;
   const policies = letter.policies ?? [];
   return {
@@ -193,14 +194,22 @@ export function appointmentDocument(letter: EmployeeLetter) {
     date: letter.generatedAt,
     recipient: [d.name, d.email],
     subject: `Appointment as ${roleTitle(d)}`,
-    blocks: appointmentBlocks(d, { signatoryName: letter.signatoryName, signatoryTitle: letter.signatoryTitle, policies, acceptedAt: letter.acceptedAt, acceptedName: letter.acceptedName }),
+    blocks: appointmentBlocks(d, { signatoryName: letter.signatoryName, signatoryTitle: letter.signatoryTitle, policies, acceptedAt: letter.acceptedAt, acceptedName: letter.acceptedName, signature }),
   };
 }
 
 export const appointmentText = (letter: Pick<EmployeeLetter, "signatoryName" | "signatoryTitle">, d: AppointmentDetails, policies: PolicySnapshot[]) =>
   blocksToText(appointmentBlocks(d, { ...letter, policies }));
 
-export const appointmentPdf = (letter: EmployeeLetter) => renderLetterPdf(appointmentDocument(letter));
+/** The letter as a PDF; once accepted, it carries the employee's saved signature. */
+export async function appointmentPdf(db: Database, letter: EmployeeLetter) {
+  let signature: string | null = null;
+  if (letter.acceptedAt) {
+    const employee = await db.query.employees.findFirst({ where: eq(employees.id, letter.employeeId) });
+    if (employee) signature = await signatureFor(db, employee.userId);
+  }
+  return renderLetterPdf(appointmentDocument(letter, signature));
+}
 export const appointmentFilename = (letter: EmployeeLetter) => `Appointment-Letter-${(letter.details?.name ?? "Employee").replace(/[^A-Za-z0-9]+/g, "-")}${letter.version > 1 ? `-v${letter.version}` : ""}.pdf`;
 
 /** Registers the job that emails an appointment letter with its policies attached. */
@@ -211,7 +220,7 @@ export function registerLetterJobs(db: Database, appUrl: string) {
     const d = letter.details;
     const policies = letter.policies ?? [];
     const attachments = [
-      { filename: appointmentFilename(letter), content: Buffer.from(await appointmentPdf(letter)), contentType: "application/pdf" },
+      { filename: appointmentFilename(letter), content: Buffer.from(await appointmentPdf(db, letter)), contentType: "application/pdf" },
       ...(await Promise.all(policies.map(async (p) => ({ filename: policyFilename(p), content: Buffer.from(await renderPolicyPdf(p, letter.generatedAt)), contentType: "application/pdf" })))),
     ];
     const first = d.name.split(" ")[0] || d.name;

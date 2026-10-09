@@ -36,6 +36,7 @@ import { registerInternshipJobs } from "./modules/internships/service.js";
 import { ensureDefaultPolicies, registerLetterJobs } from "./modules/employees/appointment.js";
 import { configureCompanyDefaults, loadCompanyProfile } from "./modules/settings/company.js";
 import { loadEmailSettings } from "./modules/settings/email.js";
+import { signatureRouter } from "./modules/signature/routes.js";
 import { registerSettingsJobs, settingsRouter } from "./modules/settings/routes.js";
 import { performanceRouter, registerPerformanceSchedules } from "./modules/performance/routes.js";
 import { syncProgramFees } from "./modules/internships/service.js";
@@ -130,7 +131,8 @@ app.use("/api/v1/payments", cashfreeWebhookRouter(db, env));
 app.use("/api/v1/github", githubWebhookRouter(db, env));
 // Uploads send the raw file as the body.
 app.use("/api/v1/files", filesRouter(db, env));
-app.use(express.json());
+// Company settings carry the logo and seal as data URLs (up to 1 MB each, about 2.7 MB as base64).
+app.use(express.json({ limit: "4mb" }));
 app.use(cookieParser());
 
 app.get("/api/v1/health/live", (_req, res) => {
@@ -194,6 +196,7 @@ app.use("/api/v1/attendance", attendanceRouter(db, env));
 app.use("/api/v1/leave", leaveRouter(db, env));
 app.use("/api/v1/holidays", holidaysRouter(db, env));
 app.use("/api/v1/performance", performanceRouter(db, env));
+app.use("/api/v1/me/signature", signatureRouter(db, env));
 app.use("/api/v1", settingsRouter(db, env));
 
 // Future feature routes mount here:

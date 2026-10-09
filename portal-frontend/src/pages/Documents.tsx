@@ -13,6 +13,7 @@ import { timeAgo } from "../lib/tasks";
 import { DOC_STATUS, type CandidateDocument } from "../lib/workspace";
 import { MyEmployeeDocuments } from "../components/documents/MyEmployeeDocuments";
 import { EmployeeReviewQueue } from "../components/documents/EmployeeReviewQueue";
+import { SignatureCard } from "../components/signature/SignatureCard";
 import "../styles/employee-docs.css";
 
 /**
@@ -109,6 +110,7 @@ function MyDocuments() {
         )}
       </div>
 
+      <SignatureCard />
       {data && docs.length > 0 && <DocStats docs={docs} />}
       {error && <div className="error-banner">{error}</div>}
       {!data && !error && <div className="doc-list">{[0, 1, 2].map((i) => <div key={i} className="skeleton" style={{ height: 76 }} />)}</div>}

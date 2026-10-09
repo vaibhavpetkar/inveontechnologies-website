@@ -5,6 +5,7 @@ import { apiFetch, ApiError } from "../lib/api";
 import type { StoredFile } from "../lib/files";
 import { UploadButton } from "../components/files/UploadButton";
 import { FileChip } from "../components/files/FileChip";
+import { SignatureCard } from "../components/signature/SignatureCard";
 import { useToast } from "../components/Toast";
 
 interface ProfileData {
@@ -139,6 +140,7 @@ export default function Profile() {
           <button className="btn" type="submit" disabled={saving}>{saving ? "Saving…" : "Save profile"}</button>
         </form>
       )}
+      {!loading && <div style={{ marginTop: "1.5rem" }}><SignatureCard /></div>}
     </DashboardShell>
   );
 }

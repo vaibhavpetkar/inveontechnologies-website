@@ -3,10 +3,11 @@ import type { UserRole } from "../context/AuthContext";
 /** Who can open Settings (HR reads, admins edit; the API decides with canEdit). */
 export const SETTINGS_ROLES: UserRole[] = ["hr", "admin", "super_admin"];
 
-export type SettingsTab = "company" | "fees" | "email" | "email-log" | "offers";
+export type SettingsTab = "company" | "structure" | "fees" | "email" | "email-log" | "offers";
 
 export const SETTINGS_TABS: { id: SettingsTab; path: string; label: string }[] = [
   { id: "company", path: "/settings", label: "Company details" },
+  { id: "structure", path: "/settings/structure", label: "Team structure" },
   { id: "fees", path: "/settings/fees", label: "Internship fees" },
   { id: "email", path: "/settings/email", label: "Email" },
   { id: "email-log", path: "/settings/email-log", label: "Email log" },

@@ -50,8 +50,18 @@ export const EMP_DOC_TYPES = [
   "Bank account details / cancelled cheque",
   "Previous experience letter",
   "Address proof",
+  "Signed offer letter",
+  "Signed appointment letter",
   OTHER_TYPE,
 ];
+
+/** The document types an onboarding step asks for, picked from its title. */
+export function typesForStep(title: string): string[] {
+  const t = title.toLowerCase();
+  if (/government id|aadhaar|pan\b/.test(t)) return ["Aadhaar card", "PAN card", "Passport", "Voter ID", "Driving licence"];
+  if (/offer|appointment/.test(t)) return ["Signed offer letter", "Signed appointment letter"];
+  return [];
+}
 
 const BASE = "/api/v1/employees";
 
@@ -65,7 +75,7 @@ export function fetchEmployeeDocs(employeeId: string, accessToken: string | null
   return apiFetch<{ documents: EmployeeDocument[] }>(`${BASE}/${employeeId}/documents`, { accessToken }).then((r) => r.documents);
 }
 
-export function addEmployeeDoc(employeeId: string, body: { documentType: string; fileUrl: string; description?: string }, accessToken: string | null) {
+export function addEmployeeDoc(employeeId: string, body: { documentType: string; fileUrl: string; description?: string; onboardingTaskId?: string }, accessToken: string | null) {
   return apiFetch<{ document: EmployeeDocument }>(`${BASE}/${employeeId}/documents`, { method: "POST", body, accessToken });
 }
 

@@ -1872,3 +1872,14 @@ export const employeeOfMonth = pgTable("employee_of_month", {
   emailedAt: timestamp("emailed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * A person's handwritten signature (PNG/JPEG data URL, drawn or uploaded),
+ * printed on letters they accept. Kept apart from users so ordinary user
+ * queries don't carry the image.
+ */
+export const userSignatures = pgTable("user_signatures", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  image: text("image").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});

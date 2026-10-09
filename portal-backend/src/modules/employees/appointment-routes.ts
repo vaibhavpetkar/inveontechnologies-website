@@ -137,7 +137,7 @@ export function appointmentRouter(db: Database, env: Env) {
   router.get("/appointment-letters/:id/pdf", requireAuth(env), async (req, res) => {
     const { letter, employee } = await loadLetter(req.params.id);
     if (employee.userId !== req.user!.sub && !isReader(req.user!.role)) throw new ForbiddenError();
-    const pdf = await appointmentPdf(letter);
+    const pdf = await appointmentPdf(db, letter);
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "employee_letter.download", entityType: "employee_letter", entityId: letter.id, ipAddress: req.ip });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename="${appointmentFilename(letter)}"`);
