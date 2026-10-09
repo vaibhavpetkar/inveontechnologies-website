@@ -75,11 +75,12 @@ describe("internship tracks", () => {
     const list = await api.call("GET", "/internships", { token: (await api.createUser("candidate")).token });
     assert.equal(list.json.tracks.length, 6);
     const js = list.json.tracks.find((t) => t.slug === "full-stack-javascript");
-    assert.equal(js.fee, 4000);
+    assert.equal(js.fee, 3000);
+    assert.equal(js.graduateFee, 5000);
     assert.equal(js.assignmentCount, 120);
     assert.equal(js.me.offer, null);
     const opp = (await api.pool.query("SELECT kind, status, program_fee, trial_hours FROM opportunities WHERE id = $1", [js.opportunityId])).rows[0];
-    assert.deepEqual({ ...opp, program_fee: Number(opp.program_fee) }, { kind: "program", status: "published", program_fee: 4000, trial_hours: 0 });
+    assert.deepEqual({ ...opp, program_fee: Number(opp.program_fee) }, { kind: "program", status: "published", program_fee: 3000, trial_hours: 0 });
   });
 
   test("failing the exam gives nothing; passing it issues the offer letter by email, and direct applications are turned away", async () => {
@@ -97,7 +98,7 @@ describe("internship tracks", () => {
 
     const page = await api.call("GET", "/internships/full-stack-javascript", { token: candidate.token });
     assert.equal(page.json.me.enrollment.status, "awaiting_choice");
-    assert.match(page.json.me.offer.referenceNo, /^INV\/INT\/\d{4}\/\d{4}$/);
+    assert.match(page.json.me.offer.referenceNo, /^INV\/HR\/INT\/\d{4}\/\d{4}$/);
     assert.equal(page.json.me.unlocked, false);
     assert.equal(page.json.progress.total, 120);
     assert.equal(page.json.phases[0].skills[0].key, "html");
@@ -109,6 +110,27 @@ describe("internship tracks", () => {
     assert.equal(pdf.status, 200);
     const stranger = await api.createUser("candidate");
     assert.equal((await fetch(`${api.base}/internships/offers/${submit.internship.offerId}/pdf`, { headers: { Authorization: `Bearer ${stranger.token}` } })).status, 403);
+
+    // No graduation year on the profile: the student fee, joining next Monday for six months.
+    const issued = (await api.pool.query("SELECT fee, fee_category, work_mode, joining_date, end_date FROM participant_offers WHERE id = $1", [submit.internship.offerId])).rows[0];
+    assert.equal(Number(issued.fee), 3000);
+    assert.equal(issued.fee_category, "student");
+    assert.equal(issued.work_mode, "Remote");
+    assert.ok(issued.joining_date && issued.end_date);
+    assert.match(api.logs(), /Internship-Program-Policy-v\d+\.pdf/);
+
+    // Staff switch it to the graduate fee; the payment amount follows, and it can be emailed again.
+    assert.equal((await api.call("GET", "/internships/offers", { token: candidate.token })).status, 403);
+    const listed = await api.call("GET", "/internships/offers", { token: admin.token });
+    assert.ok(listed.json.offers.some((o) => o.id === submit.internship.offerId && o.paymentStatus === "awaiting_choice"));
+    const edit = { feeCategory: "graduate", fee: 5000, workMode: "Hybrid", joiningDate: "2026-11-02", endDate: "2027-05-01" };
+    assert.equal((await api.call("PUT", `/internships/offers/${submit.internship.offerId}`, { token: admin.token, body: { ...edit, endDate: "2026-10-01" } })).json.error.code, "INVALID_DATES");
+    const edited = await api.call("PUT", `/internships/offers/${submit.internship.offerId}`, { token: admin.token, body: edit });
+    assert.equal(edited.status, 200, JSON.stringify(edited.json));
+    assert.equal((await api.pool.query("SELECT amount FROM program_enrollments WHERE id = (SELECT enrollment_id FROM participant_offers WHERE id = $1)", [submit.internship.offerId])).rows[0].amount, "5000.00");
+    assert.equal((await api.call("POST", `/internships/offers/${submit.internship.offerId}/resend`, { token: admin.token })).json.emailQueued, true);
+    const offerPdf = await fetch(`${api.base}/internships/offers/${submit.internship.offerId}/pdf`, { headers: { Authorization: `Bearer ${admin.token}` } });
+    assert.equal(Buffer.from(await offerPdf.arrayBuffer()).subarray(0, 4).toString(), "%PDF");
 
     const direct = await api.call("POST", `/applications/opportunities/${track.opportunityId}/apply`, { token: stranger.token, body: {} });
     assert.equal(direct.json.error.code, "APPLY_VIA_TRACK");

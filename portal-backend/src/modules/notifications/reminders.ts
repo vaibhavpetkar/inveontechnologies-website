@@ -41,7 +41,7 @@ export async function sendTaskDueReminders(db: Database, now = new Date()) {
   });
   for (const t of overdue) {
     const key = `task-overdue:${t.id}:${t.dueDate!.toISOString()}`;
-    await notify(db, { userIds: [t.assigneeId], kind: "task.overdue", title: `Overdue: ${t.title}`, body: `"${t.title}" was due ${formatWhen(t.dueDate!)} and isn't finished yet.`, link: `/tasks/${t.id}`, dedupeKey: key, email: true });
+    await notify(db, { userIds: [t.assigneeId], kind: "task.overdue", title: `Overdue: ${t.title}`, body: `"${t.title}" was due ${formatWhen(t.dueDate!)} and isn't finished yet. If you need more time, or someone else should take it over, ask from the task in the portal.`, link: `/tasks/${t.id}`, dedupeKey: key, email: true });
     if (t.createdBy !== t.assigneeId) {
       await notify(db, { userIds: [t.createdBy], kind: "task.overdue", title: `Overdue: ${t.title}`, body: `A task you assigned, "${t.title}", is past its due date.`, link: `/tasks/${t.id}`, dedupeKey: key });
     }

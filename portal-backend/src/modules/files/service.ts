@@ -7,6 +7,8 @@ import {
   channelMembers,
   conversationParticipants,
   documentRequests,
+  employeeDocuments,
+  employees,
   messageAttachments,
   messages,
   storedFiles,
@@ -148,7 +150,16 @@ export async function canReadFile(db: Database, req: Request, file: StoredFile):
       for (const application of apps) if (await canViewApplication(db, req, application)) return true;
       return false;
     }
-    case "employee_document":
-      return false; // self and HR only, both handled above
+    case "employee_document": {
+      // Self and HR are handled above; the employee's own manager reviews them too.
+      if (role !== "manager") return false;
+      const [row] = await db
+        .select({ managerId: employees.managerId })
+        .from(employeeDocuments)
+        .innerJoin(employees, eq(employees.id, employeeDocuments.employeeId))
+        .where(eq(employeeDocuments.fileUrl, url))
+        .limit(1);
+      return row?.managerId === userId;
+    }
   }
 }

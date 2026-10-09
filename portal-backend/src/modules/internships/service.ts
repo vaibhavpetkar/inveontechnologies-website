@@ -16,7 +16,10 @@ import {
   users,
   type RoadmapPhase,
 } from "../shared/db/schema.js";
+import { z } from "zod";
 import { formatBusinessId } from "../shared/business-id.js";
+import { AppError } from "../shared/errors.js";
+import { activePolicies, policyFilename, renderPolicyPdf } from "../employees/appointment.js";
 import { slugify } from "../shared/slugify.js";
 import { logger } from "../shared/logger.js";
 import { enqueueJob, registerJobHandler } from "../shared/jobs.js";
@@ -26,8 +29,9 @@ import { notify } from "../notifications/service.js";
 import { notifyHiringTeam } from "../assessments/exams.js";
 import { applyApplicationTransition } from "../applications/transition-helper.js";
 import { createEmployeeRecord, displayNameFor, resolveDepartment, resolveDesignation } from "../employees/onboarding.js";
-import { letterheadAddress } from "../employees/appointment.js";
-import { longDate, renderLetterPdf, type LetterDocument } from "../shared/letter-pdf.js";
+import { longDate, renderLetterPdf, type LetterBlock, type LetterDocument } from "../shared/letter-pdf.js";
+import { companyProfile } from "../settings/company.js";
+import { feeCategoryFor, feeFor, getOfferTerms, type OfferTerms } from "../settings/offer-terms.js";
 import { SKILL_LABELS, SKILLS } from "./catalog-skills.js";
 import { TRACKS, trackSkills } from "./catalog-tracks.js";
 import { EXERCISES } from "./exercises/bank/index.js";
@@ -85,7 +89,7 @@ export async function assignmentsForSkills(db: Database, skills: string[]) {
 /**
  * Installs the assignment bank and the six tracks: for each track a
  * published course (a study lesson per skill and a timed final exam) and a
- * published 6-month internship opening with the Rs. 4,000 fee. Safe to run
+ * published 6-month internship opening with the student and graduate fees. Safe to run
  * again: anything that already exists (by skill+title or track slug) is left
  * as it is, so staff edits survive.
  */
@@ -136,8 +140,41 @@ export function ensureBankSynced(db: Database) {
   return bankSynced;
 }
 
+const feeSentence = (t: OfferTerms) => `${money(t.studentFee)} for currently pursuing students and ${money(t.graduateFee)} for graduates`;
+const feeParen = (t: OfferTerms) => `(${money(t.studentFee)} for students, ${money(t.graduateFee)} for graduates)`;
+
+/**
+ * Keeps installed tracks in step with the fee settings: the fee shown on
+ * tracks and openings, and the fee wording in their course and opening
+ * text (including the Rs. 4,000 wording tracks were first installed with).
+ */
+export async function syncProgramFees(db: Database, previous: OfferTerms | null = null) {
+  try {
+    const terms = await getOfferTerms(db);
+    const tracks = await db.query.internshipTracks.findMany();
+    if (!tracks.length) return;
+    const pairs: [string, string][] = [
+      ["fee of Rs. 4,000. Paying", `fee of ${feeSentence(terms)}. Paying`],
+      ["fee of Rs. 4,000 to start", `fee ${feeParen(terms)} to start`],
+    ];
+    if (previous) pairs.push([feeSentence(previous), feeSentence(terms)], [feeParen(previous), feeParen(terms)]);
+    const replaced = (column: ReturnType<typeof sql.raw>) => pairs.reduce((expr, [from, to]) => sql`replace(${expr}, ${from}, ${to})`, sql`${column}`);
+    const oppIds = tracks.map((t) => t.opportunityId).filter((x): x is string => !!x);
+    const courseIds = tracks.map((t) => t.courseId).filter((x): x is string => !!x);
+    await db.update(internshipTracks).set({ fee: String(terms.studentFee) });
+    if (oppIds.length) await db.update(opportunities).set({ programFee: String(terms.studentFee), description: replaced(sql.raw("description")) }).where(inArray(opportunities.id, oppIds));
+    if (courseIds.length) {
+      const modules = await db.query.courseModules.findMany({ where: inArray(courseModules.courseId, courseIds), columns: { id: true } });
+      if (modules.length) await db.update(courseLessons).set({ contentText: replaced(sql.raw("content_text")) }).where(inArray(courseLessons.moduleId, modules.map((m) => m.id)));
+    }
+  } catch (err) {
+    logger.error({ err }, "Could not update the internship fee text");
+  }
+}
+
 export async function installCatalog(db: Database, adminUserId: string) {
   await syncAssignmentBank(db);
+  const terms = await getOfferTerms(db);
 
   const created: string[] = [];
   for (const [index, seed] of TRACKS.entries()) {
@@ -171,7 +208,7 @@ export async function installCatalog(db: Database, adminUserId: string) {
           `Welcome to ${seed.title}. This course prepares you for the 6-month ${seed.title} Internship Program at Inveon Technologies.`,
           `You will study ${skills.map((s) => s.label).join(", ")}. Each module gives you the key ideas and the official documentation to learn from. Practise every topic yourself as you go.`,
           `At the end is a ${EXAM_MINUTES}-minute final exam with multiple-choice questions. Score ${EXAM_PASS_PERCENT}% or more and you receive a participant offer letter for the internship by email and in the portal. You have ${EXAM_ATTEMPTS} attempts.`,
-          "The internship has a one-time program fee of Rs. 4,000. Paying it unlocks your 6-month roadmap of assignments, which mentors review and mark, and makes you an official Inveon intern with an employee ID and appointment letter.",
+          `The internship has a one-time program fee of ${feeSentence(terms)}. Paying it unlocks your 6-month roadmap of assignments, which mentors review and mark, and makes you an official Inveon intern with an employee ID and appointment letter.`,
         ].join("\n\n"),
       });
 
@@ -219,12 +256,12 @@ export async function installCatalog(db: Database, adminUserId: string) {
         .values({
           title: `${seed.title} Internship Program (6 months)`,
           slug: `${slugify(seed.title)}-internship-${Math.random().toString(36).slice(2, 7)}`,
-          description: `${seed.description}\n\nHow to join: complete the free ${seed.title} course in the portal and pass its final exam. You'll receive a participant offer; pay the one-time program fee of Rs. 4,000 to start your 6-month roadmap of reviewed assignments as an Inveon intern.`,
+          description: `${seed.description}\n\nHow to join: complete the free ${seed.title} course in the portal and pass its final exam. You'll receive a participant offer; pay the one-time program fee ${feeParen(terms)} to start your 6-month roadmap of reviewed assignments as an Inveon intern.`,
           status: "published",
           publishedAt: now,
           kind: "program",
           durationMonths: 6,
-          programFee: "4000",
+          programFee: String(terms.studentFee),
           trialHours: 0,
           location: "Remote (India)",
           createdBy: adminUserId,
@@ -232,7 +269,7 @@ export async function installCatalog(db: Database, adminUserId: string) {
         .returning();
       await tx.update(opportunities).set({ businessId: formatBusinessId("OPP", opp.seqNumber) }).where(eq(opportunities.id, opp.id));
 
-      await tx.insert(internshipTracks).values({ ...seed, courseId: course.id, examLessonId: exam.id, opportunityId: opp.id, orderIndex: index });
+      await tx.insert(internshipTracks).values({ ...seed, fee: String(terms.studentFee), courseId: course.id, examLessonId: exam.id, opportunityId: opp.id, orderIndex: index });
     });
     created.push(seed.title);
   }
@@ -243,7 +280,15 @@ export async function installCatalog(db: Database, adminUserId: string) {
 // ---------- Offer ----------
 
 export function offerReference(seq: number, issuedAt: Date) {
-  return `INV/INT/${issuedAt.getUTCFullYear()}/${String(seq).padStart(4, "0")}`;
+  return `INV/HR/INT/${issuedAt.getUTCFullYear()}/${String(seq).padStart(4, "0")}`;
+}
+
+/** The last day of an internship of `months` starting on `joining` (YYYY-MM-DD). */
+export function internshipEndDate(joining: string, months: number) {
+  const d = new Date(`${joining}T00:00:00Z`);
+  d.setUTCMonth(d.getUTCMonth() + months);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
 }
 
 /**
@@ -268,6 +313,12 @@ export async function onLessonPassed(db: Database, input: { lessonId: string; us
       return { trackSlug: track.slug, offerId: offer?.id ?? null };
     }
 
+    const terms = await getOfferTerms(db);
+    const feeCategory = await feeCategoryFor(db, input.userId);
+    const fee = String(feeFor(terms, feeCategory));
+    const joiningDate = nextMonday().toISOString().slice(0, 10);
+    const endDate = internshipEndDate(joiningDate, track.durationMonths);
+
     const { offer, application } = await db.transaction(async (tx) => {
       const [app] = await tx.insert(applications).values({ userId: input.userId, opportunityId: track.opportunityId! }).returning();
       const [withId] = await tx.update(applications).set({ businessId: formatBusinessId("APP", app.seqNumber), status: "shortlisted", updatedAt: new Date() }).where(eq(applications.id, app.id)).returning();
@@ -277,9 +328,12 @@ export async function onLessonPassed(db: Database, input: { lessonId: string; us
       ]);
       const [enrollment] = await tx
         .insert(programEnrollments)
-        .values({ applicationId: app.id, userId: input.userId, opportunityId: track.opportunityId!, status: "awaiting_choice", amount: track.fee, trialHours: 0 })
+        .values({ applicationId: app.id, userId: input.userId, opportunityId: track.opportunityId!, status: "awaiting_choice", amount: fee, trialHours: 0 })
         .returning();
-      const [created] = await tx.insert(participantOffers).values({ enrollmentId: enrollment.id, trackId: track.id, userId: input.userId, examScore: input.scorePercent, fee: track.fee }).returning();
+      const [created] = await tx
+        .insert(participantOffers)
+        .values({ enrollmentId: enrollment.id, trackId: track.id, userId: input.userId, examScore: input.scorePercent, fee, feeCategory, workMode: terms.workMode, joiningDate, endDate })
+        .returning();
       const [withRef] = await tx.update(participantOffers).set({ referenceNo: offerReference(created.seqNumber, created.issuedAt) }).where(eq(participantOffers.id, created.id)).returning();
       return { offer: withRef, application: withId };
     });
@@ -305,73 +359,130 @@ export async function onLessonPassed(db: Database, input: { lessonId: string; us
   }
 }
 
+const FEE_LABEL = { student: "Currently Pursuing Student", graduate: "Graduate" } as const;
+const day = (iso: string) => longDate(new Date(`${iso}T00:00:00Z`));
+
+/** The offer letter, laid out like the company's Internship Offer Letter template. */
 export async function offerDocument(db: Database, offer: ParticipantOffer): Promise<LetterDocument> {
   const track = (await db.query.internshipTracks.findFirst({ where: eq(internshipTracks.id, offer.trackId) }))!;
   const user = (await db.query.users.findFirst({ where: eq(users.id, offer.userId) }))!;
   const name = await displayNameFor(db, offer.userId);
-  const bySkill = await assignmentsForSkills(db, trackSkills(track.roadmap));
-  const phases = allocateRoadmap(track.roadmap, bySkill);
-  const assignmentCount = phases.reduce((n, p) => n + p.skills.reduce((m, s) => m + s.assignments.length, 0), 0);
-  const first = name.split(" ")[0] || name;
+  const company = companyProfile();
+  const months = track.durationMonths;
+  const joining = offer.joiningDate ?? nextMonday(offer.issuedAt).toISOString().slice(0, 10);
+  const end = offer.endDate ?? internshipEndDate(joining, months);
+  const fee = `${money(offer.fee)}${offer.feeCategory ? ` - ${FEE_LABEL[offer.feeCategory]}` : ""}`;
+  const bullets = (...items: string[]): LetterBlock => ({ kind: "bullets", items });
 
   return {
     title: `Internship Offer - ${name}`,
-    kicker: "INTERNSHIP OFFER",
+    kicker: "INTERNSHIP OFFER LETTER",
+    heading: { title: "Internship Offer Letter", subtitle: `Ref: ${offer.referenceNo ?? "-"} | Date: ${longDate(offer.issuedAt)}` },
     reference: offer.referenceNo ?? undefined,
     date: offer.issuedAt,
-    companyAddress: letterheadAddress(),
     recipient: [name, user.email],
-    subject: `Offer to join the ${track.durationMonths}-Month ${track.title} Internship Program`,
+    subject: `Offer of Internship - ${track.title}`,
     blocks: [
-      { kind: "para", text: `Dear ${first},` },
-      { kind: "para", text: `Congratulations on passing the final exam of the ${track.title} course with a score of ${offer.examScore}%. We are pleased to offer you a place as a participant in the Inveon Technologies ${track.durationMonths}-month ${track.title} Internship Program.` },
+      { kind: "para", text: `Dear ${name},`, bold: true },
+      {
+        kind: "para",
+        text: `We are pleased to offer you an internship with ${company.name} in the ${track.title} track. This offer is subject to the terms set out in this letter and the Company's Internship Program Policy and other applicable Company policies.`,
+      },
       {
         kind: "facts",
         rows: [
-          ["Participant", name],
-          ["Program", `${track.title} Internship Program`],
-          ["Duration", `${track.durationMonths} months, starting the Monday after you join`],
-          ["Mode", "Remote (India), with live sessions and mentor reviews"],
-          ["Qualifying score", `${offer.examScore}% in the final exam`],
-          ["Program fee", `${money(offer.fee)} (one-time)`],
-          ["Assignments", `${assignmentCount} across ${phases.length} months`],
+          ["Internship Track", track.title],
+          ["Internship Type", `${months}-Month Internship Program`],
+          ["Date Of Joining", day(joining)],
+          ["Internship End Date", day(end)],
+          ["Work Mode", offer.workMode],
+          ["Program Fee", fee],
         ],
       },
-      { kind: "heading", text: "What the program includes" },
+      { kind: "heading", text: "1. Internship Terms" },
+      bullets(
+        `The internship is for ${months === 6 ? "six" : months} months and follows the assigned track roadmap through the Inveon portal.`,
+        "The applicable one-time program fee is as stated above. It covers training, mentoring, reviews, portal access and internship certification and is non-refundable once the internship begins, except where the Company cancels the program.",
+        "The internship is a training and project-learning program and does not guarantee employment or a stipend unless separately stated in writing.",
+      ),
+      { kind: "heading", text: "2. Responsibilities and Completion" },
+      bullets(
+        "You are expected to complete assigned projects and assignments, participate in reviews and mentoring, meet communicated deadlines and maintain professional conduct.",
+        "Attendance is recorded through the portal. A minimum of 75% attendance and completion and approval of required project and assignment work are required for successful completion.",
+        "On successful completion, you will receive an Internship Completion Certificate.",
+      ),
+      { kind: "heading", text: "3. Company Policies" },
+      bullets(
+        `Your internship is subject to the applicable ${company.name} policies, including the Code of Conduct, Leave and Attendance, Information Security and Acceptable Use, Confidentiality and Intellectual Property, POSH, Remote Work and Communication, and Internship Program Policy. You are expected to read and comply with these policies.`,
+      ),
+      { kind: "heading", text: "4. Confidentiality and Intellectual Property" },
+      bullets(
+        "You must protect Company and client confidential information during and after the internship. Work created in the course of the internship is subject to the Company's Intellectual Property Policy. Internship projects may be displayed in a personal portfolio only with Company approval and without confidential or client information.",
+      ),
+      { kind: "heading", text: "5. Termination" },
+      bullets(
+        "Either you or the Company may end the internship with seven days' written notice. The Company may end the internship immediately for misconduct, plagiarism or serious breach of Company policies. Completion requirements must be met for the Internship Completion Certificate.",
+      ),
+      { kind: "heading", text: "Acceptance" },
+      bullets(
+        `Please confirm that you have read and understood this offer and agree to the Internship Program Policy and applicable Company policies by paying the program fee from the ${track.title} page under Internships in the Inveon portal.`,
+      ),
       {
-        kind: "bullets",
-        items: [
-          `A month-by-month roadmap covering ${[...new Set(phases.flatMap((p) => p.skills.map((s) => s.label)))].join(", ")}.`,
-          "Practical assignments, each reviewed by a mentor who approves it with marks and feedback, or asks for changes.",
-          "Live classes, the Inveon community chat, and tasks linked to real GitHub issues.",
-          "Official onboarding as an Inveon intern: an employee ID, an appointment letter and access to the company portal.",
-          "An Internship Completion Certificate, verifiable online, when you complete the program. Outstanding interns are considered for full-time roles.",
+        kind: "signatories",
+        left: { caption: `For ${company.name.toUpperCase()}`, people: company.signatories, seal: true },
+        right: [
+          // Left as a line to sign on until a project manager is set in Settings.
+          { name: company.projectManager?.name ?? "____________________", title: company.projectManager?.title ?? "Project Manager", subtitle: company.name },
+          { caption: "Accepted by:", name, title: "Intern" },
         ],
       },
-      { kind: "heading", text: "Your roadmap" },
-      { kind: "facts", rows: phases.map((p) => [`Month ${p.month}`, `${p.title}: ${p.skills.map((s) => s.label).join(", ")}`] as [string, string]) },
-      { kind: "heading", text: "How to accept" },
-      {
-        kind: "clauses",
-        items: [
-          { title: "Pay the program fee", text: `Open the ${track.title} page under Internships in the Inveon portal and choose "Accept and pay". The fee of ${money(offer.fee)} is paid securely online through Cashfree (UPI, cards or net banking).` },
-          { title: "Start your roadmap", text: "Your roadmap of assignments unlocks as soon as the payment is confirmed. Submit each assignment from the portal with a repository or live link." },
-          { title: "Join as an intern", text: "You are onboarded as an Inveon intern with an employee ID. Your appointment letter and the company policies follow by email." },
-        ],
-      },
-      {
-        kind: "callout",
-        title: "Terms",
-        text: "The program fee is non-refundable once the program has started, except if Inveon cancels the program. Participation is governed by the Internship Program Policy and the other company policies shared with your appointment letter.",
-      },
-      { kind: "para", text: "We look forward to having you on the team." },
-      { kind: "signatures", left: { caption: "For Inveon Technologies", name: "Talent and Training Team", title: "Authorised Signatory" } },
     ],
   };
 }
 
 export const offerPdf = async (db: Database, offer: ParticipantOffer) => renderLetterPdf(await offerDocument(db, offer));
 export const offerFilename = (track: Pick<Track, "title">) => `Internship-Offer-${track.title.replace(/[^A-Za-z0-9]+/g, "-")}.pdf`;
+
+/** The Internship Program Policy as a PDF, sent with every offer. */
+async function programPolicyAttachment(db: Database) {
+  const policy = (await activePolicies(db)).find((p) => p.slug === "internship-program");
+  return policy ? [{ filename: policyFilename(policy), content: Buffer.from(await renderPolicyPdf(policy, policy.updatedAt)), contentType: "application/pdf" }] : [];
+}
+
+export async function queueOfferEmail(db: Database, offerId: string, by?: string) {
+  await enqueueJob(db, "internship.offer_email", { offerId, by });
+}
+
+export const offerUpdateSchema = z.object({
+  feeCategory: z.enum(["student", "graduate"]),
+  fee: z.number().min(0).max(1_000_000),
+  workMode: z.enum(["Remote", "Office", "Hybrid"]),
+  joiningDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD"),
+  endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD"),
+});
+
+/**
+ * Staff correct an offer before it is paid: student or graduate fee, work
+ * mode, dates. The enrollment's amount follows the fee, so the payment page
+ * charges the new amount.
+ */
+export async function updateOffer(db: Database, offer: ParticipantOffer, input: z.infer<typeof offerUpdateSchema>) {
+  if (input.endDate <= input.joiningDate) throw new AppError("INVALID_DATES", "The end date must be after the joining date", 400);
+  const enrollment = await db.query.programEnrollments.findFirst({ where: eq(programEnrollments.id, offer.enrollmentId) });
+  const feeChanged = Number(offer.fee) !== input.fee;
+  if (feeChanged && enrollment && ["paid", "waived", "cancelled"].includes(enrollment.status)) {
+    throw new AppError("OFFER_SETTLED", "The fee can't change after it has been paid, waived or cancelled", 400);
+  }
+  return db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(participantOffers)
+      .set({ fee: String(input.fee), feeCategory: input.feeCategory, workMode: input.workMode, joiningDate: input.joiningDate, endDate: input.endDate, updatedAt: new Date() })
+      .where(eq(participantOffers.id, offer.id))
+      .returning();
+    if (feeChanged && enrollment) await tx.update(programEnrollments).set({ amount: String(input.fee), updatedAt: new Date() }).where(eq(programEnrollments.id, enrollment.id));
+    return updated;
+  });
+}
 
 export function registerInternshipJobs(db: Database, appUrl: string) {
   registerJobHandler("internship.offer_email", async (payload) => {
@@ -382,11 +493,16 @@ export function registerInternshipJobs(db: Database, appUrl: string) {
     const first = (await displayNameFor(db, offer.userId)).split(" ")[0];
     await deliverEmail({
       to: user.email,
-      subject: `Your offer: ${track.title} Internship Program (6 months)`,
+      subject: `Your offer: ${track.title} Internship Program (${track.durationMonths} months)`,
+      kind: "internship_offer",
+      refId: offer.id,
+      triggeredBy: payload.by ? String(payload.by) : undefined,
       text: [
         `Dear ${first},`,
         "",
-        `Congratulations! You passed the ${track.title} final exam with ${offer.examScore}%, and we're pleased to offer you a place in the 6-month ${track.title} Internship Program. Your offer letter (ref. ${offer.referenceNo}) is attached.`,
+        `Congratulations! You passed the ${track.title} final exam with ${offer.examScore}%, and we're pleased to offer you a place in the ${track.durationMonths}-month ${track.title} Internship Program. Your offer letter (ref. ${offer.referenceNo}) and the Internship Program Policy are attached.`,
+        "",
+        offer.joiningDate ? `Your internship starts on ${day(offer.joiningDate)}${offer.endDate ? ` and ends on ${day(offer.endDate)}` : ""} (${offer.workMode}).` : "",
         "",
         `To accept, pay the one-time program fee of ${money(offer.fee)} in the portal. Your roadmap of assignments unlocks right away:`,
         `${appUrl}/internships/${track.slug}`,
@@ -395,7 +511,7 @@ export function registerInternshipJobs(db: Database, appUrl: string) {
         "Talent and Training Team",
         "Inveon Technologies",
       ].join("\n"),
-      attachments: [{ filename: offerFilename(track), content: Buffer.from(await offerPdf(db, offer)), contentType: "application/pdf" }],
+      attachments: [{ filename: offerFilename(track), content: Buffer.from(await offerPdf(db, offer)), contentType: "application/pdf" }, ...(await programPolicyAttachment(db))],
     });
     await db.update(participantOffers).set({ emailedAt: new Date() }).where(eq(participantOffers.id, offer.id));
   });

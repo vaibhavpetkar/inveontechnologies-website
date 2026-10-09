@@ -6,7 +6,9 @@ import { amountInWords } from "../payroll/pdf.js";
 import { deliverEmail } from "../shared/mailer.js";
 import { enqueueJob, registerJobHandler } from "../shared/jobs.js";
 import { logger } from "../shared/logger.js";
-import { DEFAULT_POLICIES } from "./policy-defaults.js";
+import { companyProfile } from "../settings/company.js";
+import { DEFAULT_POLICIES, POLICIES_EFFECTIVE } from "./policy-defaults.js";
+import { PREVIOUS_DEFAULT_POLICIES } from "./policy-previous.js";
 import { notifyIfOnboardingComplete } from "./onboarding.js";
 
 export type EmployeeLetter = typeof employeeLetters.$inferSelect;
@@ -15,18 +17,16 @@ export type CompanyPolicy = typeof companyPolicies.$inferSelect;
 const money = (n: number) => `Rs. ${n.toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 const date = (iso: string) => longDate(new Date(`${iso}T00:00:00Z`));
 
-let companyAddress: string | null = null;
-export function configureLetters(options: { companyAddress?: string | null }) {
-  companyAddress = options.companyAddress?.trim() || null;
-}
-export const letterheadAddress = () => companyAddress;
-
 let policiesSeeded = false;
 
+const sameText = (a: string, b: string) => a.replace(/\s+/g, " ").trim() === b.replace(/\s+/g, " ").trim();
+
 /**
- * Inserts the default policies that don't exist yet; never touches edited
- * ones. Runs at startup and again on first use, in case the server started
- * before the migration that adds the table.
+ * Inserts the default policies that don't exist yet, and moves any policy
+ * still carrying an earlier default wording (never edited by an admin) to
+ * the current wording as a new version. Edited policies are never touched.
+ * Runs at startup and again on first use, in case the server started before
+ * the migration that adds the table.
  */
 export async function ensureDefaultPolicies(db: Database) {
   if (policiesSeeded) return;
@@ -35,6 +35,17 @@ export async function ensureDefaultPolicies(db: Database) {
       .insert(companyPolicies)
       .values(DEFAULT_POLICIES.map((p, i) => ({ ...p, orderIndex: i })))
       .onConflictDoNothing({ target: companyPolicies.slug });
+    const existing = await db.query.companyPolicies.findMany({ where: inArray(companyPolicies.slug, DEFAULT_POLICIES.map((p) => p.slug)) });
+    for (const row of existing) {
+      const current = DEFAULT_POLICIES.find((p) => p.slug === row.slug)!;
+      const previous = PREVIOUS_DEFAULT_POLICIES.find((p) => p.slug === row.slug);
+      if (!previous || sameText(row.body, current.body) || !sameText(row.body, previous.body)) continue;
+      await db
+        .update(companyPolicies)
+        .set({ body: current.body, summary: current.summary, title: current.title, version: row.version + 1, updatedAt: new Date() })
+        .where(and(eq(companyPolicies.id, row.id), eq(companyPolicies.version, row.version)));
+      logger.info({ slug: row.slug, version: row.version + 1 }, "Updated an unedited company policy to the current wording");
+    }
     policiesSeeded = true;
   } catch (err) {
     logger.error({ err }, "Could not seed the default company policies");
@@ -50,12 +61,16 @@ export const snapshotPolicy = (p: CompanyPolicy): PolicySnapshot => ({ id: p.id,
 
 /** A policy on its own letterhead, the same file whether downloaded or attached to a letter. */
 export function renderPolicyPdf(policy: Pick<PolicySnapshot, "title" | "version" | "body" | "slug">, effective?: Date) {
-  const blocks: LetterBlock[] = [
-    { kind: "title", text: policy.title },
-    { kind: "para", text: `Version ${policy.version}${effective ? `, effective ${longDate(effective)}` : ""}. Applies to all employees, interns and contractors of Inveon Technologies.` },
-    ...parseRichText(policy.body),
-  ];
-  return renderLetterPdf({ title: policy.title, kicker: "COMPANY POLICY", reference: `INV/POL/${policy.slug.toUpperCase()}/V${policy.version}`, companyAddress, blocks });
+  // Never earlier than the date the current policy set took effect.
+  const from = new Date(`${POLICIES_EFFECTIVE}T00:00:00+05:30`);
+  const when = effective && effective > from ? effective : from;
+  return renderLetterPdf({
+    title: policy.title,
+    kicker: "COMPANY POLICY",
+    heading: { title: policy.title, subtitle: `Company Policy · Effective ${longDate(when)}${policy.version > 1 ? ` · Version ${policy.version}` : ""}` },
+    reference: `INV/POL/${policy.slug.toUpperCase()}${policy.version > 1 ? `/V${policy.version}` : ""}`,
+    blocks: parseRichText(policy.body),
+  });
 }
 
 export const policyFilename = (p: Pick<PolicySnapshot, "title" | "version">) => `${p.title.replace(/[^A-Za-z0-9]+/g, "-").replace(/(^-|-$)/g, "")}-v${p.version}.pdf`;
@@ -161,9 +176,9 @@ export function appointmentBlocks(d: AppointmentDetails, letter: { signatoryName
     },
     { kind: "para", text: "We look forward to working with you." },
     {
-      kind: "signatures",
-      left: { caption: "For Inveon Technologies", name: letter.signatoryName, title: letter.signatoryTitle },
-      right: { caption: "Accepted by", name: d.name, title: role, note: accepted },
+      kind: "signatories",
+      left: { caption: `For ${companyProfile().name.toUpperCase()}`, people: [{ name: letter.signatoryName, title: letter.signatoryTitle }], seal: true },
+      right: [{ caption: "Accepted by:", name: d.name, title: role, note: accepted }],
     },
   ];
 }
@@ -176,7 +191,6 @@ export function appointmentDocument(letter: EmployeeLetter) {
     kicker: "APPOINTMENT LETTER",
     reference: letter.referenceNo ?? undefined,
     date: letter.generatedAt,
-    companyAddress,
     recipient: [d.name, d.email],
     subject: `Appointment as ${roleTitle(d)}`,
     blocks: appointmentBlocks(d, { signatoryName: letter.signatoryName, signatoryTitle: letter.signatoryTitle, policies, acceptedAt: letter.acceptedAt, acceptedName: letter.acceptedName }),
@@ -225,13 +239,13 @@ export function registerLetterJobs(db: Database, appUrl: string) {
       .filter((line, i, all) => !(line === "" && all[i - 1] === ""))
       .join("\n");
     const to = String(payload.to ?? d.email);
-    await deliverEmail({ to, subject: `Your appointment letter: ${role}, Inveon Technologies`, text, attachments });
+    await deliverEmail({ to, subject: `Your appointment letter: ${role}, Inveon Technologies`, text, attachments, kind: "appointment_letter", refId: letter.id, triggeredBy: payload.by ? String(payload.by) : undefined });
     await db.update(employeeLetters).set({ emailedTo: to, emailedAt: new Date() }).where(eq(employeeLetters.id, letter.id));
   });
 }
 
-export async function queueAppointmentEmail(db: Database, letterId: string, to: string) {
-  await enqueueJob(db, "letter.email", { letterId, to });
+export async function queueAppointmentEmail(db: Database, letterId: string, to: string, by?: string) {
+  await enqueueJob(db, "letter.email", { letterId, to, by });
 }
 
 /**

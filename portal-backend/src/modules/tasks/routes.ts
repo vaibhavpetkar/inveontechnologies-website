@@ -11,6 +11,7 @@ import {
   taskTimeEntries,
   taskEvents,
   taskUpdates,
+  taskRequests,
   projectMilestones,
   courseEnrollments,
   employees,
@@ -31,6 +32,7 @@ import { canAccessProject, canManageProject } from "../projects/routes.js";
 import type { Env } from "../shared/env.js";
 import { claimFile, fileForUrl, publicFile } from "../files/service.js";
 import { pushTaskStatusToGithub } from "../github/push.js";
+import { displayNameFor } from "../employees/onboarding.js";
 
 const PRIVILEGED_ROLES = ["hr", "admin", "super_admin"] as const;
 const MANAGER_LIKE_ROLES = ["manager", "hr", "admin", "super_admin"] as const;
@@ -71,7 +73,27 @@ const kickoffSchema = z.object({
   expectedFinishAt: z.string().datetime({ offset: true }).optional(),
   branchOrLink: z.string().trim().max(500).optional(),
 });
-const transitionSchema = z.object({ toStatus: z.enum(["in_progress", "in_review", "done", "changes_requested", "cancelled"]), note: z.string().max(2000).optional(), kickoff: kickoffSchema.optional() });
+const transitionSchema = z.object({
+  toStatus: z.enum(["in_progress", "in_review", "done", "changes_requested", "cancelled"]),
+  note: z.string().max(2000).optional(),
+  kickoff: kickoffSchema.optional(),
+  // Approving can carry the reviewer's 1-5 star rating of the work.
+  rating: z.number().int().min(1).max(5).optional(),
+  ratingNote: z.string().trim().max(1000).optional(),
+});
+const ratingSchema = z.object({ rating: z.number().int().min(1).max(5), note: z.string().trim().max(1000).optional() });
+const requestSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("extension"), reason: z.string().trim().min(3).max(2000), requestedDueDate: z.string().datetime({ offset: true }) }),
+  z.object({ kind: z.literal("reassign"), reason: z.string().trim().min(3).max(2000), proposedAssigneeId: z.string().uuid().optional() }),
+]);
+const decideSchema = z.object({
+  approve: z.boolean(),
+  note: z.string().trim().max(2000).optional(),
+  // Approving an extension may set a different date than asked; approving a
+  // hand-over needs the new assignee unless the request named one.
+  dueDate: z.string().datetime({ offset: true }).optional(),
+  assigneeId: z.string().uuid().optional(),
+});
 const updateSchema = z.object({
   kind: z.enum(["progress", "blocker"]).default("progress"),
   body: z.string().trim().min(2).max(4000),
@@ -130,6 +152,15 @@ async function assertCanAssign(db: Database, user: { sub: string; role: string }
   if (!MANAGER_LIKE_ROLES.includes(user.role as (typeof MANAGER_LIKE_ROLES)[number])) {
     throw new ForbiddenError("Only managers, HR and admins can assign personal tasks to other people");
   }
+}
+
+/** The task's reviewers: its creator, a project owner or lead, or HR and admins. */
+export async function isTaskReviewer(db: Database, user: { sub: string; role: string }, task: typeof tasks.$inferSelect) {
+  return (
+    PRIVILEGED_ROLES.includes(user.role as (typeof PRIVILEGED_ROLES)[number]) ||
+    task.createdBy === user.sub ||
+    (task.projectId ? await canManageProject(db, user.sub, user.role, task.projectId) : false)
+  );
 }
 
 export async function canAccessTask(db: Database, userId: string, role: string, task: typeof tasks.$inferSelect): Promise<boolean> {
@@ -200,10 +231,7 @@ export function tasksRouter(db: Database, env: Env) {
     const body = transitionSchema.parse(req.body);
     const from = task.status as TaskStatus;
     const isAssignee = task.assigneeId === req.user!.sub;
-    const isReviewer =
-      PRIVILEGED_ROLES.includes(req.user!.role as (typeof PRIVILEGED_ROLES)[number]) ||
-      task.createdBy === req.user!.sub ||
-      (task.projectId ? await canManageProject(db, req.user!.sub, req.user!.role, task.projectId) : false);
+    const isReviewer = await isTaskReviewer(db, req.user!, task);
 
     const allowed = (isAssignee && isAssigneeTransitionAllowed(from, body.toStatus)) || (isReviewer && isReviewerTransitionAllowed(from, body.toStatus));
     if (!allowed) {
@@ -212,6 +240,9 @@ export function tasksRouter(db: Database, env: Env) {
 
     const starting = body.toStatus === "in_progress";
     const kickoff = starting ? body.kickoff : undefined;
+    const approving = body.toStatus === "done";
+    // Nobody rates their own work.
+    const rating = approving && body.rating && task.assigneeId !== req.user!.sub ? body.rating : undefined;
     await db.transaction(async (tx) => {
       await tx
         .update(tasks)
@@ -220,7 +251,8 @@ export function tasksRouter(db: Database, env: Env) {
           updatedAt: new Date(),
           ...(starting && !task.startedAt ? { startedAt: new Date() } : {}),
           ...(kickoff?.expectedFinishAt ? { expectedFinishAt: new Date(kickoff.expectedFinishAt) } : {}),
-          ...(body.toStatus === "done" ? { progressPercent: 100 } : {}),
+          ...(approving ? { progressPercent: 100, completedAt: new Date() } : {}),
+          ...(rating ? { rating, ratingNote: body.ratingNote || null, ratedBy: req.user!.sub, ratedAt: new Date() } : {}),
         })
         .where(eq(tasks.id, task.id));
       await tx.insert(taskEvents).values({ taskId: task.id, actorUserId: req.user!.sub, action: "status_change", fromStatus: from, toStatus: body.toStatus, note: body.note ?? kickoff?.plan });
@@ -229,7 +261,7 @@ export function tasksRouter(db: Database, env: Env) {
       }
     });
 
-    await notifyTransition(db, task, body.toStatus, req.user!.sub, body.note);
+    await notifyTransition(db, task, body.toStatus, req.user!.sub, body.note, rating);
     if (kickoff && task.createdBy !== req.user!.sub) {
       await notify(db, {
         userIds: [task.createdBy],
@@ -243,6 +275,168 @@ export function tasksRouter(db: Database, env: Env) {
     await pushTaskStatusToGithub(env, task, body.toStatus);
 
     res.json({ message: `Task moved to ${body.toStatus}.` });
+  });
+
+  /** The reviewer's star rating on approved work; can be given or changed after approval too. */
+  router.post("/:id/rating", requireAuth(env), async (req, res) => {
+    const task = await db.query.tasks.findFirst({ where: eq(tasks.id, req.params.id) });
+    if (!task) throw new NotFoundError("Task not found");
+    if (!(await isTaskReviewer(db, req.user!, task))) throw new ForbiddenError("Only the task's reviewers can rate it");
+    if (task.assigneeId === req.user!.sub) throw new ForbiddenError("You can't rate your own work");
+    if (task.status !== "done") throw new AppError("INVALID_STATE", "Rate a task once it has been approved", 400);
+    const body = ratingSchema.parse(req.body);
+    const [updated] = await db
+      .update(tasks)
+      .set({ rating: body.rating, ratingNote: body.note || null, ratedBy: req.user!.sub, ratedAt: new Date(), updatedAt: new Date() })
+      .where(eq(tasks.id, task.id))
+      .returning();
+    await db.insert(taskEvents).values({ taskId: task.id, actorUserId: req.user!.sub, action: "rated", note: `${body.rating}/5${body.note ? ` - ${body.note}` : ""}` });
+    if (task.assigneeId) {
+      await notify(db, { userIds: [task.assigneeId], actorUserId: req.user!.sub, kind: "task.rated", title: `${body.rating}/5 stars on ${task.title}`, body: body.note || `Your reviewer rated "${task.title}" ${body.rating} out of 5.`, link: `/tasks/${task.id}` });
+    }
+    res.json({ task: updated });
+  });
+
+  // ---- More time, or hand the task to someone else ----
+
+  /** Requests waiting on the caller: on tasks they created, lead, or (HR/admin) any task. */
+  router.get("/requests/pending", requireAuth(env), async (req, res) => {
+    const pending = await db.query.taskRequests.findMany({ where: eq(taskRequests.status, "pending"), orderBy: (r, { asc }) => [asc(r.createdAt)], limit: 200 });
+    const taskRows = pending.length ? await db.query.tasks.findMany({ where: inArray(tasks.id, [...new Set(pending.map((r) => r.taskId))]) }) : [];
+    const byId = new Map(taskRows.map((t) => [t.id, t]));
+    const mine = [];
+    for (const r of pending) {
+      const task = byId.get(r.taskId);
+      if (task && (await isTaskReviewer(db, req.user!, task))) mine.push({ ...r, task: { id: task.id, title: task.title, dueDate: task.dueDate, status: task.status, projectId: task.projectId, assigneeId: task.assigneeId } });
+    }
+    res.json({ requests: mine });
+  });
+
+  router.get("/:id/requests", requireAuth(env), async (req, res) => {
+    const task = await db.query.tasks.findFirst({ where: eq(tasks.id, req.params.id) });
+    if (!task) throw new NotFoundError("Task not found");
+    if (!(await canAccessTask(db, req.user!.sub, req.user!.role, task))) throw new ForbiddenError();
+    res.json({ requests: await db.query.taskRequests.findMany({ where: eq(taskRequests.taskId, task.id), orderBy: (r, { desc }) => [desc(r.createdAt)] }), canDecide: await isTaskReviewer(db, req.user!, task) });
+  });
+
+  router.post("/:id/requests", requireAuth(env), async (req, res) => {
+    const task = await db.query.tasks.findFirst({ where: eq(tasks.id, req.params.id) });
+    if (!task) throw new NotFoundError("Task not found");
+    if (task.assigneeId !== req.user!.sub) throw new ForbiddenError("Only the person the task is assigned to can ask for this");
+    if (["done", "cancelled"].includes(task.status)) throw new AppError("INVALID_STATE", "This task is closed", 400);
+    const body = requestSchema.parse(req.body);
+    const open = await db.query.taskRequests.findFirst({ where: and(eq(taskRequests.taskId, task.id), eq(taskRequests.kind, body.kind), eq(taskRequests.status, "pending")) });
+    if (open) throw new AppError("REQUEST_PENDING", "You already have a request like this waiting for an answer", 409);
+    if (body.kind === "extension" && new Date(body.requestedDueDate) <= new Date()) throw new AppError("INVALID_DATE", "Pick a new date in the future", 400);
+    if (body.kind === "reassign" && body.proposedAssigneeId === req.user!.sub) throw new AppError("INVALID_ASSIGNEE", "Suggest someone other than yourself", 400);
+
+    const [request] = await db
+      .insert(taskRequests)
+      .values({
+        taskId: task.id,
+        requestedBy: req.user!.sub,
+        kind: body.kind,
+        reason: body.reason,
+        currentDueDate: task.dueDate,
+        requestedDueDate: body.kind === "extension" ? new Date(body.requestedDueDate) : null,
+        proposedAssigneeId: body.kind === "reassign" ? (body.proposedAssigneeId ?? null) : null,
+      })
+      .returning();
+    await db.insert(taskEvents).values({ taskId: task.id, actorUserId: req.user!.sub, action: body.kind === "extension" ? "extension_requested" : "reassign_requested", note: body.reason });
+    const reviewers = await taskReviewerIds(db, task);
+    const who = await displayNameFor(db, req.user!.sub);
+    await notify(db, {
+      userIds: reviewers.filter((id) => id !== req.user!.sub),
+      actorUserId: req.user!.sub,
+      kind: "task.request",
+      title: body.kind === "extension" ? `More time asked: ${task.title}` : `Hand-over asked: ${task.title}`,
+      body:
+        body.kind === "extension"
+          ? `${who} asked to move the due date${task.dueDate ? ` from ${formatWhen(task.dueDate)}` : ""} to ${formatWhen(new Date(body.requestedDueDate))}.\n\n"${body.reason}"`
+          : `${who} asked to hand this task to someone else.\n\n"${body.reason}"`,
+      link: `/tasks/${task.id}`,
+      email: true,
+    });
+    res.status(201).json({ request });
+  });
+
+  router.post("/requests/:id/cancel", requireAuth(env), async (req, res) => {
+    const request = await db.query.taskRequests.findFirst({ where: eq(taskRequests.id, req.params.id) });
+    if (!request) throw new NotFoundError("Request not found");
+    if (request.requestedBy !== req.user!.sub) throw new ForbiddenError();
+    if (request.status !== "pending") throw new AppError("INVALID_STATE", "This request has already been answered", 400);
+    const [updated] = await db.update(taskRequests).set({ status: "cancelled", decidedAt: new Date() }).where(eq(taskRequests.id, request.id)).returning();
+    res.json({ request: updated });
+  });
+
+  router.post("/requests/:id/decide", requireAuth(env), async (req, res) => {
+    const request = await db.query.taskRequests.findFirst({ where: eq(taskRequests.id, req.params.id) });
+    if (!request) throw new NotFoundError("Request not found");
+    const task = await db.query.tasks.findFirst({ where: eq(tasks.id, request.taskId) });
+    if (!task) throw new NotFoundError("Task not found");
+    if (!(await isTaskReviewer(db, req.user!, task))) throw new ForbiddenError("Only the task's reviewers can answer this");
+    if (request.status !== "pending") throw new AppError("INVALID_STATE", "This request has already been answered", 400);
+    const body = decideSchema.parse(req.body);
+
+    let changes: Partial<typeof tasks.$inferInsert> = {};
+    let newAssignee: string | null = null;
+    if (body.approve && request.kind === "extension") {
+      const due = new Date(body.dueDate ?? request.requestedDueDate!.toISOString());
+      changes = { dueDate: due, ...(task.expectedFinishAt && task.expectedFinishAt < due ? { expectedFinishAt: due } : {}) };
+    }
+    if (body.approve && request.kind === "reassign") {
+      newAssignee = body.assigneeId ?? request.proposedAssigneeId;
+      if (!newAssignee) throw new AppError("ASSIGNEE_REQUIRED", "Choose who takes the task over", 400);
+      if (newAssignee === task.assigneeId) throw new AppError("INVALID_ASSIGNEE", "Choose someone other than the current assignee", 400);
+      await assertCanAssign(db, req.user!, newAssignee, task.projectId);
+      // The new person starts fresh: back to To do, with their own kickoff.
+      const restart = ["in_progress", "changes_requested", "in_review"].includes(task.status);
+      changes = { assigneeId: newAssignee, ...(restart ? { status: "todo" as const, startedAt: null, expectedFinishAt: null } : {}), ...(body.dueDate ? { dueDate: new Date(body.dueDate) } : {}) };
+    }
+
+    const [decided] = await db.transaction(async (tx) => {
+      if (Object.keys(changes).length) await tx.update(tasks).set({ ...changes, updatedAt: new Date() }).where(eq(tasks.id, task.id));
+      await tx.insert(taskEvents).values({
+        taskId: task.id,
+        actorUserId: req.user!.sub,
+        action: `${request.kind}_${body.approve ? "approved" : "declined"}`,
+        fromStatus: changes.status ? (task.status as TaskStatus) : null,
+        toStatus: changes.status ?? null,
+        note: body.note ?? null,
+      });
+      return tx
+        .update(taskRequests)
+        .set({ status: body.approve ? "approved" : "declined", decidedBy: req.user!.sub, decidedAt: new Date(), decisionNote: body.note || null, ...(newAssignee ? { proposedAssigneeId: newAssignee } : {}) })
+        .where(eq(taskRequests.id, request.id))
+        .returning();
+    });
+
+    const link = `/tasks/${task.id}`;
+    const withNote = (t: string) => (body.note ? `${t}\n\n"${body.note}"` : t);
+    if (request.kind === "extension") {
+      await notify(db, {
+        userIds: [request.requestedBy],
+        actorUserId: req.user!.sub,
+        kind: "task.request_decided",
+        title: body.approve ? `More time approved: ${task.title}` : `More time declined: ${task.title}`,
+        body: withNote(body.approve ? `"${task.title}" is now due ${formatWhen(changes.dueDate as Date)}.` : `The due date for "${task.title}" stays${task.dueDate ? ` ${formatWhen(task.dueDate)}` : " as it is"}.`),
+        link,
+        email: true,
+      });
+    } else {
+      await notify(db, {
+        userIds: [request.requestedBy],
+        actorUserId: req.user!.sub,
+        kind: "task.request_decided",
+        title: body.approve ? `Handed over: ${task.title}` : `Hand-over declined: ${task.title}`,
+        body: withNote(body.approve ? `"${task.title}" has been reassigned. Thanks for flagging it.` : `"${task.title}" stays with you.`),
+        link,
+        email: true,
+      });
+      if (newAssignee) await notifyAssigned(db, { ...task, ...changes, assigneeId: newAssignee } as TaskRow, req.user!.sub);
+    }
+    await writeAuditLog(db, { actorUserId: req.user!.sub, action: `task_request.${body.approve ? "approve" : "decline"}`, entityType: "task", entityId: task.id, metadata: { kind: request.kind }, ipAddress: req.ip });
+    res.json({ request: decided });
   });
 
   /** Kickoff, progress check-ins and blockers, newest first. */
@@ -526,6 +720,18 @@ export function tasksRouter(db: Database, env: Env) {
 
 type TaskRow = typeof tasks.$inferSelect;
 
+/** Who answers requests on a task: its creator and its project's owner and leads. */
+async function taskReviewerIds(db: Database, task: TaskRow) {
+  const ids = new Set<string>([task.createdBy]);
+  if (task.projectId) {
+    const project = await db.query.projects.findFirst({ where: eq(projects.id, task.projectId) });
+    if (project) ids.add(project.ownerId);
+    const leads = await db.query.projectMembers.findMany({ where: and(eq(projectMembers.projectId, task.projectId), eq(projectMembers.roleOnProject, "lead")) });
+    leads.forEach((l) => ids.add(l.userId));
+  }
+  return [...ids];
+}
+
 async function notifyAssigned(db: Database, task: TaskRow, actorUserId: string) {
   const due = task.dueDate ? ` It's due ${formatWhen(task.dueDate)}.` : "";
   await notify(db, {
@@ -540,7 +746,7 @@ async function notifyAssigned(db: Database, task: TaskRow, actorUserId: string) 
 }
 
 /** Who hears about a move: the other side of the assignee/reviewer pair. */
-async function notifyTransition(db: Database, task: TaskRow, to: TaskStatus, actorUserId: string, note?: string) {
+async function notifyTransition(db: Database, task: TaskRow, to: TaskStatus, actorUserId: string, note?: string, rating?: number) {
   const link = `/tasks/${task.id}`;
   const withNote = (text: string) => (note ? `${text}\n\n"${note}"` : text);
   switch (to) {
@@ -551,7 +757,7 @@ async function notifyTransition(db: Database, task: TaskRow, to: TaskStatus, act
       await notify(db, { userIds: [task.assigneeId], actorUserId, kind: "task.changes_requested", title: `Changes requested: ${task.title}`, body: withNote(`Your reviewer asked for changes on "${task.title}".`), link, email: true });
       break;
     case "done":
-      await notify(db, { userIds: [task.assigneeId], actorUserId, kind: "task.done", title: `Approved: ${task.title}`, body: `"${task.title}" was reviewed and marked done.`, link });
+      await notify(db, { userIds: [task.assigneeId], actorUserId, kind: "task.done", title: `Approved: ${task.title}`, body: `"${task.title}" was reviewed and marked done.${rating ? ` Your reviewer rated it ${rating} out of 5 stars.` : ""}`, link });
       break;
     case "cancelled":
       await notify(db, { userIds: [task.assigneeId, task.createdBy], actorUserId, kind: "task.cancelled", title: `Cancelled: ${task.title}`, body: withNote(`"${task.title}" was cancelled.`), link });

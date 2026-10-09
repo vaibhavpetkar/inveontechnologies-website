@@ -79,7 +79,7 @@ export async function notify(db: Database, input: NotifyInput): Promise<void> {
       const to = emailByUser.get(userId);
       if (input.email && to && (pref?.emailEnabled ?? true)) {
         const link = input.link && appUrl ? `\n\nOpen it in the portal:\n${appUrl}${input.link}` : "";
-        await enqueueJob(db, "email.send", { to, subject: input.title, text: `${input.body ?? input.title}${link}\n\nYou can turn these emails off from the notifications menu in the portal.` });
+        await enqueueJob(db, "email.send", { to, kind: "notification", refId: input.kind, subject: input.title, text: `${input.body ?? input.title}${link}\n\nYou can turn these emails off from the notifications menu in the portal.` });
       }
     }
   } catch (err) {

@@ -794,7 +794,10 @@ export const employeeDocuments = pgTable("employee_documents", {
   fileUrl: text("file_url").notNull(), // placeholder — see earlier phases' note on deferred object storage
   status: employeeDocumentStatusEnum("status").notNull().default("uploaded"),
   verifiedBy: uuid("verified_by").references(() => users.id),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }),
   note: text("note"),
+  // What the employee wrote when uploading, e.g. "Updated bank account".
+  description: text("description"),
   uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -1001,6 +1004,13 @@ export const tasks = pgTable("tasks", {
   githubIssueUrl: text("github_issue_url"),
   githubIssueState: text("github_issue_state", { enum: ["open", "closed"] }),
   githubSyncedAt: timestamp("github_synced_at", { withTimezone: true }),
+  // Set when the reviewer approves it; the reviewer's 1-5 star rating feeds
+  // the performance ranking (weighted by hours, see modules/performance).
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  rating: integer("rating"),
+  ratingNote: text("rating_note"),
+  ratedBy: uuid("rated_by").references(() => users.id, { onDelete: "set null" }),
+  ratedAt: timestamp("rated_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({ uniqGithubIssue: unique("tasks_github_issue_unique").on(t.githubRepo, t.githubIssueNumber) }));
@@ -1745,8 +1755,14 @@ export const participantOffers = pgTable("participant_offers", {
   userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   examScore: integer("exam_score").notNull(),
   fee: numeric("fee", { precision: 10, scale: 2 }).notNull(),
+  // Student or graduate fee (see settings "internship_offer_terms"); staff can change it before payment.
+  feeCategory: text("fee_category", { enum: ["student", "graduate"] }),
+  workMode: text("work_mode", { enum: ["Remote", "Office", "Hybrid"] }).notNull().default("Remote"),
+  joiningDate: date("joining_date"),
+  endDate: date("end_date"),
   issuedAt: timestamp("issued_at", { withTimezone: true }).notNull().defaultNow(),
   emailedAt: timestamp("emailed_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }),
 });
 
 /**
@@ -1794,4 +1810,65 @@ export const portalSettings = pgTable("portal_settings", {
   value: jsonb("value").notNull(),
   updatedBy: uuid("updated_by").references(() => users.id),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Every email the portal sends (or tries to), for the Email settings page:
+ * who it went to, whether the mail server took it, and the error if not.
+ * kind + refId let a letter or offer be sent again. Bodies are kept only for
+ * plain notifications; never for sign-in, reset or verification emails.
+ */
+export const emailLog = pgTable(
+  "email_log",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    toEmail: text("to_email").notNull(),
+    subject: text("subject").notNull(),
+    kind: text("kind").notNull().default("general"),
+    refId: text("ref_id"),
+    status: text("status", { enum: ["sent", "failed", "logged"] }).notNull(),
+    error: text("error"),
+    body: text("body"),
+    attachments: jsonb("attachments").$type<string[]>().notNull().default([]),
+    triggeredBy: uuid("triggered_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ byTime: index("email_log_created_idx").on(t.createdAt), byTo: index("email_log_to_idx").on(t.toEmail) }),
+);
+
+/**
+ * An assignee asking for more time on a task, or to hand it to someone else.
+ * The task's creator, a project lead or HR/admin approves or declines it.
+ */
+export const taskRequests = pgTable(
+  "task_requests",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    requestedBy: uuid("requested_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["extension", "reassign"] }).notNull(),
+    reason: text("reason").notNull(),
+    currentDueDate: timestamp("current_due_date", { withTimezone: true }),
+    requestedDueDate: timestamp("requested_due_date", { withTimezone: true }),
+    proposedAssigneeId: uuid("proposed_assignee_id").references(() => users.id, { onDelete: "set null" }),
+    status: text("status", { enum: ["pending", "approved", "declined", "cancelled"] }).notNull().default("pending"),
+    decidedBy: uuid("decided_by").references(() => users.id, { onDelete: "set null" }),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    decisionNote: text("decision_note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ byTask: index("task_requests_task_idx").on(t.taskId, t.createdAt), byStatus: index("task_requests_status_idx").on(t.status) }),
+);
+
+/** One Employee of the Month per month ("2026-10"), picked from the ranking or by an admin. */
+export const employeeOfMonth = pgTable("employee_of_month", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  month: text("month").notNull().unique(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  score: numeric("score", { precision: 10, scale: 2 }).notNull().default("0"),
+  stats: jsonb("stats").$type<{ tasksDone: number; hours: number; avgRating: number | null; onTimePercent: number | null }>(),
+  note: text("note"),
+  chosenBy: uuid("chosen_by").references(() => users.id, { onDelete: "set null" }), // null = picked automatically
+  emailedAt: timestamp("emailed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

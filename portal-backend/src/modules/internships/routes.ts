@@ -25,13 +25,28 @@ import { expireTrialIfDue } from "../payments/enrollments.js";
 import type { Env } from "../shared/env.js";
 import { SKILL_LABELS } from "./catalog-skills.js";
 import { trackSkills } from "./catalog-tracks.js";
-import { allocateRoadmap, assignmentsForSkills, ensureBankSynced, installCatalog, offerFilename, offerPdf, trackStats, type Track, type TrackAssignment } from "./service.js";
+import {
+  allocateRoadmap,
+  assignmentsForSkills,
+  ensureBankSynced,
+  installCatalog,
+  offerFilename,
+  offerPdf,
+  offerUpdateSchema,
+  queueOfferEmail,
+  trackStats,
+  updateOffer,
+  type Track,
+  type TrackAssignment,
+} from "./service.js";
+import { getOfferTerms, type OfferTerms } from "../settings/offer-terms.js";
 import { gradeExercise, MAX_CODE_LENGTH } from "./exercises/grade.js";
 import { runnerFromEnv } from "./exercises/runner.js";
 import type { ExerciseSpec } from "./exercises/types.js";
 
 const REVIEWER_ROLES = ["manager", "hr", "admin", "super_admin"] as const;
 const INSTALL_ROLES = ["admin", "super_admin"] as const;
+const OFFER_STAFF = ["hr", "admin", "super_admin"] as const;
 const isReviewer = (role: string) => (REVIEWER_ROLES as readonly string[]).includes(role);
 const UNLOCKED = ["paid", "waived"];
 
@@ -105,20 +120,23 @@ async function myState(db: Database, track: Track, userId: string) {
   return {
     course,
     exam,
-    offer: offer ? { id: offer.id, referenceNo: offer.referenceNo, examScore: offer.examScore, fee: Number(offer.fee), issuedAt: offer.issuedAt } : null,
+    offer: offer
+      ? { id: offer.id, referenceNo: offer.referenceNo, examScore: offer.examScore, fee: Number(offer.fee), feeCategory: offer.feeCategory, workMode: offer.workMode, joiningDate: offer.joiningDate, endDate: offer.endDate, issuedAt: offer.issuedAt }
+      : null,
     enrollment: enrollment ? { id: enrollment.id, status: enrollment.status, paidAt: enrollment.paidAt, applicationId: enrollment.applicationId } : null,
     unlocked: !!enrollment && UNLOCKED.includes(enrollment.status),
   };
 }
 
-function publicTrack(track: Track) {
+function publicTrack(track: Track, terms: OfferTerms) {
   return {
     id: track.id,
     slug: track.slug,
     title: track.title,
     tagline: track.tagline,
     description: track.description,
-    fee: Number(track.fee),
+    fee: terms.studentFee,
+    graduateFee: terms.graduateFee,
     durationMonths: track.durationMonths,
     courseId: track.courseId,
     opportunityId: track.opportunityId,
@@ -143,10 +161,11 @@ export function internshipsRouter(db: Database, env: Env) {
     const counts = await db.execute<{ skill: string; n: number }>(sql`SELECT skill, count(*)::int AS n FROM track_assignments WHERE active GROUP BY skill`);
     const bySkill = new Map(counts.rows.map((r) => [r.skill, r.n]));
     const interns = isReviewer(req.user!.role) ? await trackStats(db) : null;
+    const terms = await getOfferTerms(db);
     res.json({
       tracks: await Promise.all(
         tracks.map(async (t) => ({
-          ...publicTrack(t),
+          ...publicTrack(t, terms),
           assignmentCount: trackSkills(t.roadmap).reduce((n, s) => n + (bySkill.get(s) ?? 0), 0),
           interns: interns?.get(t.id) ?? undefined,
           me: await myState(db, t, req.user!.sub),
@@ -323,6 +342,56 @@ export function internshipsRouter(db: Database, env: Env) {
     res.json({ submission: updated });
   });
 
+  // ---- Offers (staff) ----
+
+  /** Every participant offer, newest first, with where its fee stands. */
+  router.get("/offers", requireAuth(env), requireRole(...OFFER_STAFF), async (_req, res) => {
+    const rows = await db.query.participantOffers.findMany({ orderBy: desc(participantOffers.issuedAt), limit: 300 });
+    const tracks = new Map((await db.query.internshipTracks.findMany()).map((t) => [t.id, t]));
+    const enrollments = rows.length ? new Map((await db.query.programEnrollments.findMany({ where: inArray(programEnrollments.id, rows.map((o) => o.enrollmentId)) })).map((e) => [e.id, e])) : new Map();
+    const people = rows.length ? new Map((await db.query.users.findMany({ where: inArray(users.id, rows.map((o) => o.userId)), columns: { id: true, email: true } })).map((u) => [u.id, u.email])) : new Map();
+    res.json({
+      offers: await Promise.all(
+        rows.map(async (o) => ({
+          id: o.id,
+          referenceNo: o.referenceNo,
+          userId: o.userId,
+          name: await displayNameFor(db, o.userId),
+          email: people.get(o.userId) ?? "",
+          track: { title: tracks.get(o.trackId)?.title ?? "", slug: tracks.get(o.trackId)?.slug ?? "" },
+          examScore: o.examScore,
+          fee: Number(o.fee),
+          feeCategory: o.feeCategory,
+          workMode: o.workMode,
+          joiningDate: o.joiningDate,
+          endDate: o.endDate,
+          issuedAt: o.issuedAt,
+          emailedAt: o.emailedAt,
+          paymentStatus: enrollments.get(o.enrollmentId)?.status ?? null,
+        })),
+      ),
+      terms: await getOfferTerms(db),
+    });
+  });
+
+  router.put("/offers/:id", requireAuth(env), requireRole(...OFFER_STAFF), async (req, res) => {
+    const body = offerUpdateSchema.parse(req.body);
+    const offer = await db.query.participantOffers.findFirst({ where: eq(participantOffers.id, req.params.id) });
+    if (!offer) throw new NotFoundError("Offer not found");
+    const updated = await updateOffer(db, offer, body);
+    await writeAuditLog(db, { actorUserId: req.user!.sub, action: "participant_offer.update", entityType: "participant_offer", entityId: offer.id, metadata: body, ipAddress: req.ip });
+    if (req.query.send === "1") await queueOfferEmail(db, offer.id, req.user!.sub);
+    res.json({ offer: updated, emailQueued: req.query.send === "1" });
+  });
+
+  router.post("/offers/:id/resend", requireAuth(env), requireRole(...OFFER_STAFF), async (req, res) => {
+    const offer = await db.query.participantOffers.findFirst({ where: eq(participantOffers.id, req.params.id) });
+    if (!offer) throw new NotFoundError("Offer not found");
+    await queueOfferEmail(db, offer.id, req.user!.sub);
+    await writeAuditLog(db, { actorUserId: req.user!.sub, action: "participant_offer.resend", entityType: "participant_offer", entityId: offer.id, ipAddress: req.ip });
+    res.json({ emailQueued: true });
+  });
+
   // ---- The participant's track page ----
 
   router.get("/offers/:id/pdf", requireAuth(env), async (req, res) => {
@@ -435,7 +504,7 @@ export function internshipsRouter(db: Database, env: Env) {
     const all = phases.flatMap((p) => p.skills.flatMap((s) => s.assignments));
     const approved = all.filter((a) => a.submission?.status === "approved");
     res.json({
-      track: publicTrack(track),
+      track: publicTrack(track, await getOfferTerms(db)),
       me,
       phases,
       progress: {
