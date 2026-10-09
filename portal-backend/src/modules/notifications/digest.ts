@@ -143,7 +143,7 @@ export async function sendDailyDigests(db: Database, now = new Date()) {
       continue;
     }
     const { subject, text } = digestEmail(digest, person.name, now);
-    await enqueueJob(db, "email.send", { to: person.email, subject, text });
+    await enqueueJob(db, "email.send", { to: person.email, subject, text, kind: "digest" });
     sent++;
   }
   return { sent, skipped };

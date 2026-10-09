@@ -33,7 +33,12 @@ import { letterTemplatesRouter, employeeLettersRouter } from "./modules/employee
 import { appointmentRouter } from "./modules/employees/appointment-routes.js";
 import { internshipsRouter } from "./modules/internships/routes.js";
 import { registerInternshipJobs } from "./modules/internships/service.js";
-import { configureLetters, ensureDefaultPolicies, registerLetterJobs } from "./modules/employees/appointment.js";
+import { ensureDefaultPolicies, registerLetterJobs } from "./modules/employees/appointment.js";
+import { configureCompanyDefaults, loadCompanyProfile } from "./modules/settings/company.js";
+import { loadEmailSettings } from "./modules/settings/email.js";
+import { registerSettingsJobs, settingsRouter } from "./modules/settings/routes.js";
+import { performanceRouter, registerPerformanceSchedules } from "./modules/performance/routes.js";
+import { syncProgramFees } from "./modules/internships/service.js";
 import { projectsRouter } from "./modules/projects/routes.js";
 import { tasksRouter } from "./modules/tasks/routes.js";
 import { communitiesRouter } from "./modules/chat/communities-routes.js";
@@ -43,7 +48,7 @@ import { presenceRouter } from "./modules/chat/presence-routes.js";
 import { reportsRouter } from "./modules/reports/routes.js";
 import { featureFlagsRouter, notificationPreferencesRouter, bulkActionsRouter } from "./modules/admin/routes.js";
 import { usersRouter } from "./modules/admin/users-routes.js";
-import { configureMailer } from "./modules/shared/mailer.js";
+import { attachEmailLog, configureMailer } from "./modules/shared/mailer.js";
 import { notificationsRouter } from "./modules/notifications/routes.js";
 import { configureNotifications } from "./modules/notifications/service.js";
 import { registerReminderSchedules } from "./modules/notifications/reminders.js";
@@ -63,7 +68,10 @@ configureMailer(env);
 configureNotifications({ appUrl: env.PORTAL_APP_URL });
 registerReminderSchedules(db);
 registerDigestSchedule(db);
-configureLetters({ companyAddress: env.PORTAL_COMPANY_ADDRESS });
+attachEmailLog(db);
+configureCompanyDefaults({ address: env.PORTAL_COMPANY_ADDRESS });
+registerSettingsJobs(db, env.PORTAL_APP_URL.replace(/\/$/, ""));
+registerPerformanceSchedules(db, env.PORTAL_APP_URL.replace(/\/$/, ""));
 registerLetterJobs(db, env.PORTAL_APP_URL.replace(/\/$/, ""));
 void ensureDefaultPolicies(db);
 registerInternshipJobs(db, env.PORTAL_APP_URL.replace(/\/$/, ""));
@@ -185,6 +193,8 @@ app.use("/api/v1/payroll", payrollRouter(db, env));
 app.use("/api/v1/attendance", attendanceRouter(db, env));
 app.use("/api/v1/leave", leaveRouter(db, env));
 app.use("/api/v1/holidays", holidaysRouter(db, env));
+app.use("/api/v1/performance", performanceRouter(db, env));
+app.use("/api/v1", settingsRouter(db, env));
 
 // Future feature routes mount here:
 // app.use("/api/v1/employees", employeesRouter(db, env));
@@ -203,6 +213,11 @@ if (env.PORTAL_AUTO_MIGRATE !== "false") {
     process.exit(1);
   }
 }
+
+// Saved settings replace the environment's defaults once the tables exist.
+await loadCompanyProfile(db);
+await loadEmailSettings(db, env);
+void syncProgramFees(db);
 
 app.listen(env.PORTAL_PORT, () => {
   logger.info({ port: env.PORTAL_PORT, env: env.NODE_ENV }, "portal-backend listening");

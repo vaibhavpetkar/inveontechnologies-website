@@ -25,6 +25,13 @@ export interface Task {
   startedAt?: string | null;
   expectedFinishAt?: string | null;
   progressPercent?: number;
+  /** When a reviewer approved it (moved it to done). */
+  completedAt?: string | null;
+  /** The reviewer's 1-5 star rating, given on approval or later. */
+  rating?: number | null;
+  ratingNote?: string | null;
+  ratedBy?: string | null;
+  ratedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -45,6 +52,43 @@ export interface TaskEvent {
   note: string | null;
   createdAt: string;
 }
+
+export type TaskRequestKind = "extension" | "reassign";
+export type TaskRequestStatus = "pending" | "approved" | "declined" | "cancelled";
+
+/** An assignee asking for more time, or to hand the task to someone else. */
+export interface TaskRequest {
+  id: string;
+  taskId: string;
+  requestedBy: string;
+  kind: TaskRequestKind;
+  reason: string;
+  currentDueDate: string | null;
+  requestedDueDate: string | null;
+  proposedAssigneeId: string | null;
+  status: TaskRequestStatus;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  decisionNote: string | null;
+  createdAt: string;
+}
+
+/** A pending request as listed for its reviewers, with a slice of its task. */
+export interface PendingTaskRequest extends TaskRequest {
+  task: { id: string; title: string; dueDate: string | null; status: TaskStatus; projectId: string | null; assigneeId: string | null };
+}
+
+export const REQUEST_KIND_LABELS: Record<TaskRequestKind, string> = {
+  extension: "More time",
+  reassign: "Hand over",
+};
+
+export const REQUEST_STATUS_META: Record<TaskRequestStatus, { label: string; tone: string }> = {
+  pending: { label: "Waiting", tone: "amber" },
+  approved: { label: "Approved", tone: "green" },
+  declined: { label: "Declined", tone: "red" },
+  cancelled: { label: "Cancelled", tone: "slate" },
+};
 
 export const STATUS_META: Record<TaskStatus, { label: string; tone: string }> = {
   todo: { label: "To do", tone: "slate" },
@@ -125,4 +169,27 @@ export function timeAgo(iso: string): string {
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86_400) return `${Math.floor(s / 3600)}h ago`;
   return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
+/** "Fri, 9 Oct" (adds the year when it isn't this year). */
+export function formatDay(iso: string): string {
+  const d = new Date(iso);
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", ...(sameYear ? {} : { year: "numeric" }) });
+}
+
+/** yyyy-mm-dd in local time, for <input type="date">. */
+export function toDateInput(d: Date | string): string {
+  const x = typeof d === "string" ? new Date(d) : d;
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+}
+
+/** A date input's value as an ISO instant at 6 pm local time (end of the working day). */
+export function dateInputToIso(value: string): string {
+  return new Date(`${value}T18:00:00`).toISOString();
+}
+
+/** Is the task still open (not done or cancelled)? */
+export function isOpenTask(task: Pick<Task, "status">): boolean {
+  return task.status !== "done" && task.status !== "cancelled";
 }

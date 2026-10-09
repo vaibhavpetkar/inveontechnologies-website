@@ -7,6 +7,8 @@ export function sendVerificationEmail(to: string, link: string) {
   sendEmail({
     to,
     subject: "Verify your email for the Inveon portal",
+    kind: "auth",
+    sensitive: true,
     text: `Welcome to the Inveon portal.\n\nConfirm this email address by opening the link below (valid for 24 hours):\n\n${link}\n\nIf you didn't create an account, you can ignore this email.`,
   });
 }
@@ -15,6 +17,8 @@ export function sendPasswordResetEmail(to: string, link: string) {
   sendEmail({
     to,
     subject: "Reset your Inveon portal password",
+    kind: "auth",
+    sensitive: true,
     text: `Someone asked to reset the password for this account.\n\nChoose a new password here (valid for 1 hour):\n\n${link}\n\nIf this wasn't you, ignore this email — your password stays the same.`,
   });
 }
@@ -23,6 +27,7 @@ export function sendAssessmentInviteEmail(to: string, params: { assessmentTitle:
   sendEmail({
     to,
     subject: `Assessment invitation: ${params.opportunityTitle}`,
+    kind: "assessment_invite",
     text: `You've been invited to take the "${params.assessmentTitle}" assessment for ${params.opportunityTitle}.\n\nIt takes up to ${params.durationMinutes} minutes and the timer starts when you press Start, so begin when you have that time free:\n\n${params.link}`,
   });
 }
@@ -31,6 +36,7 @@ export function sendCertificateIssuedEmail(to: string, params: { courseTitle: st
   sendEmail({
     to,
     subject: `Your certificate for ${params.courseTitle}`,
+    kind: "certificate",
     text: `Congratulations — your certificate for ${params.courseTitle} has been issued (${params.businessId}).\n\nAnyone can confirm it's genuine here:\n\n${params.verifyLink}`,
   });
 }

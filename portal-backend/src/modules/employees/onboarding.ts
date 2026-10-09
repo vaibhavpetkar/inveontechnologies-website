@@ -137,6 +137,8 @@ export async function queueWelcomeEmail(db: Database, appUrl: string, user: { id
   await enqueueJob(db, "email.send", {
     to: user.email,
     subject: "Welcome to Inveon — set up your portal account",
+    kind: "welcome",
+    sensitive: options.newAccount, // carries a set-password link
     text: `Welcome aboard! Your start date is ${formatWhen(options.joiningDate)}.\n\n${access}\n\nOnce you're in, your onboarding checklist is on your workspace page.`,
   });
 }

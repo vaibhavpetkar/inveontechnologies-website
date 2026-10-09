@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { Link } from "wouter";
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { Link, useLocation, useSearch } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, FileCheck2, FilePlus2, FileText, Inbox, RotateCcw, Search, ShieldCheck, Upload, X } from "lucide-react";
 import { DashboardShell } from "../components/DashboardShell";
@@ -11,11 +11,47 @@ import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/api";
 import { timeAgo } from "../lib/tasks";
 import { DOC_STATUS, type CandidateDocument } from "../lib/workspace";
+import { MyEmployeeDocuments } from "../components/documents/MyEmployeeDocuments";
+import { EmployeeReviewQueue } from "../components/documents/EmployeeReviewQueue";
+import "../styles/employee-docs.css";
 
-/** Candidates upload and track their documents; HR and admins check them. */
+/**
+ * Candidates upload and track their application documents; interns and
+ * employees upload their personal documents; staff check both.
+ */
 export default function Documents() {
   const { user } = useAuth();
-  return <DashboardShell wide>{user?.role === "candidate" ? <MyDocuments /> : <ReviewQueue />}</DashboardShell>;
+  const role = user?.role;
+  return (
+    <DashboardShell wide>
+      {role === "candidate" ? <MyDocuments /> : role === "intern" || role === "employee" ? <MyEmployeeDocuments /> : <StaffDocuments />}
+    </DashboardShell>
+  );
+}
+
+// ---------------- Staff: candidates and employees tabs ----------------
+
+type StaffTab = "candidates" | "employees";
+
+function StaffDocuments() {
+  const search = useSearch();
+  const [, navigate] = useLocation();
+  const tab: StaffTab = new URLSearchParams(search).get("tab") === "employees" ? "employees" : "candidates";
+  const tabs = (
+    <div className="seg-tabs docs-tabs" role="tablist" aria-label="Whose documents">
+      {(
+        [
+          { key: "candidates", label: "Candidates" },
+          { key: "employees", label: "Employees" },
+        ] as const
+      ).map((t) => (
+        <button key={t.key} role="tab" aria-selected={tab === t.key} className={tab === t.key ? "on" : ""} onClick={() => navigate(t.key === "employees" ? "/documents?tab=employees" : "/documents", { replace: true })}>
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+  return tab === "employees" ? <EmployeeReviewQueue tabs={tabs} /> : <ReviewQueue tabs={tabs} />;
 }
 
 // ---------------- Candidate ----------------
@@ -212,7 +248,7 @@ function SendDocumentDialog({ applications, onClose, onSent }: { applications: M
 
 type QueueStatus = "uploaded" | "requested" | "rejected" | "verified" | "all";
 
-function ReviewQueue() {
+function ReviewQueue({ tabs: pageTabs }: { tabs?: ReactNode }) {
   const { accessToken } = useAuth();
   const toast = useToast();
   const [status, setStatus] = useState<QueueStatus>("uploaded");
@@ -274,6 +310,7 @@ function ReviewQueue() {
           <p>Candidate documents to check. Accept them or send them back with a reason; the candidate is told either way.</p>
         </div>
       </div>
+      {pageTabs}
 
       <div className="stat-grid">
         {[

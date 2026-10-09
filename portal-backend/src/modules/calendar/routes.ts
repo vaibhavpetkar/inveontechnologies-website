@@ -119,7 +119,7 @@ export async function sendInvites(db: Database, event: EventRow, recipientIds: s
   for (const id of recipientIds) {
     const person = who.get(id);
     if (!person) continue;
-    await enqueueJob(db, "email.send", { to: person.email, subject, text: lines.join("\n"), icalEvent: { method: mode === "cancelled" ? "CANCEL" : "REQUEST", content: ics } });
+    await enqueueJob(db, "email.send", { to: person.email, subject, kind: "calendar", text: lines.join("\n"), icalEvent: { method: mode === "cancelled" ? "CANCEL" : "REQUEST", content: ics } });
   }
 }
 
