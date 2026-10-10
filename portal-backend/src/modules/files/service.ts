@@ -138,7 +138,7 @@ export async function canReadFile(db: Database, req: Request, file: StoredFile):
     }
     case "application_document": {
       const doc = await db.query.documentRequests.findFirst({ where: eq(documentRequests.fileUrl, url) });
-      if (!doc) return false;
+      if (!doc?.applicationId) return false; // documents not for an opening: only the candidate and HR
       const application = await db.query.applications.findFirst({ where: eq(applications.id, doc.applicationId) });
       return !!application && canViewApplication(db, req, application);
     }

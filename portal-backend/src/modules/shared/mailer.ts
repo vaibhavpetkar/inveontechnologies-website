@@ -27,6 +27,12 @@ let source: MailSource = "environment";
 let active: SmtpConfig | null = null;
 let lastCheck: { ok: boolean; error: string | null; at: Date } | null = null;
 let logDb: Database | null = null;
+// Kinds of automatic email an admin turned off in Settings (see settings/email.ts).
+let pausedKinds = new Set<string>();
+
+export function usePausedKinds(kinds: string[]) {
+  pausedKinds = new Set(kinds);
+}
 
 /** The domain of the From address, e.g. inveontechnologies.in. */
 function fromDomain(from: string) {
@@ -194,6 +200,11 @@ export function sendEmail(email: OutgoingEmail): void {
  * configured the email is logged and counts as delivered.
  */
 export async function deliverEmail(email: OutgoingEmail): Promise<void> {
+  if (email.kind && pausedKinds.has(email.kind)) {
+    logger.info({ toEmail: email.to, subject: email.subject, kind: email.kind }, "[EMAIL NOT SENT — turned off in Settings]");
+    await record(email, "logged", "Not sent: this kind of email is turned off in Settings → Email");
+    return;
+  }
   if (!transporter) {
     logger.info(
       { toEmail: email.to, subject: email.subject, text: email.sensitive ? "[hidden]" : email.text, attachments: email.attachments?.map((a) => `${a.filename} (${a.content.length} bytes)`) },

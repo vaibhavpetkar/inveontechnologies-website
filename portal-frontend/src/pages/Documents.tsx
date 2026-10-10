@@ -101,7 +101,7 @@ function MyDocuments() {
           <h1>My documents</h1>
           <p>Upload what HR asks for, or send any certificate or ID yourself. You'll be told when each one is checked.</p>
         </div>
-        {data && data.applications.length > 0 && (
+        {data && (
           <div className="page-head-actions">
             <motion.button className="btn" whileTap={{ scale: 0.96 }} onClick={() => setSending(true)}>
               <FilePlus2 size={18} /> Send a document
@@ -119,7 +119,8 @@ function MyDocuments() {
         <div className="empty-state">
           <FileText size={34} />
           <h3>No documents yet</h3>
-          <p>{data.applications.length ? "When HR asks for a document it shows up here. You can also send one yourself." : "Apply for an opening first, then your documents for it show up here."}</p>
+          <p>Send your Aadhaar, PAN, certificates or any other document here. HR checks each one, and anything HR asks for shows up here too.</p>
+          <button className="btn" style={{ marginTop: "0.8rem" }} onClick={() => setSending(true)}><FilePlus2 size={16} /> Send a document</button>
         </div>
       )}
 
@@ -168,6 +169,7 @@ function MyDocuments() {
 function SendDocumentDialog({ applications, onClose, onSent }: { applications: MyDocsResponse["applications"]; onClose: () => void; onSent: () => void }) {
   const { accessToken } = useAuth();
   const toast = useToast();
+  // "" means the document is for the candidate's own file, not one opening.
   const [applicationId, setApplicationId] = useState(applications[0]?.id ?? "");
   const [name, setName] = useState("");
   const [file, setFile] = useState<{ url: string; name: string; mimeType: string; sizeBytes: number } | null>(null);
@@ -180,7 +182,7 @@ function SendDocumentDialog({ applications, onClose, onSent }: { applications: M
     setSaving(true);
     setError(null);
     try {
-      await apiFetch("/api/v1/me/documents", { method: "POST", body: { applicationId, documentName: name.trim(), fileUrl: file.url }, accessToken });
+      await apiFetch("/api/v1/me/documents", { method: "POST", body: { applicationId: applicationId || null, documentName: name.trim(), fileUrl: file.url }, accessToken });
       toast("Sent to HR for checking");
       onSent();
     } catch (err) {
@@ -208,12 +210,15 @@ function SendDocumentDialog({ applications, onClose, onSent }: { applications: M
           <button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X size={18} /></button>
         </div>
         {error && <div className="error-banner">{error}</div>}
-        <div className="field">
-          <label htmlFor="sd-app">For</label>
-          <select id="sd-app" value={applicationId} onChange={(e) => setApplicationId(e.target.value)}>
-            {applications.map((a) => <option key={a.id} value={a.id}>{a.title}</option>)}
-          </select>
-        </div>
+        {applications.length > 0 && (
+          <div className="field">
+            <label htmlFor="sd-app">For</label>
+            <select id="sd-app" value={applicationId} onChange={(e) => setApplicationId(e.target.value)}>
+              {applications.map((a) => <option key={a.id} value={a.id}>{a.title}</option>)}
+              <option value="">My profile (not for one opening)</option>
+            </select>
+          </div>
+        )}
         <div className="field">
           <label htmlFor="sd-name">What it is</label>
           <input id="sd-name" required minLength={2} maxLength={200} list="sd-suggest" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Degree certificate" />
@@ -239,7 +244,7 @@ function SendDocumentDialog({ applications, onClose, onSent }: { applications: M
         </div>
         <div className="modal-actions">
           <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button className="btn" disabled={saving || !file || name.trim().length < 2 || !applicationId}>{saving ? "Sending…" : "Send for checking"}</button>
+          <button className="btn" disabled={saving || !file || name.trim().length < 2}>{saving ? "Sending…" : "Send for checking"}</button>
         </div>
       </motion.form>
     </motion.div>
@@ -277,7 +282,7 @@ function ReviewQueue({ tabs: pageTabs }: { tabs?: ReactNode }) {
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return (docs ?? []).filter((d) => !q || [d.documentName, d.candidate.name, d.candidate.email, d.opportunity.title].some((v) => v.toLowerCase().includes(q)));
+    return (docs ?? []).filter((d) => !q || [d.documentName, d.candidate.name, d.candidate.email, d.opportunity?.title ?? ""].some((v) => v.toLowerCase().includes(q)));
   }, [docs, query]);
 
   async function review(d: CandidateDocument, approve: boolean) {
@@ -308,7 +313,7 @@ function ReviewQueue({ tabs: pageTabs }: { tabs?: ReactNode }) {
     <>
       <div className="page-head">
         <div>
-          <h1>Documents</h1>
+          <h1>Verify documents</h1>
           <p>Candidate documents to check. Accept them or send them back with a reason; the candidate is told either way.</p>
         </div>
       </div>
@@ -407,11 +412,15 @@ function DocRow({ doc: d, index, staff = false, children }: { doc: CandidateDocu
         </div>
         <span className="muted-small">
           {staff ? (
-            <>
-              <Link href={`/opportunities/${d.opportunity.id}?applicant=${d.applicationId}`}>{d.candidate.name}</Link> · {d.opportunity.title}
-            </>
+            d.opportunity ? (
+              <>
+                <Link href={`/opportunities/${d.opportunity.id}?applicant=${d.applicationId}`}>{d.candidate.name}</Link> · {d.opportunity.title}
+              </>
+            ) : (
+              <>{d.candidate.name} · {d.candidate.email} · Profile document</>
+            )
           ) : (
-            d.opportunity.title
+            d.opportunity?.title ?? "Profile document"
           )}{" "}
           · {timeAgo(d.updatedAt)}
         </span>

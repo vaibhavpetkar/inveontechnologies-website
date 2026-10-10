@@ -13,6 +13,15 @@ type Draft = { id?: string; title: string; summary: string; body: string };
 
 /** Company policies: everyone reads them; admins edit, add and retire them. */
 export default function Policies() {
+  return (
+    <DashboardShell>
+      <PoliciesManager />
+    </DashboardShell>
+  );
+}
+
+/** The policy list and editor; also shown in Settings → Policies. */
+export function PoliciesManager({ inSettings = false }: { inSettings?: boolean }) {
   const { user, accessToken } = useAuth();
   const toast = useToast();
   const isAdmin = !!user && ISSUER_ROLES.includes(user.role);
@@ -57,10 +66,10 @@ export default function Policies() {
   }
 
   return (
-    <DashboardShell>
+    <>
       <div className="page-head">
         <div>
-          <h1>Company policies</h1>
+          {inSettings ? <h2 className="st-panel-title"><ScrollText size={18} /> Company policies</h2> : <h1>Company policies</h1>}
           <p>{isAdmin ? "Every appointment letter attaches the policies in use here. Editing the wording creates a new version; letters already sent keep theirs." : "The policies that apply to everyone at Inveon."}</p>
         </div>
         {isAdmin && <button className="btn" onClick={() => setDraft({ title: "", summary: "", body: "" })}><Plus size={16} /> Add policy</button>}
@@ -129,6 +138,6 @@ export default function Policies() {
           </motion.div>
         )}
       </AnimatePresence>
-    </DashboardShell>
+    </>
   );
 }

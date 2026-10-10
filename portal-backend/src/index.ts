@@ -35,7 +35,7 @@ import { internshipsRouter } from "./modules/internships/routes.js";
 import { registerInternshipJobs } from "./modules/internships/service.js";
 import { ensureDefaultPolicies, registerLetterJobs } from "./modules/employees/appointment.js";
 import { configureCompanyDefaults, loadCompanyProfile } from "./modules/settings/company.js";
-import { loadEmailSettings } from "./modules/settings/email.js";
+import { loadEmailAutomation, loadEmailSettings } from "./modules/settings/email.js";
 import { signatureRouter } from "./modules/signature/routes.js";
 import { registerSettingsJobs, settingsRouter } from "./modules/settings/routes.js";
 import { performanceRouter, registerPerformanceSchedules } from "./modules/performance/routes.js";
@@ -220,6 +220,7 @@ if (env.PORTAL_AUTO_MIGRATE !== "false") {
 // Saved settings replace the environment's defaults once the tables exist.
 await loadCompanyProfile(db);
 await loadEmailSettings(db, env);
+await loadEmailAutomation(db);
 void syncProgramFees(db);
 
 app.listen(env.PORTAL_PORT, () => {

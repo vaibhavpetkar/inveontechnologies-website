@@ -36,7 +36,7 @@ export function navForRole(role: UserRole): NavItem[] {
       { href: "/reviews", label: "Reviews", icon: FileCheck2 },
       { href: "/attendance", label: "Attendance", icon: CalendarCheck },
       ...(role === "manager" ? [] : [{ href: "/opportunities", label: "Openings", icon: Briefcase }]),
-      { href: "/documents", label: "Documents", icon: FolderOpen },
+      { href: "/documents", label: "Verify documents", icon: FolderOpen },
       ...(role === "manager" ? [] : [{ href: "/payroll", label: "Payroll", icon: IndianRupee }]),
       ...(role === "manager" ? [] : [{ href: "/reports", label: "Reports", icon: BarChart3 }]),
       { href: "/calendar", label: "Calendar", icon: CalendarDays },

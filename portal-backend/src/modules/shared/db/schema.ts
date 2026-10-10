@@ -366,7 +366,10 @@ export const documentRequestStatusEnum = pgEnum("document_request_status", ["req
 
 export const documentRequests = pgTable("document_requests", {
   id: uuid("id").primaryKey().defaultRandom(),
-  applicationId: uuid("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
+  // Null for documents a candidate sends before applying (an internship
+  // applicant's ID or certificates); userId always says whose it is.
+  applicationId: uuid("application_id").references(() => applications.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   documentName: text("document_name").notNull(),
   // Set on documents the joining form asks for (aadhaar, pan, marksheet,
   // passing_certificate, experience_certificate); null when staff asked by hand.

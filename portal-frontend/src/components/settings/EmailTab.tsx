@@ -1,9 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, CheckCircle2, CircleSlash, KeyRound, Mail, Save, Send, Server, ShieldCheck } from "lucide-react";
+import { AlertTriangle, BellRing, CheckCircle2, CircleSlash, KeyRound, Mail, Save, Send, Server, ShieldCheck } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { apiFetch, ApiError } from "../../lib/api";
-import { fullTime, relativeTime, type EmailSettings, type MailCheck, type MailStatus } from "../../lib/settings";
+import { fullTime, relativeTime, type AutomaticEmail, type EmailSettings, type MailCheck, type MailStatus } from "../../lib/settings";
 import { useToast } from "../Toast";
 import { PanelSkeleton, ReadOnlyNote, Switch } from "./ui";
 
@@ -160,6 +160,7 @@ export function EmailTab() {
         </form>
       )}
 
+      <AutomaticEmails />
       {data.canEdit && <TestEmail defaultTo={user?.email ?? ""} />}
     </motion.div>
   );
@@ -241,5 +242,56 @@ function TestEmail({ defaultTo }: { defaultTo: string }) {
         )}
       </AnimatePresence>
     </form>
+  );
+}
+
+/** Org-wide on/off switches for the emails the portal sends by itself. */
+function AutomaticEmails() {
+  const { accessToken } = useAuth();
+  const toast = useToast();
+  const [emails, setEmails] = useState<AutomaticEmail[] | null>(null);
+  const [canEdit, setCanEdit] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    apiFetch<{ emails: AutomaticEmail[]; canEdit: boolean }>("/api/v1/settings/email/automation", { accessToken })
+      .then((r) => {
+        setEmails(r.emails);
+        setCanEdit(r.canEdit);
+      })
+      .catch(() => setEmails([]));
+  }, [accessToken]);
+
+  if (!emails) return <PanelSkeleton height={260} />;
+  if (emails.length === 0) return null;
+
+  async function toggle(kind: string, on: boolean) {
+    if (!emails) return;
+    const next = emails.map((e) => (e.kind === kind ? { ...e, on } : e));
+    setEmails(next);
+    setBusy(kind);
+    try {
+      const r = await apiFetch<{ emails: AutomaticEmail[] }>("/api/v1/settings/email/automation", { method: "PUT", body: { paused: next.filter((e) => !e.on).map((e) => e.kind) }, accessToken });
+      setEmails(r.emails);
+      toast(on ? "Turned on." : "Turned off. These emails are now only recorded in the email log.", "success");
+    } catch (err) {
+      setEmails(emails);
+      toast(err instanceof ApiError ? err.message : "Couldn't save that change.", "error");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="panel">
+      <h2 className="st-panel-title"><BellRing size={18} /> Automatic emails</h2>
+      <p className="muted-small st-panel-sub">
+        Choose which emails the portal sends on its own. Sign-in links, password resets, letters and anything you send by hand always go out. Emails that are turned off show in the email log as not sent.
+      </p>
+      {emails.map((e) => (
+        <Switch key={e.kind} id={`auto-${e.kind}`} checked={e.on} disabled={!canEdit || busy !== null} onChange={(v) => void toggle(e.kind, v)} label={e.label} hint={e.hint} />
+      ))}
+      {!canEdit && <p className="muted-small">Only admins can change these.</p>}
+    </section>
   );
 }
