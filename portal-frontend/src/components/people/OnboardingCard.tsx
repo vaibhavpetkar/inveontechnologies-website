@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Circle, PartyPopper, ShieldCheck } from "lucide-react";
+import { Check, Circle, PartyPopper, ShieldCheck, Upload } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { useNotifications } from "../../context/NotificationsContext";
 import { apiFetch, ApiError } from "../../lib/api";
 import { formatDate, type ChecklistItem, type EmployeeType } from "../../lib/people";
 import { useToast } from "../Toast";
+import { UploadDialog } from "../documents/MyEmployeeDocuments";
+import { typesForStep } from "../../lib/employeeDocs";
 
 export interface MyEmployee {
   id: string;
@@ -23,10 +25,13 @@ export function OnboardingCard({ employee, onChanged }: { employee: MyEmployee; 
   const toast = useToast();
   const [items, setItems] = useState<ChecklistItem[] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [uploading, setUploading] = useState<ChecklistItem | null>(null);
 
   const load = useCallback(async () => {
     const r = await apiFetch<{ tasks: ChecklistItem[] }>(`/api/v1/employees/${employee.id}/onboarding-tasks`, { accessToken });
-    setItems([...r.tasks].sort((a, b) => Number(a.taskType === "access_activation") - Number(b.taskType === "access_activation")));
+    // A steady order (the server's changes as steps are ticked): HR's own step last.
+    const rank: Record<string, number> = { policy_consent: 0, document: 1, custom: 2, access_activation: 3 };
+    setItems([...r.tasks].sort((a, b) => (rank[a.taskType] ?? 2) - (rank[b.taskType] ?? 2) || a.title.localeCompare(b.title)));
   }, [employee.id, accessToken]);
 
   useEffect(() => {
@@ -80,12 +85,14 @@ export function OnboardingCard({ employee, onChanged }: { employee: MyEmployee; 
           {items.map((item, i) => {
             const mine = item.taskType !== "access_activation";
             const isDone = item.status === "completed";
+            // Document steps are done by uploading the document, not by ticking.
+            const upload = item.taskType === "document" && !isDone;
             return (
               <motion.li key={item.id} layout className={isDone ? "done" : ""} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0, transition: { delay: i * 0.04 } }}>
                 <motion.button
                   className="check-toggle"
                   aria-label={isDone ? `${item.title}: done` : `Mark "${item.title}" done`}
-                  disabled={isDone || !mine || busyId === item.id}
+                  disabled={isDone || !mine || upload || busyId === item.id}
                   onClick={() => complete(item)}
                   whileTap={{ scale: 0.85 }}
                 >
@@ -102,11 +109,30 @@ export function OnboardingCard({ employee, onChanged }: { employee: MyEmployee; 
                   {item.description && <span className="muted-small">{item.description}</span>}
                   {!mine && !isDone && <span className="muted-small">HR does this once your steps are done.</span>}
                 </span>
+                {upload && (
+                  <button type="button" className="btn btn-sm check-upload" onClick={() => setUploading(item)}>
+                    <Upload size={14} /> Upload
+                  </button>
+                )}
               </motion.li>
             );
           })}
         </AnimatePresence>
       </ul>
+      <AnimatePresence>
+        {uploading && (
+          <UploadDialog
+            employeeId={employee.id}
+            step={{ id: uploading.id, title: uploading.title, types: typesForStep(uploading.title) }}
+            onClose={() => setUploading(null)}
+            onDone={() => {
+              setUploading(null);
+              void load();
+              onChanged();
+            }}
+          />
+        )}
+      </AnimatePresence>
     </motion.section>
   );
 }

@@ -1,0 +1,21 @@
+.sig-card { margin-bottom: 1.25rem; }
+.sig-head { display: flex; align-items: flex-start; gap: 0.85rem; }
+.sig-head h2 { font-size: 1.05rem; margin: 0 0 0.15rem; }
+.sig-icon { flex: none; width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: #eef2ff; color: #4338ca; }
+.sig-add { margin-left: auto; flex-shrink: 0; }
+.sig-saved { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-top: 0.9rem; }
+.sig-preview { border: 1px dashed #cbd5e1; border-radius: 12px; background: #fff; padding: 0.4rem 1rem; height: 84px; display: grid; place-items: center; min-width: 200px; }
+.sig-preview img { max-height: 72px; max-width: 260px; }
+.sig-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.sig-pad-wrap { overflow: hidden; }
+.sig-pad { position: relative; margin-top: 0.9rem; border: 1.5px dashed #94a3b8; border-radius: 14px; background: #fff; touch-action: none; }
+.sig-pad canvas { display: block; width: 100%; aspect-ratio: 560 / 180; cursor: crosshair; touch-action: none; }
+.sig-placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: #94a3b8; font-size: 0.9rem; pointer-events: none; text-align: center; padding: 0 1rem; }
+.sig-line { position: absolute; left: 8%; right: 8%; bottom: 22%; border-bottom: 1px solid #e2e8f0; pointer-events: none; }
+.sig-pad-actions { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.7rem; }
+.sig-spacer { flex: 1; }
+@media (max-width: 560px) {
+  .sig-head { flex-wrap: wrap; }
+  .sig-add { margin-left: 0; }
+  .sig-spacer { display: none; }
+}

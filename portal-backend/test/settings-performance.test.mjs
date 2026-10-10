@@ -304,3 +304,123 @@ describe("employee documents reviewed by their manager", () => {
     assert.equal(mine.json.documents[0].reviewerName.length > 0, true);
   });
 });
+
+describe("onboarding uploads, the org chart and signatures", () => {
+  test("uploading against the government ID step ticks it off", async () => {
+    const person = await api.createUser("employee");
+    const employee = await createEmployeeRecord(dbh.db, { userId: person.id, employeeType: "full_time", joiningDate: new Date("2026-10-12T00:00:00Z"), createdBy: hr.id });
+    const steps = (await api.call("GET", `/employees/${employee.id}/onboarding-tasks`, { token: person.token })).json.tasks;
+    const idStep = steps.find((t) => t.title === "Upload a government ID");
+    const custom = steps.find((t) => t.taskType === "custom");
+
+    const up = await fetch(`${api.base}/files?purpose=employee_document&name=aadhaar.pdf`, { method: "POST", headers: { Authorization: `Bearer ${person.token}`, "Content-Type": "application/octet-stream" }, body: PDF });
+    const file = (await up.json()).file;
+    const wrong = await api.call("POST", `/employees/${employee.id}/documents`, { token: person.token, body: { documentType: "Aadhaar card", fileUrl: file.url, onboardingTaskId: custom.id } });
+    assert.equal(wrong.json.error?.code, "INVALID_STEP");
+    const ok = await api.call("POST", `/employees/${employee.id}/documents`, { token: person.token, body: { documentType: "Aadhaar card", fileUrl: file.url, onboardingTaskId: idStep.id } });
+    assert.equal(ok.status, 201, JSON.stringify(ok.json));
+    const after = (await api.call("GET", `/employees/${employee.id}/onboarding-tasks`, { token: person.token })).json.tasks;
+    assert.equal(after.find((t) => t.id === idStep.id).status, "completed");
+  });
+
+  test("everyone on staff sees who reports to whom; HR changes it without making loops", async () => {
+    const boss = await api.createUser("manager");
+    const lead = await api.createUser("employee");
+    const dev = await api.createUser("employee");
+    const leadRec = await createEmployeeRecord(dbh.db, { userId: lead.id, employeeType: "full_time", managerId: boss.id, joiningDate: new Date("2026-10-12T00:00:00Z"), createdBy: hr.id });
+    const devRec = await createEmployeeRecord(dbh.db, { userId: dev.id, employeeType: "full_time", joiningDate: new Date("2026-10-12T00:00:00Z"), createdBy: hr.id });
+
+    const chart = await api.call("GET", "/employees/org-chart", { token: dev.token });
+    assert.equal(chart.status, 200);
+    assert.equal(chart.json.canEdit, false);
+    assert.equal(chart.json.people.find((p) => p.userId === lead.id).managerId, boss.id);
+    assert.ok(chart.json.people.some((p) => p.userId === boss.id), "managers without an employee record still appear");
+    assert.equal((await api.call("GET", "/employees/org-chart", { token: (await api.createUser("candidate")).token })).status, 403);
+    assert.equal((await api.call("GET", "/employees/org-chart", { token: hr.token })).json.canEdit, true);
+
+    assert.equal((await api.call("PUT", `/employees/${devRec.id}`, { token: hr.token, body: { managerId: lead.id } })).status, 200);
+    const loop = await api.call("PUT", `/employees/${leadRec.id}`, { token: hr.token, body: { managerId: dev.id } });
+    assert.equal(loop.json.error?.code, "REPORTING_LOOP");
+    assert.equal((await api.call("PUT", `/employees/${devRec.id}`, { token: hr.token, body: { managerId: dev.id } })).json.error?.code, "REPORTING_LOOP");
+    const cleared = await api.call("PUT", `/employees/${devRec.id}`, { token: hr.token, body: { managerId: null } });
+    assert.equal(cleared.json.employee.managerId, null);
+  });
+
+  test("a candidate saves a signature, which only accepts real PNG/JPEG images", async () => {
+    const candidate = await api.createUser("candidate");
+    assert.equal((await api.call("GET", "/me/signature", { token: candidate.token })).json.signature, null);
+    const fake = "data:image/png;base64," + Buffer.from("not an image at all").toString("base64");
+    assert.equal((await api.call("PUT", "/me/signature", { token: candidate.token, body: { image: fake } })).json.error?.code, "FILE_CONTENT_MISMATCH");
+    const saved = await api.call("PUT", "/me/signature", { token: candidate.token, body: { image: PNG } });
+    assert.equal(saved.status, 200);
+    assert.equal((await api.call("GET", "/me/signature", { token: candidate.token })).json.signature.image, PNG);
+    assert.equal((await api.call("DELETE", "/me/signature", { token: candidate.token })).status, 204);
+    assert.equal((await api.call("GET", "/me/signature", { token: candidate.token })).json.signature, null);
+  });
+
+  test("a logo of several hundred KB fits in a company settings save", async () => {
+    const current = (await api.call("GET", "/settings/company", { token: admin.token })).json.profile;
+    // A valid PNG header followed by padding: about 600 KB once base64-encoded.
+    const big = Buffer.concat([Buffer.from(PNG.split(",")[1], "base64"), Buffer.alloc(450 * 1024)]);
+    const res = await api.call("PUT", "/settings/company", { token: admin.token, body: { ...current, logo: `data:image/png;base64,${big.toString("base64")}` } });
+    assert.notEqual(res.status, 413);
+    await api.call("PUT", "/settings/company", { token: admin.token, body: current });
+  });
+});
+
+describe("profile documents and automatic email switches", () => {
+  async function uploadPdf(user, name) {
+    const res = await fetch(`${api.base}/files?purpose=application_document&name=${encodeURIComponent(name)}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${user.token}`, "Content-Type": "application/octet-stream" },
+      body: PDF,
+    });
+    return (await res.json()).file;
+  }
+
+  test("a candidate with no application sends a document; HR verifies it and a manager can't", async () => {
+    const candidate = await api.createUser("candidate");
+    const manager = await api.createUser("manager");
+    const file = await uploadPdf(candidate, "aadhaar.pdf");
+    const sent = await api.call("POST", "/me/documents", { token: candidate.token, body: { documentName: "Aadhaar card", fileUrl: file.url } });
+    assert.equal(sent.status, 201, JSON.stringify(sent.json));
+    const mine = (await api.call("GET", "/me/documents", { token: candidate.token })).json.documents;
+    assert.equal(mine.find((d) => d.id === sent.json.documentRequest.id).opportunity, null);
+
+    const queue = await api.call("GET", "/documents/queue", { token: hr.token });
+    const row = queue.json.documents.find((d) => d.id === sent.json.documentRequest.id);
+    assert.ok(row, "in HR's queue");
+    assert.equal(row.candidate.id, candidate.id);
+    assert.equal(row.opportunity, null);
+    assert.ok(!(await api.call("GET", "/documents/queue", { token: manager.token })).json.documents.some((d) => d.id === row.id), "not a manager's");
+    assert.equal((await api.call("POST", `/documents/${row.id}/verify`, { token: manager.token, body: { approve: true } })).status, 403);
+    assert.equal((await api.call("POST", `/documents/${row.id}/verify`, { token: hr.token, body: { approve: true } })).status, 200);
+    const after = (await api.call("GET", "/me/documents", { token: candidate.token })).json.documents.find((d) => d.id === row.id);
+    assert.equal(after.status, "verified");
+  });
+
+  test("admins turn an automatic email off; it is logged as not sent", async () => {
+    const before = await api.call("GET", "/settings/email/automation", { token: hr.token });
+    assert.equal(before.status, 200);
+    assert.equal(before.json.canEdit, false);
+    assert.ok(before.json.emails.every((e) => e.on));
+    assert.equal((await api.call("PUT", "/settings/email/automation", { token: hr.token, body: { paused: ["notification"] } })).status, 403);
+
+    const saved = await api.call("PUT", "/settings/email/automation", { token: admin.token, body: { paused: ["notification", "auth", "nonsense"] } });
+    assert.equal(saved.status, 200, JSON.stringify(saved.json));
+    assert.deepEqual(saved.json.paused, ["notification"], "sign-in emails can't be turned off");
+    assert.equal(saved.json.emails.find((e) => e.kind === "notification").on, false);
+
+    try {
+      const candidate = await api.createUser("candidate");
+      const file = await uploadPdf(candidate, "pan.pdf");
+      assert.equal((await api.call("POST", "/me/documents", { token: candidate.token, body: { documentName: "PAN card", fileUrl: file.url } })).status, 201);
+      const row = await waitFor(async () => (await api.call("GET", `/email-log?kind=notification&q=${encodeURIComponent(hr.email)}`, { token: admin.token })).json.emails.find((e) => e.subject === "PAN card uploaded"));
+      assert.ok(row, "HR's alert is in the log");
+      assert.equal(row.status, "logged");
+      assert.match(row.error, /turned off/);
+    } finally {
+      await api.call("PUT", "/settings/email/automation", { token: admin.token, body: { paused: [] } });
+    }
+  });
+});

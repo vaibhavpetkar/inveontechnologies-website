@@ -366,7 +366,10 @@ export const documentRequestStatusEnum = pgEnum("document_request_status", ["req
 
 export const documentRequests = pgTable("document_requests", {
   id: uuid("id").primaryKey().defaultRandom(),
-  applicationId: uuid("application_id").notNull().references(() => applications.id, { onDelete: "cascade" }),
+  // Null for documents a candidate sends before applying (an internship
+  // applicant's ID or certificates); userId always says whose it is.
+  applicationId: uuid("application_id").references(() => applications.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   documentName: text("document_name").notNull(),
   // Set on documents the joining form asks for (aadhaar, pan, marksheet,
   // passing_certificate, experience_certificate); null when staff asked by hand.
@@ -1871,4 +1874,15 @@ export const employeeOfMonth = pgTable("employee_of_month", {
   chosenBy: uuid("chosen_by").references(() => users.id, { onDelete: "set null" }), // null = picked automatically
   emailedAt: timestamp("emailed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * A person's handwritten signature (PNG/JPEG data URL, drawn or uploaded),
+ * printed on letters they accept. Kept apart from users so ordinary user
+ * queries don't carry the image.
+ */
+export const userSignatures = pgTable("user_signatures", {
+  userId: uuid("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  image: text("image").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

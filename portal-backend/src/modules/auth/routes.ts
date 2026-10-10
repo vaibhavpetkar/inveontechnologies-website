@@ -53,6 +53,11 @@ function refreshCookieOptions(env: Env) {
   };
 }
 
+
+// How long after a refresh token is rotated a parallel request with the same
+// cookie still counts as the same browser rather than a stolen token.
+const REUSE_GRACE_MS = 30_000;
+
 export function authRouter(db: Database, env: Env) {
   const router = Router();
   const limits = {
@@ -185,8 +190,51 @@ export function authRouter(db: Database, env: Env) {
     const record = await db.query.refreshTokens.findFirst({ where: eq(refreshTokens.tokenHash, hash) });
 
     if (!record) throw new UnauthorizedError("Invalid refresh token");
+    if (record.expiresAt < new Date()) {
+      throw new UnauthorizedError("Refresh token expired");
+    }
 
-    if (record.revokedAt) {
+    const user = await db.query.users.findFirst({ where: eq(users.id, record.userId) });
+    if (!user) throw new UnauthorizedError();
+
+    // Rotate: claim this token and issue its replacement in one transaction.
+    // The claim only succeeds while the token is unused, so two requests
+    // with the same cookie (two tabs refreshing together) can't both rotate
+    // it; the second waits for the first and then finds it already used.
+    const next = generateRefreshToken();
+    const rotated = await db.transaction(async (tx) => {
+      const [claimed] = await tx
+        .update(refreshTokens)
+        .set({ revokedAt: new Date() })
+        .where(and(eq(refreshTokens.id, record.id), isNull(refreshTokens.revokedAt)))
+        .returning({ id: refreshTokens.id });
+      if (!claimed) return false;
+      const [newRecord] = await tx
+        .insert(refreshTokens)
+        .values({
+          userId: user.id,
+          tokenHash: next.hash,
+          expiresAt: new Date(Date.now() + env.PORTAL_REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000),
+          userAgent: req.headers["user-agent"] ?? null,
+          ipAddress: req.ip ?? null,
+        })
+        .returning();
+      await tx.update(refreshTokens).set({ replacedByTokenId: newRecord.id }).where(eq(refreshTokens.id, record.id));
+      return true;
+    });
+
+    if (!rotated) {
+      const used = await db.query.refreshTokens.findFirst({ where: eq(refreshTokens.id, record.id) });
+      // Rotated moments ago by a parallel request from the same browser: give
+      // this request an access token too and leave the cookie the other
+      // response set. Logged-out tokens (no replacement) never get this.
+      if (used?.replacedByTokenId && used.revokedAt && Date.now() - used.revokedAt.getTime() < REUSE_GRACE_MS) {
+        const replacement = await db.query.refreshTokens.findFirst({ where: eq(refreshTokens.id, used.replacedByTokenId) });
+        if (replacement && !replacement.revokedAt) {
+          res.json({ accessToken: signAccessToken({ sub: user.id, role: user.role }, env) });
+          return;
+        }
+      }
       // Reuse of an already-rotated/revoked token: possible theft.
       // Defensive response: revoke every active session for this user.
       await db
@@ -203,30 +251,6 @@ export function authRouter(db: Database, env: Env) {
       res.clearCookie(REFRESH_COOKIE, { path: "/api/v1/auth" });
       throw new UnauthorizedError("Session revoked; please log in again");
     }
-
-    if (record.expiresAt < new Date()) {
-      throw new UnauthorizedError("Refresh token expired");
-    }
-
-    const user = await db.query.users.findFirst({ where: eq(users.id, record.userId) });
-    if (!user) throw new UnauthorizedError();
-
-    // Rotate: issue a new token, mark this one revoked + linked to its replacement.
-    const next = generateRefreshToken();
-    const [newRecord] = await db
-      .insert(refreshTokens)
-      .values({
-        userId: user.id,
-        tokenHash: next.hash,
-        expiresAt: new Date(Date.now() + env.PORTAL_REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000),
-        userAgent: req.headers["user-agent"] ?? null,
-        ipAddress: req.ip ?? null,
-      })
-      .returning();
-    await db
-      .update(refreshTokens)
-      .set({ revokedAt: new Date(), replacedByTokenId: newRecord.id })
-      .where(eq(refreshTokens.id, record.id));
 
     const accessToken = signAccessToken({ sub: user.id, role: user.role }, env);
     res.cookie(REFRESH_COOKIE, next.plaintext, refreshCookieOptions(env));

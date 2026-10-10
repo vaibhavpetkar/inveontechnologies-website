@@ -1,22 +1,26 @@
 import { Link, useParams } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { Building2, FileText, IndianRupee, Inbox, Mail, ShieldAlert } from "lucide-react";
+import { Building2, FileText, IndianRupee, Inbox, Mail, Network, ScrollText, ShieldAlert } from "lucide-react";
 import { DashboardShell } from "../components/DashboardShell";
 import { CompanyTab } from "../components/settings/CompanyTab";
 import { FeesTab } from "../components/settings/FeesTab";
 import { EmailTab } from "../components/settings/EmailTab";
 import { EmailLogTab } from "../components/settings/EmailLogTab";
 import { OffersTab } from "../components/settings/OffersTab";
+import { OrgChart } from "../components/org/OrgChart";
+import { PoliciesManager } from "./Policies";
 import { useAuth } from "../context/AuthContext";
 import { SETTINGS_ROLES, SETTINGS_TABS, tabFromParam, type SettingsTab } from "../lib/settings";
 import "../styles/settings.css";
 
 const ICONS: Record<SettingsTab, typeof Mail> = {
   company: Building2,
+  structure: Network,
   fees: IndianRupee,
   email: Mail,
   "email-log": Inbox,
   offers: FileText,
+  policies: ScrollText,
 };
 
 /** Company details, internship fees, email and the email log, and internship offers. HR reads; admins edit. */
@@ -44,7 +48,7 @@ export default function Settings() {
       <div className="page-head">
         <div>
           <h1>Settings</h1>
-          <p>{isAdmin ? "What prints on letters and offers, internship fees, and how the portal sends email." : "What prints on letters and offers, internship fees, and the email the portal sends. Only admins can change company details, fees and email."}</p>
+          <p>{isAdmin ? "Company logo, seal and details on letters, who reports to whom, internship fees, how the portal sends email and which emails go out automatically, and the policies attached to letters." : "What prints on letters and offers, internship fees, and the email the portal sends. Only admins can change company details, fees and email."}</p>
         </div>
       </div>
 
@@ -64,10 +68,17 @@ export default function Settings() {
       <AnimatePresence mode="wait">
         <motion.div key={tab} initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -8 }} transition={{ duration: 0.16 }}>
           {tab === "company" && <CompanyTab />}
+          {tab === "structure" && (
+            <>
+              <p className="st-lead">Who reports to whom. Each person's manager reviews their documents and tasks.</p>
+              <OrgChart />
+            </>
+          )}
           {tab === "fees" && <FeesTab />}
           {tab === "email" && <EmailTab />}
           {tab === "email-log" && <EmailLogTab />}
           {tab === "offers" && <OffersTab />}
+          {tab === "policies" && <PoliciesManager inSettings />}
         </motion.div>
       </AnimatePresence>
     </DashboardShell>

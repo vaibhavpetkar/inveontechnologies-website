@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
-import { documentRequests } from "../shared/db/schema.js";
+import { applications, documentRequests } from "../shared/db/schema.js";
 
 export const EDUCATION_LEVELS = ["10th", "12th", "diploma", "graduate", "postgraduate"] as const;
 export type EducationLevel = (typeof EDUCATION_LEVELS)[number];
@@ -58,6 +58,7 @@ export function requiredDocuments(a: EducationAnswers): RequiredDocument[] {
  */
 export async function syncJoiningDocuments(db: Database, applicationId: string, answers: EducationAnswers) {
   const wanted = requiredDocuments(answers);
+  const userId = (await db.query.applications.findFirst({ where: eq(applications.id, applicationId), columns: { userId: true } }))!.userId;
   const key = (d: { documentType: string | null; documentName: string }) => `${d.documentType}|${d.documentName}`;
   let existing = await db.query.documentRequests.findMany({ where: and(eq(documentRequests.applicationId, applicationId), isNotNull(documentRequests.documentType)) });
 
@@ -87,7 +88,7 @@ export async function syncJoiningDocuments(db: Database, applicationId: string, 
   const added = wanted.filter((d) => !have.has(key(d)));
   // A millisecond apart, so they list in the order above (Aadhaar first).
   const now = Date.now();
-  if (added.length) await db.insert(documentRequests).values(added.map((d, i) => ({ applicationId, ...d, createdAt: new Date(now + i), updatedAt: new Date(now + i) })));
+  if (added.length) await db.insert(documentRequests).values(added.map((d, i) => ({ applicationId, userId, ...d, createdAt: new Date(now + i), updatedAt: new Date(now + i) })));
   return { added: added.length, removed: stale.length, adopted };
 }
 

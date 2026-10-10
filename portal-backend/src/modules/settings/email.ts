@@ -4,7 +4,7 @@ import type { Database } from "../shared/db/client.js";
 import { portalSettings } from "../shared/db/schema.js";
 import type { Env } from "../shared/env.js";
 import { logger } from "../shared/logger.js";
-import { useMailSettings, type SmtpConfig } from "../shared/mailer.js";
+import { useMailSettings, usePausedKinds, type SmtpConfig } from "../shared/mailer.js";
 import { decryptSecret, encryptSecret, vaultKey } from "../notes/crypto.js";
 
 /**
@@ -101,5 +101,48 @@ export async function loadEmailSettings(db: Database, env: Env) {
     if (s?.enabled) useMailSettings(toConfig(env, s));
   } catch (err) {
     logger.error({ err }, "Could not load the saved email settings; using the environment's");
+  }
+}
+
+// ---- Which automatic emails go out ----
+
+const AUTOMATION_KEY = "email_automation";
+
+/** Automatic emails an admin can turn off. Sign-in emails, letters and resends always go. */
+export const AUTOMATIC_EMAILS = [
+  { kind: "notification", label: "Activity alerts", hint: "Task assigned or overdue, documents to check, approvals, mentions." },
+  { kind: "digest", label: "Morning summary", hint: "A daily email with each person's tasks, classes and meetings." },
+  { kind: "calendar", label: "Meeting invites", hint: "Calendar invitations for interviews, HR meetings and classes." },
+  { kind: "welcome", label: "Welcome emails", hint: "Sent when someone joins as an employee or intern." },
+  { kind: "assessment_invite", label: "Exam invitations", hint: "Language and skill exam links sent to applicants." },
+  { kind: "certificate", label: "Certificates", hint: "Course and internship certificates when they are issued." },
+  { kind: "employee_of_month", label: "Employee of the Month", hint: "The congratulation email to the winner." },
+] as const;
+const AUTOMATIC_KINDS: string[] = AUTOMATIC_EMAILS.map((e) => e.kind);
+
+export const emailAutomationInput = z.object({ paused: z.array(z.string()).max(50).transform((l) => [...new Set(l)].filter((k) => AUTOMATIC_KINDS.includes(k))) });
+
+export async function getEmailAutomation(db: Database) {
+  const row = await db.query.portalSettings.findFirst({ where: eq(portalSettings.key, AUTOMATION_KEY) });
+  const paused = ((row?.value as { paused?: string[] } | undefined)?.paused ?? []).filter((k) => AUTOMATIC_KINDS.includes(k));
+  return { emails: AUTOMATIC_EMAILS.map((e) => ({ ...e, on: !paused.includes(e.kind) })), paused };
+}
+
+export async function saveEmailAutomation(db: Database, paused: string[], actorUserId: string) {
+  const value = { paused };
+  await db
+    .insert(portalSettings)
+    .values({ key: AUTOMATION_KEY, value, updatedBy: actorUserId })
+    .onConflictDoUpdate({ target: portalSettings.key, set: { value, updatedBy: actorUserId, updatedAt: new Date() } });
+  usePausedKinds(paused);
+  return getEmailAutomation(db);
+}
+
+/** At startup: apply the saved on/off switches. */
+export async function loadEmailAutomation(db: Database) {
+  try {
+    usePausedKinds((await getEmailAutomation(db)).paused);
+  } catch (err) {
+    logger.error({ err }, "Could not load which automatic emails are turned off");
   }
 }

@@ -1,4 +1,4 @@
-import { Award, Settings2, BarChart3, FolderKanban, FolderOpen, NotebookPen, UsersRound, BookOpen, CalendarCheck, CalendarDays, Briefcase, ClipboardCheck, FileCheck2, FileText, GraduationCap, IndianRupee, KanbanSquare, LayoutDashboard, MessagesSquare, ReceiptIndianRupee, ScrollText, UserRound, Users, type LucideIcon } from "lucide-react";
+import { Award, Network, Settings2, BarChart3, FolderKanban, FolderOpen, NotebookPen, UsersRound, BookOpen, CalendarCheck, CalendarDays, Briefcase, ClipboardCheck, FileCheck2, FileText, GraduationCap, IndianRupee, KanbanSquare, LayoutDashboard, MessagesSquare, ReceiptIndianRupee, ScrollText, UserRound, Users, type LucideIcon } from "lucide-react";
 import type { UserRole } from "../context/AuthContext";
 
 export interface NavItem {
@@ -31,11 +31,12 @@ export function navForRole(role: UserRole): NavItem[] {
       { href: "/tasks", label: "Tasks", icon: KanbanSquare },
       { href: "/projects", label: "Projects", icon: FolderKanban },
       { href: "/team", label: "Team board", icon: UsersRound },
+      { href: "/org-chart", label: "Team structure", icon: Network },
       { href: "/performance", label: "Performance", icon: Award },
       { href: "/reviews", label: "Reviews", icon: FileCheck2 },
       { href: "/attendance", label: "Attendance", icon: CalendarCheck },
       ...(role === "manager" ? [] : [{ href: "/opportunities", label: "Openings", icon: Briefcase }]),
-      { href: "/documents", label: "Documents", icon: FolderOpen },
+      { href: "/documents", label: "Verify documents", icon: FolderOpen },
       ...(role === "manager" ? [] : [{ href: "/payroll", label: "Payroll", icon: IndianRupee }]),
       ...(role === "manager" ? [] : [{ href: "/reports", label: "Reports", icon: BarChart3 }]),
       { href: "/calendar", label: "Calendar", icon: CalendarDays },
@@ -53,6 +54,7 @@ export function navForRole(role: UserRole): NavItem[] {
     { href: "/tasks", label: "My tasks", icon: KanbanSquare },
     { href: "/projects", label: "Projects", icon: FolderKanban },
     { href: "/team", label: "Team board", icon: UsersRound },
+    { href: "/org-chart", label: "Team structure", icon: Network },
     { href: "/performance", label: "Performance", icon: Award },
     { href: "/attendance", label: "Attendance", icon: CalendarCheck },
     { href: "/documents", label: "My documents", icon: FolderOpen },
