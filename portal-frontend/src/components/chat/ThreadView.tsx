@@ -67,11 +67,15 @@ export function ThreadView({ kind, id, people, inboxTitle, onBack, onChanged, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind, id]);
 
-  // Poll for new messages while the chat is open.
+  // Poll for new messages while the chat is open and the tab is visible.
+  const lastSeq = useRef(0);
+  lastSeq.current = messages?.length ? messages[messages.length - 1].seqNumber : 0;
+  const loaded = messages !== null;
   useEffect(() => {
-    if (messages === null) return;
+    if (!loaded) return;
     const t = setInterval(async () => {
-      const after = messages.length ? messages[messages.length - 1].seqNumber : 0;
+      if (document.hidden) return;
+      const after = lastSeq.current;
       try {
         const r = await apiFetch<{ messages: ChatMessage[] }>(`/api/v1/messages?${qs}&afterSeq=${after}&limit=100`, { accessToken });
         if (r.messages.length) {
@@ -83,7 +87,7 @@ export function ThreadView({ kind, id, people, inboxTitle, onBack, onChanged, on
       }
     }, 3000);
     return () => clearInterval(t);
-  }, [messages, qs, accessToken, markRead]);
+  }, [loaded, qs, accessToken, markRead]);
 
   useLayoutEffect(() => {
     const el = scroller.current;

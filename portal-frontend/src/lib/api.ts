@@ -55,7 +55,7 @@ export function startNewSession() {
 export function refreshSession(): Promise<string | null> {
   if (!refreshInFlight) {
     const generation = sessionGeneration;
-    const inFlight: Promise<string | null> = request<{ accessToken: string }>("/api/v1/auth/refresh", { method: "POST" })
+    const inFlight: Promise<string | null> = acrossTabs(() => request<{ accessToken: string }>("/api/v1/auth/refresh", { method: "POST" }))
       .then((r) => r.accessToken)
       .catch(() => null)
       .then((token) => {
@@ -69,6 +69,17 @@ export function refreshSession(): Promise<string | null> {
     refreshInFlight = inFlight;
   }
   return refreshInFlight;
+}
+
+/**
+ * Runs one refresh at a time across every tab of the portal. The tabs share
+ * the refresh cookie, and the server rotates it on each use, so two tabs
+ * refreshing together would each send the same cookie. Waiting turns lets
+ * the second tab send the cookie the first one just received.
+ */
+function acrossTabs<T>(run: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
+  return locks ? (locks.request("portal-session-refresh", run) as Promise<T>) : run();
 }
 
 async function request<T>(path: string, options: RequestOptions): Promise<T> {

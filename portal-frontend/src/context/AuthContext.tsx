@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { apiFetch, ApiError, getSessionGeneration, onSessionChange, refreshSession, startNewSession } from "../lib/api";
 
 export type UserRole = "candidate" | "intern" | "employee" | "manager" | "hr" | "admin" | "super_admin";
@@ -83,7 +83,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
-  return <AuthContext.Provider value={{ user, accessToken, loading, login, logout }}>{children}</AuthContext.Provider>;
+  const value = useMemo(() => ({ user, accessToken, loading, login, logout }), [user, accessToken, loading, login, logout]);
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextValue {

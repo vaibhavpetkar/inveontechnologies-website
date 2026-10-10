@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { API_BASE, apiFetch, refreshSession } from "../lib/api";
 import { useAuth } from "./AuthContext";
 
@@ -44,6 +44,8 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const [unreadCount, setUnreadCount] = useState(0);
   const [nextBefore, setNextBefore] = useState<string | null>(null);
   const [arrivals, setArrivals] = useState(0);
+  // Bumped when a hidden tab comes back, to catch up on what it missed.
+  const [resync, setResync] = useState(0);
   const tokenRef = useRef(accessToken);
   tokenRef.current = accessToken;
 
@@ -63,27 +65,34 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         setUnreadCount(r.unreadCount);
         setNextBefore(r.nextBefore);
       })
-      .catch(() => !cancelled && setItems([]));
+      .catch(() => !cancelled && setItems((list) => list ?? []));
     return () => {
       cancelled = true;
     };
-  }, [userId]);
+  }, [userId, resync]);
 
   useEffect(() => {
     if (!userId) return;
-    const controller = new AbortController();
+    // Only visible tabs keep a stream open. Browsers allow about six open
+    // connections per site over HTTP/1.1; one long-lived stream per tab used
+    // up that budget with a few tabs open, and every other request then
+    // waited forever (pages stuck loading, buttons doing nothing).
+    let controller = new AbortController();
     let retryMs = 1000;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let hiddenTimer: ReturnType<typeof setTimeout> | null = null;
 
     const connect = async () => {
+      if (document.hidden) return;
+      const signal = controller.signal;
       let token = tokenRef.current;
       if (!token) return;
       try {
-        let res = await fetch(`${API_BASE}/api/v1/notifications/stream`, { headers: { Authorization: `Bearer ${token}` }, credentials: "include", signal: controller.signal });
+        let res = await fetch(`${API_BASE}/api/v1/notifications/stream`, { headers: { Authorization: `Bearer ${token}` }, credentials: "include", signal });
         if (res.status === 401) {
           token = await refreshSession();
-          if (!token || controller.signal.aborted) return;
-          res = await fetch(`${API_BASE}/api/v1/notifications/stream`, { headers: { Authorization: `Bearer ${token}` }, credentials: "include", signal: controller.signal });
+          if (!token || signal.aborted) return;
+          res = await fetch(`${API_BASE}/api/v1/notifications/stream`, { headers: { Authorization: `Bearer ${token}` }, credentials: "include", signal });
         }
         if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
         retryMs = 1000;
@@ -101,9 +110,9 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
           }
         }
       } catch {
-        if (controller.signal.aborted) return;
+        if (signal.aborted) return;
       }
-      if (controller.signal.aborted) return;
+      if (signal.aborted) return;
       timer = setTimeout(connect, retryMs);
       retryMs = Math.min(retryMs * 2, 30_000);
     };
@@ -126,10 +135,36 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       }
     };
 
+    const onVisibility = () => {
+      if (document.hidden) {
+        // A short grace period, so switching tabs back and forth doesn't reconnect each time.
+        hiddenTimer ??= setTimeout(() => {
+          hiddenTimer = null;
+          controller.abort();
+          if (timer) clearTimeout(timer);
+          timer = null;
+        }, 15_000);
+        return;
+      }
+      if (hiddenTimer) {
+        clearTimeout(hiddenTimer);
+        hiddenTimer = null;
+      }
+      if (controller.signal.aborted) {
+        controller = new AbortController();
+        retryMs = 1000;
+        connect();
+        setResync((n) => n + 1);
+      }
+    };
+
     connect();
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
       controller.abort();
       if (timer) clearTimeout(timer);
+      if (hiddenTimer) clearTimeout(hiddenTimer);
     };
   }, [userId]);
 
@@ -153,9 +188,11 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     await apiFetch("/api/v1/notifications/read-all", { method: "POST", accessToken: tokenRef.current }).catch(() => null);
   }, []);
 
-  return (
-    <NotificationsContext.Provider value={{ items, unreadCount, hasMore: !!nextBefore, arrivals, loadMore, markRead, markAllRead }}>{children}</NotificationsContext.Provider>
+  const value = useMemo(
+    () => ({ items, unreadCount, hasMore: !!nextBefore, arrivals, loadMore, markRead, markAllRead }),
+    [items, unreadCount, nextBefore, arrivals, loadMore, markRead, markAllRead],
   );
+  return <NotificationsContext.Provider value={value}>{children}</NotificationsContext.Provider>;
 }
 
 export function useNotifications(): NotificationsValue {
