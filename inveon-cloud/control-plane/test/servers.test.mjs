@@ -51,6 +51,15 @@ test("bootstrap token expires after 15 minutes", async () => {
   assert.equal((await api.call("POST", "/agent/register", { body: { token: tokenFrom(again.json.installCommand) } })).status, 201);
 });
 
+test("install.sh is served with this control plane's URL filled in", async () => {
+  const res = await fetch(`${api.origin}/install.sh`);
+  assert.equal(res.status, 200);
+  const text = await res.text();
+  assert.match(text, /^#!\/usr\/bin\/env bash/);
+  assert.match(text, /INVEON_URL="https:\/\/cloud\.test"/);
+  assert.ok(!text.includes("__INVEON_URL__"));
+});
+
 test("agent token is stored hashed; heartbeat records host facts and online status", async () => {
   const { orgId, owner } = await api.createOrg();
   const { serverId, agentToken } = await api.registerServer(orgId, owner);

@@ -1,0 +1,19 @@
+{
+  "name": "inveon-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Inveon Cloud server agent: connects out to the control plane and runs allow-listed actions.",
+  "type": "module",
+  "bin": { "inveon-agent": "dist/index.js" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "bundle": "npm run build && tar -czf inveon-agent.tar.gz dist package.json inveon-agent.service"
+  },
+  "engines": { "node": ">=20" },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.5.0"
+  }
+}

@@ -142,11 +142,19 @@ export function validateCompose(model: unknown, opts: { appRoot: string }): Comp
           hostIp = typeof p.host_ip === "string" ? p.host_ip : undefined;
           published = p.published;
         } else {
-          // Short syntax, in case the model was not normalised.
-          const s = String(p);
-          const m = s.match(/^(?:\[?([0-9a-fA-F:.]+|localhost)\]?:)?(?:(\d+(?:-\d+)?):)?\d+(?:-\d+)?(?:\/\w+)?$/);
-          hostIp = m?.[1];
-          published = m?.[2];
+          // Short syntax, in case the model was not normalised:
+          // "80", "8080:80", "127.0.0.1:8080:80", "[::1]:8080:80".
+          const s = String(p).replace(/\/\w+$/, "");
+          const bracket = s.match(/^\[([0-9a-fA-F:.]+)\]:(.+)$/);
+          const parts = bracket ? [bracket[1], ...bracket[2].split(":")] : s.split(":");
+          if (parts.length === 2) published = parts[0];
+          else if (parts.length === 3) {
+            hostIp = parts[0];
+            published = parts[1];
+          } else if (parts.length > 3) {
+            errors.push(`${w}: unreadable port mapping ${s}`);
+            return;
+          }
         }
         if (published === undefined || published === null || published === "") return; // container-only port
         if (!hostIp || !LOOPBACK.has(hostIp)) errors.push(`${w}: published ports must bind to 127.0.0.1 (nginx is the only public entry), e.g. "127.0.0.1:\${INVEON_HTTP_PORT}:3000"`);
