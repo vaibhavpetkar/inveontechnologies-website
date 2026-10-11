@@ -2,11 +2,17 @@ import type { UserRole } from "../context/AuthContext";
 
 export type TaskStatus = "todo" | "in_progress" | "in_review" | "changes_requested" | "done" | "cancelled";
 export type TaskPriority = "low" | "medium" | "high" | "urgent";
+export type IssueType = "epic" | "story" | "task" | "bug";
 
 export interface Task {
   id: string;
   projectId: string | null;
   parentTaskId: string | null;
+  /** Project key and number, e.g. "INV-42"; null for personal tasks. */
+  key?: string | null;
+  number?: number | null;
+  type?: IssueType;
+  labels?: string[];
   title: string;
   description: string | null;
   assigneeId: string | null;
@@ -36,10 +42,61 @@ export interface Task {
   updatedAt: string;
 }
 
+/** A row from the issue search, with names filled in. */
+export interface SearchTask extends Task {
+  assignee: { id: string; name: string } | null;
+  reporter: { id: string; name: string };
+  subtaskCount: number;
+}
+
+export interface SavedFilter {
+  id: string;
+  name: string;
+  filters: Partial<IssueFilters>;
+}
+
+/** What the issue list and board filter on; mirrors the backend's search. */
+export interface IssueFilters {
+  q: string;
+  projectId: string;
+  assignee: string; // a user id, "me" or "none"
+  reporter: string; // "me" or a user id
+  status: TaskStatus[];
+  priority: TaskPriority[];
+  type: IssueType[];
+  label: string;
+  state: "open" | "closed" | "overdue" | "all";
+  watching: boolean;
+  sort: "updated" | "created" | "due" | "priority" | "key" | "title" | "status";
+  order: "asc" | "desc";
+}
+
+export const EMPTY_FILTERS: IssueFilters = { q: "", projectId: "", assignee: "", reporter: "", status: [], priority: [], type: [], label: "", state: "all", watching: false, sort: "updated", order: "desc" };
+
+/** Query string for /api/v1/tasks/search; empty values are left out. */
+export function filtersToQuery(f: Partial<IssueFilters>, extra: Record<string, string | number> = {}): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(f)) {
+    if (v === undefined || v === "" || v === false || (Array.isArray(v) && v.length === 0)) continue;
+    if (k === "state" && v === "all") continue;
+    q.set(k, Array.isArray(v) ? v.join(",") : String(v));
+  }
+  for (const [k, v] of Object.entries(extra)) q.set(k, String(v));
+  return q.toString();
+}
+
+export const ISSUE_TYPE_META: Record<IssueType, { label: string; tone: string }> = {
+  epic: { label: "Epic", tone: "violet" },
+  story: { label: "Story", tone: "green" },
+  task: { label: "Task", tone: "blue" },
+  bug: { label: "Bug", tone: "red" },
+};
+
 export interface TaskComment {
   id: string;
   authorId: string;
   body: string;
+  mentionedUserIds?: string[];
   createdAt: string;
 }
 
@@ -49,6 +106,9 @@ export interface TaskEvent {
   action: string;
   fromStatus: TaskStatus | null;
   toStatus: TaskStatus | null;
+  field?: string | null;
+  fromValue?: string | null;
+  toValue?: string | null;
   note: string | null;
   createdAt: string;
 }

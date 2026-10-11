@@ -6,6 +6,7 @@ import { DashboardShell } from "../components/DashboardShell";
 import { Avatar } from "../components/Avatar";
 import { TaskCard } from "../components/tasks/TaskCard";
 import { TaskDrawer } from "../components/tasks/TaskDrawer";
+import "../styles/issues.css";
 import { StartWorkDialog, type Kickoff } from "../components/tasks/StartWorkDialog";
 import { ImportIssuesDialog } from "../components/tasks/ImportIssuesDialog";
 import { PeoplePicker, type Picked } from "../components/PeoplePicker";
@@ -135,7 +136,7 @@ export default function ProjectDetail() {
                   <button className="btn btn-secondary btn-sm" onClick={linkRepo}><Github size={14} /> Link a repo</button>
                 ) : null}
               </div>
-              <h1>{p.title}</h1>
+              <h1>{p.title} {p.key && <span className="issue-key" style={{ fontSize: "0.9rem", verticalAlign: "middle" }}>{p.key}</span>}</h1>
               {p.description && <p className="project-hero-desc">{p.description}</p>}
               <div className="project-hero-meta">
                 <span>{data.progress.done} of {data.progress.total} tasks done</span>
@@ -204,7 +205,7 @@ export default function ProjectDetail() {
                                   task={t}
                                   assignee={t.assigneeId ? byId.get(t.assigneeId) : undefined}
                                   draggable={!!user && allowedMoves(t, user).length > 0}
-                                  onOpen={() => navigate(`/projects/${projectId}?task=${t.id}`)}
+                                  onOpen={() => navigate(`/projects/${projectId}?task=${t.key ?? t.id}`)}
                                   onDragStart={() => setDragging(t)}
                                   onDragEnd={() => setDragging(null)}
                                 />
@@ -238,7 +239,7 @@ export default function ProjectDetail() {
       )}
 
       <AnimatePresence>
-        {openTask && data && <TaskDrawer key={openTask} taskId={openTask} byId={byId} onClose={() => navigate(`/projects/${projectId}`)} onMove={move} onChanged={load} />}
+        {openTask && data && <TaskDrawer key={openTask} taskId={openTask} byId={byId} onClose={() => navigate(`/projects/${projectId}`)} onMove={move} onChanged={load} onOpenTask={(ref) => navigate(`/projects/${projectId}?task=${ref}`)} />}
       </AnimatePresence>
       <AnimatePresence>
         {adding && data && (

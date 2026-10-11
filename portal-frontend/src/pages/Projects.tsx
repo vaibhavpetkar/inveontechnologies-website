@@ -170,7 +170,18 @@ export function ProgressRing({ percent, size = 54 }: { percent: number; size?: n
 function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
   const { user, accessToken } = useAuth();
   const { people } = useColleagues();
-  const [form, setForm] = useState({ title: "", description: "", status: "planning" as ProjectStatus, githubRepo: "" });
+  const [form, setForm] = useState({ title: "", description: "", status: "planning" as ProjectStatus, githubRepo: "", key: "" });
+  // The key follows the name until someone types their own.
+  const [keyEdited, setKeyEdited] = useState(false);
+  useEffect(() => {
+    if (keyEdited || form.title.trim().length < 2) return;
+    const t = setTimeout(() => {
+      apiFetch<{ key: string }>(`/api/v1/projects/key-suggestion?title=${encodeURIComponent(form.title.trim())}`, { accessToken })
+        .then((r) => setForm((f) => ({ ...f, key: r.key })))
+        .catch(() => undefined);
+    }, 350);
+    return () => clearTimeout(t);
+  }, [form.title, keyEdited, accessToken]);
   const [members, setMembers] = useState<Picked[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -183,7 +194,7 @@ function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; onCreat
       const repo = form.githubRepo.trim().replace(/^https?:\/\/github\.com\//, "").replace(/\/$/, "");
       const r = await apiFetch<{ project: { id: string } }>("/api/v1/projects", {
         method: "POST",
-        body: { title: form.title.trim(), description: form.description.trim() || undefined, status: form.status, githubRepo: repo || undefined, memberIds: members.map((m) => m.id) },
+        body: { title: form.title.trim(), description: form.description.trim() || undefined, status: form.status, githubRepo: repo || undefined, memberIds: members.map((m) => m.id), key: form.key.trim() || undefined },
         accessToken,
       });
       onCreated(r.project.id);
@@ -215,6 +226,11 @@ function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; onCreat
         <div className="field">
           <label htmlFor="np-title">Name</label>
           <input id="np-title" autoFocus required minLength={2} maxLength={200} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="e.g. Rail booking app" />
+        </div>
+        <div className="field">
+          <label htmlFor="np-key">Key</label>
+          <input id="np-key" value={form.key} maxLength={10} pattern="[A-Za-z][A-Za-z0-9]{1,9}" title="2-10 letters or digits, starting with a letter" onChange={(e) => { setKeyEdited(true); setForm({ ...form, key: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "") }); }} placeholder="e.g. RAIL" style={{ textTransform: "uppercase", maxWidth: 160 }} />
+          <p className="muted-small">Issues are numbered with it: {form.key || "KEY"}-1, {form.key || "KEY"}-2…</p>
         </div>
         <div className="field">
           <label htmlFor="np-desc">What it's for</label>

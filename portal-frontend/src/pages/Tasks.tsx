@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useLocation, useRoute } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, CheckCircle2, CircleDot, Eye, Github, Plus, Search } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleDot, Columns3, Eye, Github, List, Plus } from "lucide-react";
 import { DashboardShell } from "../components/DashboardShell";
 import { AnimatedNumber } from "../components/AnimatedNumber";
 import { TaskCard } from "../components/tasks/TaskCard";
@@ -15,10 +15,24 @@ import { useAuth } from "../context/AuthContext";
 import { useNotifications } from "../context/NotificationsContext";
 import { apiFetch, ApiError } from "../lib/api";
 import { displayName } from "../lib/nav";
-import { allowedMoves, BOARD_COLUMNS, CAN_ASSIGN_OTHERS, isOverdue, STATUS_META, type Task, type TaskStatus } from "../lib/tasks";
+import { allowedMoves, BOARD_COLUMNS, CAN_ASSIGN_OTHERS, EMPTY_FILTERS, filtersToQuery, isOverdue, STATUS_META, type IssueFilters, type SearchTask, type Task, type TaskStatus } from "../lib/tasks";
 import { useDirectory } from "../lib/useDirectory";
+import { IssueFiltersBar } from "../components/tasks/IssueFilters";
+import { IssueList } from "../components/tasks/IssueList";
+import { useColleagues } from "../components/tasks/useColleagues";
+import "../styles/issues.css";
 
-type Scope = "all" | "mine" | "created";
+type View = "board" | "list";
+const VIEW_KEY = "portal.tasks.view";
+const LIST_PAGE = 50;
+
+function savedView(): View {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "list" ? "list" : "board";
+  } catch {
+    return "board";
+  }
+}
 
 export default function Tasks() {
   const { user, accessToken } = useAuth();
@@ -28,10 +42,15 @@ export default function Tasks() {
   const openId = params?.id ?? null;
   const { people, byId } = useDirectory();
 
-  const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [tasks, setTasks] = useState<SearchTask[] | null>(null);
+  const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [scope, setScope] = useState<Scope>("all");
-  const [search, setSearch] = useState("");
+  const [view, setView] = useState<View>(savedView);
+  const [filters, setFilters] = useState<IssueFilters>(EMPTY_FILTERS);
+  const [page, setPage] = useState(1);
+  const [projects, setProjects] = useState<{ id: string; key: string; title: string }[]>([]);
+  const [labels, setLabels] = useState<string[]>([]);
+  const colleagues = useColleagues();
   const [showCancelled, setShowCancelled] = useState(false);
   const [creating, setCreating] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -44,20 +63,48 @@ export default function Tasks() {
 
   const isStaff = !!user && CAN_ASSIGN_OTHERS.includes(user.role);
 
+  // The board shows every match at once; the list pages through them.
   const load = useCallback(async () => {
     if (!accessToken) return;
+    const extra: Record<string, number> = view === "list" ? { page, pageSize: LIST_PAGE } : { pageSize: 500 };
     try {
-      const res = await apiFetch<{ tasks: Task[] }>("/api/v1/tasks?limit=50", { accessToken });
+      const res = await apiFetch<{ tasks: SearchTask[]; total: number }>(`/api/v1/tasks/search?${filtersToQuery(filters, extra)}`, { accessToken });
       setTasks(res.tasks);
+      setTotal(res.total);
       setError(null);
     } catch {
       setError("Couldn't load tasks right now.");
     }
-  }, [accessToken]);
+  }, [accessToken, filters, view, page]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    apiFetch<{ projects: { id: string; key: string; title: string }[] }>("/api/v1/projects", { accessToken })
+      .then((r) => setProjects(r.projects.map(({ id, key, title }) => ({ id, key, title }))))
+      .catch(() => undefined);
+    apiFetch<{ labels: string[] }>("/api/v1/tasks/labels", { accessToken })
+      .then((r) => setLabels(r.labels))
+      .catch(() => undefined);
+  }, [accessToken]);
+
+  function changeFilters(next: IssueFilters) {
+    setFilters(next);
+    setPage(1);
+  }
+  function changeView(next: View) {
+    setView(next);
+    setTasks(null);
+    try {
+      localStorage.setItem(VIEW_KEY, next);
+    } catch {
+      // Private windows: the choice just isn't remembered.
+    }
+  }
+  const openTask = (t: Task) => navigate(`/tasks/${t.key ?? t.id}`);
 
   // Something happened to someone's task (assigned, reviewed…): refresh the board.
   const { arrivals } = useNotifications();
@@ -65,17 +112,8 @@ export default function Tasks() {
     if (arrivals) load();
   }, [arrivals]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const visible = useMemo(() => {
-    if (!tasks || !user) return [];
-    const q = search.trim().toLowerCase();
-    return tasks.filter((t) => {
-      if (scope === "mine" && t.assigneeId !== user.id) return false;
-      if (scope === "created" && t.createdBy !== user.id) return false;
-      if (!q) return true;
-      const who = t.assigneeId ? byId.get(t.assigneeId)?.email ?? "" : "";
-      return t.title.toLowerCase().includes(q) || who.toLowerCase().includes(q) || displayName(who).toLowerCase().includes(q);
-    });
-  }, [tasks, user, scope, search, byId]);
+  const visible = tasks ?? [];
+  const noFilters = filtersToQuery({ ...filters, sort: undefined, order: undefined }) === "";
 
   const stats = useMemo(
     () => ({
@@ -137,7 +175,7 @@ export default function Tasks() {
       <div className="page-head">
         <div>
           <h1>{isStaff ? "Tasks" : "My tasks"}</h1>
-          <p>{isStaff ? "Assign work, follow progress and review what's submitted." : "Everything assigned to you, from to-do to done."}</p>
+          <p>{isStaff ? "Assign work, follow progress and review what's submitted." : "Your work and your projects' issues, from to-do to done."}</p>
         </div>
         <div className="page-head-actions">
           {isStaff && github?.enabled && (
@@ -151,7 +189,7 @@ export default function Tasks() {
         </div>
       </div>
 
-      <div className="stat-grid">
+      {view === "board" && <div className="stat-grid">
         {[
           { label: "Active", value: stats.active, icon: CircleDot, tone: "blue" },
           { label: "Waiting for review", value: stats.review, icon: Eye, tone: "violet" },
@@ -168,35 +206,51 @@ export default function Tasks() {
             <span className="stat-label">{s.label}</span>
           </motion.div>
         ))}
-      </div>
+      </div>}
 
       <div className="board-toolbar">
-        <div className="segmented" role="tablist" aria-label="Which tasks">
+        <div className="segmented" role="tablist" aria-label="View">
           {(
             [
-              ["all", isStaff ? "All" : "All mine"],
-              ["mine", "Assigned to me"],
-              ["created", "Created by me"],
-            ] as [Scope, string][]
-          ).map(([value, label]) => (
-            <button key={value} role="tab" aria-selected={scope === value} className={scope === value ? "active" : ""} onClick={() => setScope(value)}>
-              {scope === value && <motion.span layoutId="scope-pill" className="segmented-pill" transition={{ type: "spring", stiffness: 500, damping: 38 }} />}
-              <span>{label}</span>
+              ["board", "Board", Columns3],
+              ["list", "List", List],
+            ] as [View, string, typeof List][]
+          ).map(([value, label, Icon]) => (
+            <button key={value} role="tab" aria-selected={view === value} className={view === value ? "active" : ""} onClick={() => changeView(value)}>
+              {view === value && <motion.span layoutId="view-pill" className="segmented-pill" transition={{ type: "spring", stiffness: 500, damping: 38 }} />}
+              <span><Icon size={14} /> {label}</span>
             </button>
           ))}
         </div>
-        <label className="search-box">
-          <Search size={16} />
-          <input placeholder={isStaff ? "Search tasks or people" : "Search tasks"} value={search} onChange={(e) => setSearch(e.target.value)} />
-        </label>
-        <label className="toggle">
-          <input type="checkbox" checked={showCancelled} onChange={(e) => setShowCancelled(e.target.checked)} /> Show cancelled
-        </label>
+        {view === "board" && (
+          <label className="toggle">
+            <input type="checkbox" checked={showCancelled} onChange={(e) => setShowCancelled(e.target.checked)} /> Show cancelled
+          </label>
+        )}
       </div>
+
+      <IssueFiltersBar filters={filters} onChange={changeFilters} people={colleagues.people.map((p) => ({ id: p.id, name: p.name }))} projects={projects} labels={labels} />
 
       {error && <div className="error-banner">{error}</div>}
 
-      {!tasks && !error && (
+      {!tasks && !error && view === "list" && <div className="skeleton" style={{ height: 320, borderRadius: 14 }} />}
+
+      {tasks && view === "list" && tasks.length > 0 && (
+        <IssueList
+          tasks={tasks}
+          total={total}
+          page={page}
+          pageSize={LIST_PAGE}
+          sort={filters.sort}
+          order={filters.order}
+          onSort={(sort) => changeFilters({ ...filters, sort, order: filters.sort === sort && filters.order === "desc" ? "asc" : "desc" })}
+          onPage={setPage}
+          onOpen={openTask}
+          onLabel={(label) => changeFilters({ ...filters, label })}
+        />
+      )}
+
+      {!tasks && !error && view === "board" && (
         <div className="board">
           {BOARD_COLUMNS.map((c) => (
             <div key={c} className="board-column">
@@ -208,7 +262,7 @@ export default function Tasks() {
         </div>
       )}
 
-      {tasks && tasks.length > 0 && (
+      {tasks && view === "board" && tasks.length > 0 && (
         <div className="board">
           {columns.map((status) => {
             const items = visible.filter((t) => t.status === status);
@@ -244,7 +298,7 @@ export default function Tasks() {
                         task={t}
                         assignee={t.assigneeId ? byId.get(t.assigneeId) : undefined}
                         draggable={!!user && allowedMoves(t, user).length > 0}
-                        onOpen={() => navigate(`/tasks/${t.id}`)}
+                        onOpen={() => openTask(t)}
                         onDragStart={() => setDragging(t)}
                         onDragEnd={() => {
                           setDragging(null);
@@ -264,8 +318,8 @@ export default function Tasks() {
       {tasks && tasks.length === 0 && (
         <motion.div className="empty-state" initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }}>
           <CheckCircle2 size={36} />
-          <h3>No tasks yet</h3>
-          <p>{isStaff ? "Assign the first task to someone on the team." : "When someone assigns you work, it shows up here."}</p>
+          <h3>{noFilters ? "No tasks yet" : "No issues match"}</h3>
+          <p>{!noFilters ? "Try fewer filters, or clear them." : isStaff ? "Assign the first task to someone on the team." : "When someone assigns you work, it shows up here."}</p>
         </motion.div>
       )}
 
@@ -290,7 +344,7 @@ export default function Tasks() {
             onClose={() => setCreating(false)}
             onCreated={(task) => {
               setCreating(false);
-              setTasks((ts) => [task, ...(ts ?? [])]);
+              load();
               const who = task.assigneeId && task.assigneeId !== user?.id ? byId.get(task.assigneeId) : undefined;
               toast(who ? `Assigned to ${displayName(who.email)}` : "Task created");
             }}

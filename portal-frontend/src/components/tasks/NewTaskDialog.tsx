@@ -4,7 +4,7 @@ import { X } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
 import { apiFetch, ApiError } from "../../lib/api";
 import { displayName, ROLE_LABELS } from "../../lib/nav";
-import { CAN_ASSIGN_OTHERS, type Task, type TaskPriority } from "../../lib/tasks";
+import { CAN_ASSIGN_OTHERS, ISSUE_TYPE_META, type IssueType, type Task, type TaskPriority } from "../../lib/tasks";
 import type { DirectoryUser } from "../../lib/useDirectory";
 
 interface Props {
@@ -22,6 +22,8 @@ export function NewTaskDialog({ people, onClose, onCreated }: Props) {
     description: "",
     assigneeId: canAssignOthers ? "" : user?.id ?? "",
     priority: "medium" as TaskPriority,
+    type: "task" as IssueType,
+    labels: "",
     dueDate: "",
     estimateHours: "",
   });
@@ -35,7 +37,9 @@ export function NewTaskDialog({ people, onClose, onCreated }: Props) {
     setSaving(true);
     setError(null);
     try {
-      const body: Record<string, unknown> = { title: form.title.trim(), priority: form.priority };
+      const body: Record<string, unknown> = { title: form.title.trim(), priority: form.priority, type: form.type };
+      const labels = form.labels.split(",").map((l) => l.trim()).filter(Boolean);
+      if (labels.length) body.labels = labels;
       if (form.description.trim()) body.description = form.description.trim();
       if (form.assigneeId) body.assigneeId = form.assigneeId;
       // A due date means "by the end of that day" in the person's own timezone.
@@ -95,6 +99,21 @@ export function NewTaskDialog({ people, onClose, onCreated }: Props) {
             </select>
           </div>
         )}
+
+        <div className="field-row field-row-2">
+          <div className="field">
+            <label htmlFor="task-type">Type</label>
+            <select id="task-type" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as IssueType })}>
+              {(Object.keys(ISSUE_TYPE_META) as IssueType[]).map((t) => (
+                <option key={t} value={t}>{ISSUE_TYPE_META[t].label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label htmlFor="task-labels">Labels</label>
+            <input id="task-labels" value={form.labels} maxLength={300} onChange={(e) => setForm({ ...form, labels: e.target.value })} placeholder="frontend, login" />
+          </div>
+        </div>
 
         <div className="field-row">
           <div className="field">

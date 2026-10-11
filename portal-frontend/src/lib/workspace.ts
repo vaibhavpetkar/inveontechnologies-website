@@ -32,6 +32,8 @@ export interface Progress {
 export interface ProjectSummary {
   id: string;
   title: string;
+  /** Issue key prefix, e.g. "INV". */
+  key?: string;
   description: string | null;
   status: ProjectStatus;
   ownerId: string;

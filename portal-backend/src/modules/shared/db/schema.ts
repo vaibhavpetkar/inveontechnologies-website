@@ -1,5 +1,5 @@
 import { pgTable, uuid, text, timestamp, boolean, jsonb, pgEnum, integer, primaryKey, unique, numeric, index, date } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import type { CheckReport, ExerciseSpec } from "../../internships/exercises/types.js";
 
 /**
@@ -912,6 +912,8 @@ export const riskStatusEnum = pgEnum("risk_status", ["open", "mitigated", "close
 export const issueStatusEnum = pgEnum("issue_status", ["open", "resolved"]);
 export const taskPriorityEnum = pgEnum("task_priority", ["low", "medium", "high", "urgent"]);
 export const taskStatusEnum = pgEnum("task_status", ["todo", "in_progress", "in_review", "changes_requested", "done", "cancelled"]);
+// Jira-style issue types. Subtasks are any task with a parentTaskId.
+export const issueTypeEnum = pgEnum("issue_type", ["epic", "story", "task", "bug"]);
 export const recurrenceFrequencyEnum = pgEnum("recurrence_frequency", ["daily", "weekly", "monthly"]);
 
 export const projects = pgTable("projects", {
@@ -921,6 +923,9 @@ export const projects = pgTable("projects", {
   status: projectStatusEnum("status").notNull().default("planning"),
   ownerId: uuid("owner_id").notNull().references(() => users.id), // the manager accountable for the project
   githubRepo: text("github_repo"), // "owner/name": new task issues go here and its issues can be imported
+  // Short project key (e.g. "INV"); tasks are numbered within the project: INV-1, INV-2…
+  key: text("key").notNull().unique(),
+  nextIssueNumber: integer("next_issue_number").notNull().default(1),
   createdBy: uuid("created_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -986,6 +991,10 @@ export const tasks = pgTable("tasks", {
   id: uuid("id").primaryKey().defaultRandom(),
   projectId: uuid("project_id").references(() => projects.id, { onDelete: "cascade" }), // nullable — personal/ad-hoc tasks are allowed
   parentTaskId: uuid("parent_task_id"), // subtasks — self-reference, no FK constraint to keep Drizzle table definition simple; validated in code
+  // Number within the project (shown as KEY-number). Personal tasks have none.
+  number: integer("number"),
+  type: issueTypeEnum("type").notNull().default("task"),
+  labels: text("labels").array().notNull().default(sql`'{}'::text[]`),
   title: text("title").notNull(),
   description: text("description"),
   assigneeId: uuid("assignee_id").references(() => users.id),
@@ -1016,7 +1025,30 @@ export const tasks = pgTable("tasks", {
   ratedAt: timestamp("rated_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-}, (t) => ({ uniqGithubIssue: unique("tasks_github_issue_unique").on(t.githubRepo, t.githubIssueNumber) }));
+}, (t) => ({
+  uniqGithubIssue: unique("tasks_github_issue_unique").on(t.githubRepo, t.githubIssueNumber),
+  uniqNumber: unique("tasks_project_number_unique").on(t.projectId, t.number),
+}));
+
+/** People following a task: they hear about comments and status changes. */
+export const taskWatchers = pgTable(
+  "task_watchers",
+  {
+    taskId: uuid("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.taskId, t.userId] }) }),
+);
+
+/** A person's saved issue searches ("My open bugs", "Due this week"). */
+export const savedTaskFilters = pgTable("saved_task_filters", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  filters: jsonb("filters").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const taskRecurrences = pgTable("task_recurrences", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -1040,6 +1072,7 @@ export const taskComments = pgTable("task_comments", {
   taskId: uuid("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
   authorId: uuid("author_id").notNull().references(() => users.id),
   body: text("body").notNull(),
+  mentionedUserIds: uuid("mentioned_user_ids").array().notNull().default(sql`'{}'::uuid[]`),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -1061,6 +1094,10 @@ export const taskEvents = pgTable("task_events", {
   action: text("action").notNull(), // e.g. "status_change", "comment", "attachment_added"
   fromStatus: taskStatusEnum("from_status"),
   toStatus: taskStatusEnum("to_status"),
+  // For "field_change": which field, and its old and new values as shown to people.
+  field: text("field"),
+  fromValue: text("from_value"),
+  toValue: text("to_value"),
   note: text("note"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
