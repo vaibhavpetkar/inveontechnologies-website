@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
-import { projects, projectMembers, projectMilestones, projectRisks, projectIssues, tasks, users } from "../shared/db/schema.js";
+import { projects, projectMembers, projectMilestones, projectRisks, projectIssues, sprints, tasks, users } from "../shared/db/schema.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
@@ -168,10 +168,11 @@ export function projectsRouter(db: Database, env: Env) {
     if (!(await canAccessProject(db, req.user!.sub, req.user!.role, req.params.id))) throw new ForbiddenError();
     const project = await db.query.projects.findFirst({ where: eq(projects.id, req.params.id) });
     if (!project) throw new NotFoundError("Project not found");
-    const [members, milestones, projectTasks] = await Promise.all([
+    const [members, milestones, projectTasks, activeSprint] = await Promise.all([
       db.query.projectMembers.findMany({ where: eq(projectMembers.projectId, project.id) }),
       db.query.projectMilestones.findMany({ where: eq(projectMilestones.projectId, project.id), orderBy: [asc(projectMilestones.orderIndex), asc(projectMilestones.dueDate)] }),
       db.query.tasks.findMany({ where: eq(tasks.projectId, project.id), orderBy: (t, { desc }) => [desc(t.updatedAt)], limit: 1000 }),
+      db.query.sprints.findFirst({ where: and(eq(sprints.projectId, project.id), eq(sprints.status, "active")) }),
     ]);
     const who = await peopleById(db, [...new Set([project.ownerId, ...members.map((m) => m.userId)])]);
     res.json({
@@ -181,6 +182,7 @@ export function projectsRouter(db: Database, env: Env) {
       milestones: milestones.map((m) => ({ ...m, progress: progressOf(projectTasks.filter((t) => t.milestoneId === m.id)) })),
       tasks: await withKeys(db, projectTasks),
       progress: progressOf(projectTasks),
+      activeSprint: activeSprint ?? null,
     });
   });
 

@@ -42,6 +42,8 @@ import { performanceRouter, registerPerformanceSchedules } from "./modules/perfo
 import { syncProgramFees } from "./modules/internships/service.js";
 import { projectsRouter } from "./modules/projects/routes.js";
 import { tasksRouter } from "./modules/tasks/routes.js";
+import { sprintsRouter } from "./modules/tasks/sprints.js";
+import { engineeringRouter } from "./modules/tasks/engineering.js";
 import { communitiesRouter } from "./modules/chat/communities-routes.js";
 import { conversationsRouter } from "./modules/chat/conversations-routes.js";
 import { messagesRouter } from "./modules/chat/messages-routes.js";
@@ -173,6 +175,8 @@ app.use("/api/v1/letter-templates", letterTemplatesRouter(db, env));
 app.use("/api/v1", employeeLettersRouter(db, env));
 app.use("/api/v1", appointmentRouter(db, env));
 app.use("/api/v1/internships", internshipsRouter(db, env));
+app.use("/api/v1", sprintsRouter(db, env)); // /projects/:id/backlog, /sprints/:id…
+app.use("/api/v1", engineeringRouter(db, env)); // issue links, GitHub dev links, versions, timeline, import
 app.use("/api/v1/projects", projectsRouter(db, env));
 app.use("/api/v1/tasks", tasksRouter(db, env));
 app.use("/api/v1/team", teamRouter(db, env));

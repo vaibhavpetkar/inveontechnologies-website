@@ -5,6 +5,7 @@ import { formatDue, isOverdue, PRIORITY_META, type Task } from "../../lib/tasks"
 import type { DirectoryUser } from "../../lib/useDirectory";
 import { IssueKey, IssueTypeIcon, LabelChips } from "./IssueBits";
 import { Avatar } from "../Avatar";
+import "../../styles/sprints.css";
 
 interface Props {
   task: Task;
@@ -83,6 +84,11 @@ export const TaskCard = forwardRef<HTMLDivElement, Props>(function TaskCard({ ta
           {task.githubIssueNumber && (
             <span className={`gh-chip ${task.githubIssueState ?? "open"}`} title={`GitHub issue ${task.githubRepo}#${task.githubIssueNumber}`}>
               <Github size={13} /> #{task.githubIssueNumber}
+            </span>
+          )}
+          {task.storyPoints != null && (
+            <span className="points-badge" title="Story points" style={{ width: "auto", padding: "0 0.45rem" }}>
+              {task.storyPoints}
             </span>
           )}
           {task.description && (

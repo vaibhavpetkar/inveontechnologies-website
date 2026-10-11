@@ -189,7 +189,7 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged, onOpenTas
 
   // ---- Editing details, watching, subtasks ----
   const canEditDetails = !!task && !!user && (task.createdBy === user.id || task.assigneeId === user.id || CAN_ASSIGN_OTHERS.includes(user.role));
-  async function saveDetails(patch: Partial<{ type: IssueType; priority: TaskPriority; labels: string[]; dueDate: string | null }>) {
+  async function saveDetails(patch: Partial<{ type: IssueType; priority: TaskPriority; labels: string[]; dueDate: string | null; storyPoints: number | null }>) {
     if (!task) return;
     const before = task;
     setTask({ ...task, ...patch } as Task);
@@ -339,6 +339,24 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged, onOpenTas
                   <label htmlFor="iss-due">Due</label>
                   <input id="iss-due" type="date" value={task.dueDate ? toDateInput(task.dueDate) : ""} onChange={(e) => saveDetails({ dueDate: e.target.value ? new Date(`${e.target.value}T23:59:00`).toISOString() : null })} />
                 </div>
+                {task.projectId && task.type !== "epic" && (
+                  <div className="field">
+                    <label htmlFor="iss-points">Story points</label>
+                    <input
+                      id="iss-points"
+                      type="number"
+                      min={0}
+                      max={100}
+                      key={`pts-${task.storyPoints ?? ""}`}
+                      defaultValue={task.storyPoints ?? ""}
+                      placeholder="None"
+                      onBlur={(e) => {
+                        const v = e.target.value === "" ? null : Math.max(0, Math.min(100, Math.round(Number(e.target.value))));
+                        if (v !== (task.storyPoints ?? null) && !Number.isNaN(v)) saveDetails({ storyPoints: v });
+                      }}
+                    />
+                  </div>
+                )}
                 <div className="field" style={{ gridColumn: "1 / -1" }}>
                   <label htmlFor="iss-labels">Labels</label>
                   <LabelEditor id="iss-labels" labels={task.labels ?? []} onChange={(labels) => saveDetails({ labels })} />

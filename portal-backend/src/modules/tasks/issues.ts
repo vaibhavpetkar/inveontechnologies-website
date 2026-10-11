@@ -76,6 +76,11 @@ const TRACKED: { field: keyof TaskRow; label: string }[] = [
   { field: "milestoneId", label: "phase" },
   { field: "labels", label: "labels" },
   { field: "parentTaskId", label: "parent" },
+  { field: "storyPoints", label: "story points" },
+  { field: "sprintId", label: "sprint" },
+  { field: "fixVersionId", label: "fix version" },
+  { field: "startDate", label: "start date" },
+  { field: "remainingHours", label: "remaining estimate" },
 ];
 
 function asText(v: unknown): string | null {
@@ -95,13 +100,13 @@ export async function recordChanges(
   before: TaskRow,
   after: TaskRow,
   actorUserId: string,
-  names: { person: (id: string) => Promise<string>; phase: (id: string) => Promise<string>; task: (id: string) => Promise<string> },
+  names: { person: (id: string) => Promise<string>; phase: (id: string) => Promise<string>; task: (id: string) => Promise<string>; sprint?: (id: string) => Promise<string>; version?: (id: string) => Promise<string> },
 ) {
   const rows = [];
   for (const { field, label } of TRACKED) {
     let from = asText(before[field]);
     let to = asText(after[field]);
-    if (field === "estimateHours") {
+    if (field === "estimateHours" || field === "remainingHours") {
       from = from === null ? null : String(Number(from));
       to = to === null ? null : String(Number(to));
     }
@@ -114,6 +119,14 @@ export async function recordChanges(
     if (field === "assigneeId") [from, to] = [from && (await names.person(from)), to && (await names.person(to))];
     if (field === "milestoneId") [from, to] = [from && (await names.phase(from)), to && (await names.phase(to))];
     if (field === "parentTaskId") [from, to] = [from && (await names.task(from)), to && (await names.task(to))];
+    if (field === "fixVersionId") {
+      const versionName = names.version ?? (async () => "A version");
+      [from, to] = [from && (await versionName(from)), to && (await versionName(to))];
+    }
+    if (field === "sprintId") {
+      const sprintName = names.sprint ?? (async () => "A sprint");
+      [from, to] = [from ? await sprintName(from) : "Backlog", to ? await sprintName(to) : "Backlog"];
+    }
     rows.push({ taskId: after.id, actorUserId, action: "field_change", field: label, fromValue: from, toValue: to });
   }
   if (rows.length) await db.insert(taskEvents).values(rows);
@@ -146,7 +159,10 @@ export const searchSchema = z.object({
   dueAfter: z.string().datetime({ offset: true }).optional(),
   watching: z.coerce.boolean().optional(),
   parentId: z.string().uuid().optional(),
-  sort: z.enum(["updated", "created", "due", "priority", "key", "title", "status"]).default("updated"),
+  // A sprint id, "active" (the project's running sprint) or "backlog" (in no sprint).
+  sprint: z.union([z.string().uuid(), z.enum(["active", "backlog"])]).optional(),
+  version: z.union([z.string().uuid(), z.literal("none")]).optional(),
+  sort: z.enum(["updated", "created", "due", "priority", "key", "title", "status", "rank"]).default("updated"),
   order: z.enum(["asc", "desc"]).default("desc"),
   page: z.coerce.number().int().min(1).max(10_000).default(1),
   pageSize: z.coerce.number().int().min(1).max(500).default(50),
@@ -184,6 +200,11 @@ export async function searchTasks(db: Database, me: { sub: string; role: string 
   if (f.dueAfter) where.push(sql`t.due_date >= ${f.dueAfter}`);
   if (f.watching) where.push(sql`EXISTS (SELECT 1 FROM task_watchers w WHERE w.task_id = t.id AND w.user_id = ${me.sub})`);
   if (f.parentId) where.push(sql`t.parent_task_id = ${f.parentId}`);
+  if (f.sprint === "backlog") where.push(sql`t.sprint_id IS NULL`);
+  else if (f.sprint === "active") where.push(sql`t.sprint_id IN (SELECT s.id FROM sprints s WHERE s.status = 'active')`);
+  else if (f.sprint) where.push(sql`t.sprint_id = ${f.sprint}`);
+  if (f.version === "none") where.push(sql`t.fix_version_id IS NULL`);
+  else if (f.version) where.push(sql`t.fix_version_id = ${f.version}`);
   if (f.q) {
     const key = f.q.toUpperCase().match(ISSUE_KEY_RE);
     const like = `%${f.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
@@ -202,6 +223,7 @@ export async function searchTasks(db: Database, me: { sub: string; role: string 
     key: sql`p.key ${dir} NULLS LAST, t.number ${dir}`,
     title: sql`lower(t.title) ${dir}`,
     status: sql`array_position(ARRAY['todo','in_progress','changes_requested','in_review','done','cancelled'], t.status::text) ${dir}, t.updated_at DESC`,
+    rank: sql`t.rank ${dir} NULLS LAST`,
   }[f.sort];
   const whereSql = where.length ? sql`WHERE ${sql.join(where, sql` AND `)}` : sql``;
   const r = await db.execute<SearchRow>(sql`

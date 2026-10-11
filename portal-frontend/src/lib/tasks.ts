@@ -13,6 +13,10 @@ export interface Task {
   number?: number | null;
   type?: IssueType;
   labels?: string[];
+  /** Scrum: the sprint it's planned into (null = backlog), its story points and backlog position. */
+  sprintId?: string | null;
+  storyPoints?: number | null;
+  rank?: number | null;
   title: string;
   description: string | null;
   assigneeId: string | null;
@@ -67,7 +71,7 @@ export interface IssueFilters {
   label: string;
   state: "open" | "closed" | "overdue" | "all";
   watching: boolean;
-  sort: "updated" | "created" | "due" | "priority" | "key" | "title" | "status";
+  sort: "updated" | "created" | "due" | "priority" | "key" | "title" | "status" | "rank";
   order: "asc" | "desc";
 }
 
@@ -252,4 +256,77 @@ export function dateInputToIso(value: string): string {
 /** Is the task still open (not done or cancelled)? */
 export function isOpenTask(task: Pick<Task, "status">): boolean {
   return task.status !== "done" && task.status !== "cancelled";
+}
+
+// ---- Sprints ----
+
+export type SprintStatus = "planned" | "active" | "completed";
+
+export interface Sprint {
+  id: string;
+  projectId: string;
+  name: string;
+  goal: string | null;
+  status: SprintStatus;
+  startDate: string | null;
+  endDate: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  committedPoints: number | null;
+  completedPoints: number | null;
+  completedIssues: number | null;
+  carriedOverIssues: number | null;
+}
+
+/** An issue row on the backlog and sprint lists. */
+export interface BacklogIssue {
+  id: string;
+  key: string | null;
+  title: string;
+  type: IssueType;
+  priority: TaskPriority;
+  status: TaskStatus;
+  storyPoints: number | null;
+  labels: string[];
+  rank: number | null;
+  sprintId: string | null;
+  dueDate: string | null;
+  assignee: { id: string; name: string } | null;
+  subtaskCount: number;
+}
+
+export interface ListStats {
+  issues: number;
+  done: number;
+  points: number;
+  donePoints: number;
+}
+
+export interface BacklogView {
+  project: { id: string; key: string; title: string; wipLimits: Partial<Record<TaskStatus, number>> };
+  canManage: boolean;
+  sprints: (Sprint & { stats: ListStats; issues: BacklogIssue[] })[];
+  backlog: { stats: ListStats; issues: BacklogIssue[] };
+  completedSprints: number;
+}
+
+export interface SprintReport {
+  sprint: Sprint;
+  burndown: { days: { at: string; remaining: number; issues: number; ideal: number }[]; committed: number; endsAt?: string };
+  completed: BacklogIssue[];
+  notCompleted: BacklogIssue[];
+  addedAfterStart: BacklogIssue[];
+}
+
+export interface Velocity {
+  sprints: { id: string; name: string; committed: number; completed: number; completedIssues: number; carriedOver: number; completedAt: string | null }[];
+  average: number;
+}
+
+/** "3 Mar – 17 Mar" */
+export function sprintDates(s: Pick<Sprint, "startDate" | "endDate">): string {
+  const f = (d: string) => new Date(d).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  if (s.startDate && s.endDate) return `${f(s.startDate)} – ${f(s.endDate)}`;
+  if (s.endDate) return `Ends ${f(s.endDate)}`;
+  return "Dates not set";
 }

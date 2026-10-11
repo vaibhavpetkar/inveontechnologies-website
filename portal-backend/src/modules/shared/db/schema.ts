@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, boolean, jsonb, pgEnum, integer, primaryKey, unique, numeric, index, date } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, boolean, jsonb, pgEnum, integer, primaryKey, unique, numeric, index, date, doublePrecision } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import type { CheckReport, ExerciseSpec } from "../../internships/exercises/types.js";
 
@@ -926,6 +926,8 @@ export const projects = pgTable("projects", {
   // Short project key (e.g. "INV"); tasks are numbered within the project: INV-1, INV-2…
   key: text("key").notNull().unique(),
   nextIssueNumber: integer("next_issue_number").notNull().default(1),
+  // Board column limits, e.g. { in_progress: 4, in_review: 2 }. Columns over their limit are flagged.
+  wipLimits: jsonb("wip_limits").$type<Partial<Record<string, number>>>().notNull().default({}),
   createdBy: uuid("created_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -987,6 +989,48 @@ export const taskTemplates = pgTable("task_templates", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const sprintStatusEnum = pgEnum("sprint_status", ["planned", "active", "completed"]);
+
+/** A Scrum sprint: a time box on one project. One active sprint per project at a time. */
+export const sprints = pgTable("sprints", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  goal: text("goal"),
+  status: sprintStatusEnum("status").notNull().default("planned"),
+  startDate: timestamp("start_date", { withTimezone: true }),
+  endDate: timestamp("end_date", { withTimezone: true }),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  // Snapshots for velocity: points planned when it started, points done when it closed.
+  committedPoints: integer("committed_points"),
+  completedPoints: integer("completed_points"),
+  completedIssues: integer("completed_issues"),
+  carriedOverIssues: integer("carried_over_issues"),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const versionStatusEnum = pgEnum("version_status", ["unreleased", "released", "archived"]);
+
+/** A release ("v1.2", "June launch"): issues are fixed in a version, which is shipped as a whole. */
+export const projectVersions = pgTable(
+  "project_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    status: versionStatusEnum("status").notNull().default("unreleased"),
+    startDate: timestamp("start_date", { withTimezone: true }),
+    releaseDate: timestamp("release_date", { withTimezone: true }),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
+    createdBy: uuid("created_by").notNull().references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ uniqName: unique("project_versions_project_name_unique").on(t.projectId, t.name) }),
+);
+
 export const tasks = pgTable("tasks", {
   id: uuid("id").primaryKey().defaultRandom(),
   projectId: uuid("project_id").references(() => projects.id, { onDelete: "cascade" }), // nullable — personal/ad-hoc tasks are allowed
@@ -995,6 +1039,14 @@ export const tasks = pgTable("tasks", {
   number: integer("number"),
   type: issueTypeEnum("type").notNull().default("task"),
   labels: text("labels").array().notNull().default(sql`'{}'::text[]`),
+  // Scrum: the sprint it's planned into (null = backlog), its points, and its place in the backlog (lower = higher up).
+  sprintId: uuid("sprint_id").references(() => sprints.id, { onDelete: "set null" }),
+  storyPoints: integer("story_points"),
+  rank: doublePrecision("rank"),
+  // Releases and planning: the version it ships in, when work is planned to start, and hours left.
+  fixVersionId: uuid("fix_version_id").references(() => projectVersions.id, { onDelete: "set null" }),
+  startDate: timestamp("start_date", { withTimezone: true }),
+  remainingHours: numeric("remaining_hours", { precision: 6, scale: 2 }),
   title: text("title").notNull(),
   description: text("description"),
   assigneeId: uuid("assignee_id").references(() => users.id),
@@ -1029,6 +1081,65 @@ export const tasks = pgTable("tasks", {
   uniqGithubIssue: unique("tasks_github_issue_unique").on(t.githubRepo, t.githubIssueNumber),
   uniqNumber: unique("tasks_project_number_unique").on(t.projectId, t.number),
 }));
+
+/**
+ * When each issue joined and left each sprint, for burndown charts that show
+ * scope added mid-sprint. Kept by a trigger on tasks.sprint_id, so every path
+ * that moves an issue is covered.
+ */
+export const sprintScope = pgTable(
+  "sprint_scope",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sprintId: uuid("sprint_id").notNull().references(() => sprints.id, { onDelete: "cascade" }),
+    taskId: uuid("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    addedAt: timestamp("added_at", { withTimezone: true }).notNull().defaultNow(),
+    removedAt: timestamp("removed_at", { withTimezone: true }),
+  },
+  (t) => ({ bySprint: index("sprint_scope_sprint_idx").on(t.sprintId) }),
+);
+
+export const issueLinkTypeEnum = pgEnum("issue_link_type", ["blocks", "relates", "duplicates", "clones"]);
+
+/** "RAIL-3 blocks RAIL-7": read from the source's side; the target sees the inverse ("is blocked by"). */
+export const taskLinks = pgTable(
+  "task_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sourceTaskId: uuid("source_task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    targetTaskId: uuid("target_task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    type: issueLinkTypeEnum("type").notNull(),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    uniq: unique("task_links_unique").on(t.sourceTaskId, t.targetTaskId, t.type),
+    byTarget: index("task_links_target_idx").on(t.targetTaskId),
+  }),
+);
+
+/**
+ * Branches, commits and pull requests that mention an issue key, collected
+ * from the GitHub webhook so the issue shows its development work.
+ */
+export const taskDevLinks = pgTable(
+  "task_dev_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["branch", "commit", "pull_request"] }).notNull(),
+    repo: text("repo").notNull(),
+    // Branch name, commit sha, or pull request number.
+    ref: text("ref").notNull(),
+    title: text("title"),
+    url: text("url"),
+    state: text("state", { enum: ["open", "closed", "merged", "draft", "deleted"] }),
+    author: text("author"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ uniq: unique("task_dev_links_unique").on(t.taskId, t.kind, t.repo, t.ref) }),
+);
 
 /** People following a task: they hear about comments and status changes. */
 export const taskWatchers = pgTable(

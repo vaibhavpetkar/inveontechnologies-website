@@ -1,3 +1,4 @@
+import { handleDevEvent } from "../tasks/engineering.js";
 import express, { Router } from "express";
 import { z } from "zod";
 import { and, asc, eq, ilike, inArray, isNotNull, notInArray, sql } from "drizzle-orm";
@@ -303,6 +304,12 @@ export function githubWebhookRouter(db: Database, env: Env) {
       payload = JSON.parse(raw);
     } catch {
       res.status(400).json({ error: { code: "BAD_BODY", message: "Invalid JSON" } });
+      return;
+    }
+    // Branches, commits and pull requests that name an issue key show on that issue.
+    if (event === "push" || event === "create" || event === "pull_request") {
+      const result = await handleDevEvent(db, event, payload);
+      res.json({ ok: true, ...result });
       return;
     }
     const repo = payload.repository?.full_name;
