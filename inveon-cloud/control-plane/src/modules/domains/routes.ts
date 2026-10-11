@@ -1,0 +1,184 @@
+import { Router } from "express";
+import { z } from "zod";
+import { promises as dns } from "node:dns";
+import { and, eq, inArray } from "drizzle-orm";
+import type { Database } from "../../db/client.js";
+import type { Env } from "../../env.js";
+import { domains, environments, jobs, servers } from "../../db/schema.js";
+import { requireRole } from "../auth/middleware.js";
+import { audit } from "../../lib/audit.js";
+import { AppError, ConflictError, NotFoundError } from "../../lib/errors.js";
+import { loadEnvironment } from "../apps/routes.js";
+import { createJob, notifyServer, registerJobEffect } from "../jobs/service.js";
+
+export const HOSTNAME_RE = /^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+
+type Domain = typeof domains.$inferSelect;
+
+async function loadDomain(db: Database, orgId: string, id: string) {
+  const d = await db.query.domains.findFirst({ where: and(eq(domains.id, id), eq(domains.orgId, orgId)) });
+  if (!d) throw new NotFoundError("Domain not found");
+  return d;
+}
+
+function withDnsRecord(d: Domain, serverIp: string | null) {
+  return { ...d, dnsRecord: { type: "A", name: d.hostname, value: serverIp } };
+}
+
+/** HTTP site with the ACME webroot, certbot (webroot), then the HTTPS site. */
+export function issueSteps(hostname: string, slug: string, email: string | null) {
+  return [
+    { name: "Write HTTP site", action: "nginx.write_site", params: { hostname, slug, tls: false } },
+    { name: "Reload nginx", action: "nginx.reload", params: {} },
+    { name: "Issue certificate", action: "certbot.issue", params: { hostname, email } },
+    { name: "Write HTTPS site", action: "nginx.write_site", params: { hostname, slug, tls: true } },
+    { name: "Reload nginx", action: "nginx.reload", params: {} },
+  ];
+}
+
+export async function startIssueJob(db: Database, env: Env, d: Domain, userId: string | null) {
+  const environment = await db.query.environments.findFirst({ where: eq(environments.id, d.environmentId) });
+  if (!environment) throw new NotFoundError("Environment not found");
+  if (!environment.activeSlot) throw new AppError("NOT_DEPLOYED", "Deploy the environment before issuing a certificate (nginx needs its upstream)", 400);
+  const busy = await db.query.jobs.findFirst({ where: and(eq(jobs.type, "domain_issue"), inArray(jobs.status, ["pending", "running"]), eq(jobs.environmentId, environment.id)) });
+  if (busy && busy.meta.domainId === d.id) throw new ConflictError("A certificate job is already running for this domain");
+  const job = await createJob(db, {
+    orgId: d.orgId,
+    serverId: environment.serverId,
+    environmentId: environment.id,
+    type: "domain_issue",
+    title: `Certificate for ${d.hostname}`,
+    createdBy: userId,
+    meta: { domainId: d.id },
+    steps: issueSteps(d.hostname, environment.slug, env.INVEON_ACME_EMAIL ?? null),
+  });
+  await db.update(domains).set({ status: "issuing", lastError: null }).where(eq(domains.id, d.id));
+  notifyServer(environment.serverId);
+  return job;
+}
+
+export function domainsRouter(db: Database, env: Env) {
+  const router = Router({ mergeParams: true });
+
+  router.post("/environments/:envId/domains", requireRole("admin"), async (req, res) => {
+    const { hostname } = z.object({ hostname: z.string().trim().toLowerCase().regex(HOSTNAME_RE, "Enter a hostname like app.example.com") }).parse(req.body);
+    const { environment, server } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
+    const [d] = await db.insert(domains).values({ orgId: environment.orgId, environmentId: environment.id, hostname }).returning();
+    await audit(db, req, "domain.add", "domain", d.id, { hostname, environmentId: environment.id });
+    res.status(201).json({ domain: withDnsRecord(d, server.ipAddress) });
+  });
+
+  router.get("/environments/:envId/domains", async (req, res) => {
+    const { environment, server } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
+    const rows = await db.select().from(domains).where(eq(domains.environmentId, environment.id));
+    res.json({ domains: rows.map((d) => withDnsRecord(d, server.ipAddress)) });
+  });
+
+  // Checks the A record points at the server; if so, starts the certificate job.
+  router.post("/domains/:id/verify", requireRole("admin"), async (req, res) => {
+    const d = await loadDomain(db, req.member!.orgId, req.params.id);
+    const { server } = await loadEnvironment(db, req.member!.orgId, d.environmentId);
+    if (!server.ipAddress) throw new AppError("NO_SERVER_IP", "Set the server's public IP first", 400);
+    let addresses: string[] = [];
+    try {
+      addresses = await dns.resolve4(d.hostname);
+    } catch {
+      addresses = [];
+    }
+    await db.update(domains).set({ dnsCheckedAt: new Date() }).where(eq(domains.id, d.id));
+    if (!addresses.includes(server.ipAddress)) {
+      const msg = addresses.length ? `A record points to ${addresses.join(", ")}, expected ${server.ipAddress}` : `No A record found yet for ${d.hostname}`;
+      await db.update(domains).set({ lastError: msg }).where(eq(domains.id, d.id));
+      res.status(200).json({ verified: false, message: msg, addresses });
+      return;
+    }
+    const job = await startIssueJob(db, env, d, req.user!.sub);
+    await audit(db, req, "domain.verify", "domain", d.id, { hostname: d.hostname, jobId: job.id });
+    res.json({ verified: true, job });
+  });
+
+  router.post("/domains/:id/issue", requireRole("admin"), async (req, res) => {
+    const d = await loadDomain(db, req.member!.orgId, req.params.id);
+    if (!d.dnsCheckedAt) throw new AppError("DNS_NOT_VERIFIED", "Verify DNS first", 400);
+    const job = await startIssueJob(db, env, d, req.user!.sub);
+    await audit(db, req, "domain.issue", "domain", d.id, { hostname: d.hostname, jobId: job.id });
+    res.json({ job });
+  });
+
+  router.delete("/domains/:id", requireRole("admin"), async (req, res) => {
+    const d = await loadDomain(db, req.member!.orgId, req.params.id);
+    await db.delete(domains).where(eq(domains.id, d.id));
+    await audit(db, req, "domain.remove", "domain", d.id, { hostname: d.hostname });
+    // The nginx site file stays until phase 2 adds a remove-site action.
+    res.json({ ok: true });
+  });
+
+  return router;
+}
+
+function certExpiry(result: Record<string, unknown> | null, hostname: string): Date | null {
+  const certs = Array.isArray(result?.certs) ? (result!.certs as { hostname?: unknown; expiresAt?: unknown }[]) : [];
+  const hit = certs.find((c) => c.hostname === hostname);
+  const at = typeof hit?.expiresAt === "string" ? new Date(hit.expiresAt) : null;
+  return at && !Number.isNaN(at.getTime()) ? at : null;
+}
+
+registerJobEffect("domain_issue", async (db, job, steps) => {
+  const domainId = String(job.meta.domainId ?? "");
+  const d = await db.query.domains.findFirst({ where: eq(domains.id, domainId) });
+  if (!d) return;
+  if (job.status === "success") {
+    const certStep = steps.find((s) => s.action === "certbot.issue");
+    await db
+      .update(domains)
+      .set({ status: "active", lastError: null, certIssuedAt: new Date(), certExpiresAt: certExpiry(certStep?.result ?? null, d.hostname) ?? new Date(Date.now() + 90 * 86400000) })
+      .where(eq(domains.id, d.id));
+  } else {
+    await db.update(domains).set({ status: "failed", lastError: job.error ?? "Certificate job failed" }).where(eq(domains.id, d.id));
+  }
+});
+
+// Renewal results only update domains that live on the reporting server.
+registerJobEffect("cert_renew", async (db, job, steps) => {
+  if (job.status !== "success") return;
+  const result = steps.find((s) => s.action === "certbot.renew")?.result ?? null;
+  const rows = await db
+    .select({ id: domains.id, hostname: domains.hostname })
+    .from(domains)
+    .innerJoin(environments, eq(environments.id, domains.environmentId))
+    .where(and(eq(environments.serverId, job.serverId), eq(domains.status, "active")));
+  for (const r of rows) {
+    const at = certExpiry(result, r.hostname);
+    if (at) await db.update(domains).set({ certExpiresAt: at }).where(eq(domains.id, r.id));
+  }
+});
+
+/** Daily: one renew job per server that has active domains. */
+export async function queueRenewals(db: Database) {
+  const rows = await db
+    .selectDistinct({ serverId: environments.serverId, orgId: environments.orgId, hostname: domains.hostname })
+    .from(domains)
+    .innerJoin(environments, eq(environments.id, domains.environmentId))
+    .innerJoin(servers, eq(servers.id, environments.serverId))
+    .where(eq(domains.status, "active"));
+  const byServer = new Map<string, { orgId: string; hostnames: string[] }>();
+  for (const r of rows) {
+    const entry = byServer.get(r.serverId) ?? { orgId: r.orgId, hostnames: [] };
+    entry.hostnames.push(r.hostname);
+    byServer.set(r.serverId, entry);
+  }
+  for (const [serverId, { orgId, hostnames }] of byServer) {
+    await createJob(db, {
+      orgId,
+      serverId,
+      type: "cert_renew",
+      title: "Renew certificates",
+      steps: [
+        { name: "certbot renew", action: "certbot.renew", params: { hostnames } },
+        { name: "Reload nginx", action: "nginx.reload", params: {} },
+      ],
+    });
+    notifyServer(serverId);
+  }
+  return byServer.size;
+}
