@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bell, Boxes, Cloud, History, ListChecks, LogOut, Menu, Server, Users, X } from "lucide-react";
+import { Bell, Boxes, Cloud, History, ListChecks, LogOut, Menu, Server, UserCog, Users, X } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
 const NAV = [
@@ -11,6 +11,7 @@ const NAV = [
   { href: "/team", label: "Team", icon: Users },
   { href: "/alerts", label: "Alerts", icon: Bell, min: "admin" as const },
   { href: "/audit", label: "Audit log", icon: History, min: "admin" as const },
+  { href: "/account", label: "Account", icon: UserCog },
 ];
 
 function Sidebar({ onNavigate }: { onNavigate?: () => void }) {

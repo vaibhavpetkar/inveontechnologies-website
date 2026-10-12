@@ -57,6 +57,13 @@
       "when": 1791825971704,
       "tag": "0007_maintenance_windows",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791826661091,
+      "tag": "0008_two_factor",
+      "breakpoints": true
     }
   ]
 }

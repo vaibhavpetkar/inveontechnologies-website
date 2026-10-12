@@ -318,3 +318,10 @@ textarea { resize: vertical; font-family: var(--font-mono); font-size: 0.85rem; 
 .row-archived td { opacity: 0.6; }
 .window-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) auto; gap: 0.5rem; align-items: center; }
 .queued { justify-content: space-between; align-items: center; flex-wrap: wrap; }
+
+/* Two-factor */
+.qr-wrap { display: flex; justify-content: center; padding: 8px 0; }
+.qr { display: block; max-width: 100%; height: auto; border-radius: 6px; }
+.recovery-codes { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; }
+.recovery-codes code { font-size: 0.95rem; letter-spacing: 0.04em; }
+@media (max-width: 420px) { .recovery-codes { grid-template-columns: 1fr; } }

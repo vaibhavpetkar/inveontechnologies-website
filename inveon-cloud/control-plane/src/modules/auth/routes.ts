@@ -9,6 +9,7 @@ import { authRateLimiter, requireAuth, signAccessToken } from "./middleware.js";
 import { randomToken, sha256Hex } from "../../lib/crypto.js";
 import { writeAudit } from "../../lib/audit.js";
 import { AppError, ConflictError, UnauthorizedError } from "../../lib/errors.js";
+import { checkSecondFactor, secondFactorSchema, signChallenge, twoFactorRouter, twoFactorSummary, verifyChallenge } from "./two-factor.js";
 
 const REFRESH_COOKIE = "inveon_refresh_token";
 const MAX_FAILED_ATTEMPTS = 5;
@@ -96,13 +97,30 @@ async function profile(db: Database, userId: string) {
     .innerJoin(organizations, eq(organizations.id, memberships.orgId))
     .where(eq(memberships.userId, userId))
     .orderBy(organizations.name);
-  return { id: user.id, email: user.email, name: user.name, organizations: orgs };
+  return { id: user.id, email: user.email, name: user.name, organizations: orgs, twoFactor: await twoFactorSummary(db, user) };
 }
+
+const refreshHashOf = (cookies: unknown) => {
+  const value = (cookies as Record<string, unknown> | undefined)?.[REFRESH_COOKIE];
+  return typeof value === "string" ? sha256Hex(value) : undefined;
+};
 
 export function authRouter(db: Database, env: Env) {
   const router = Router();
   const signupLimit = authRateLimiter(env.INVEON_AUTH_RATE_LIMIT);
   const loginLimit = authRateLimiter(env.INVEON_AUTH_RATE_LIMIT);
+  const secondFactorLimit = authRateLimiter(env.INVEON_AUTH_RATE_LIMIT);
+
+  /** A wrong password or second factor counts towards the same lockout. */
+  async function recordFailure(user: typeof users.$inferSelect, action: string, ip: string | undefined) {
+    const attempts = user.failedLoginAttempts + 1;
+    const locked = attempts >= MAX_FAILED_ATTEMPTS;
+    await db
+      .update(users)
+      .set({ failedLoginAttempts: locked ? 0 : attempts, lockedUntil: locked ? new Date(Date.now() + LOCKOUT_MINUTES * 60000) : null })
+      .where(eq(users.id, user.id));
+    await writeAudit(db, { orgId: null, actorUserId: user.id, action, entityType: "user", entityId: user.id, ipAddress: ip });
+  }
 
   router.post("/signup", signupLimit, async (req, res) => {
     const body = signupSchema.parse(req.body);
@@ -138,20 +156,38 @@ export function authRouter(db: Database, env: Env) {
     }
     if (user.lockedUntil && user.lockedUntil > new Date()) throw new AppError("ACCOUNT_LOCKED", "Account temporarily locked after failed sign-ins", 423);
     if (!(await argon2.verify(user.passwordHash, body.password).catch(() => false))) {
-      const attempts = user.failedLoginAttempts + 1;
-      const locked = attempts >= MAX_FAILED_ATTEMPTS;
-      await db
-        .update(users)
-        .set({ failedLoginAttempts: locked ? 0 : attempts, lockedUntil: locked ? new Date(Date.now() + LOCKOUT_MINUTES * 60000) : null })
-        .where(eq(users.id, user.id));
-      await writeAudit(db, { orgId: null, actorUserId: user.id, action: "user.login_failed", entityType: "user", entityId: user.id, ipAddress: req.ip });
+      await recordFailure(user, "user.login_failed", req.ip);
       throw invalid();
+    }
+    if (user.totpEnabledAt) {
+      // Step two: no session yet, only a short-lived challenge for the code.
+      res.json({ twoFactorRequired: true, challengeToken: signChallenge(user.id, env) });
+      return;
     }
     await db.update(users).set({ failedLoginAttempts: 0, lockedUntil: null }).where(eq(users.id, user.id));
     const accessToken = await issueSession(db, env, res, user.id, { ua: req.headers["user-agent"], ip: req.ip });
     await writeAudit(db, { orgId: null, actorUserId: user.id, action: "user.login", entityType: "user", entityId: user.id, ipAddress: req.ip });
     res.json({ accessToken, user: await profile(db, user.id) });
   });
+
+  router.post("/login/2fa", secondFactorLimit, async (req, res) => {
+    const { challengeToken, ...factor } = z.object({ challengeToken: z.string().min(10).max(2000) }).and(secondFactorSchema).parse(req.body);
+    const userId = verifyChallenge(challengeToken, env);
+    const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
+    if (!user || !user.totpEnabledAt) throw new AppError("INVALID_CHALLENGE", "The sign-in step expired. Enter your email and password again.", 401);
+    if (user.lockedUntil && user.lockedUntil > new Date()) throw new AppError("ACCOUNT_LOCKED", "Account temporarily locked after failed sign-ins", 423);
+    const method = await checkSecondFactor(db, user, factor);
+    if (!method) {
+      await recordFailure(user, "user.2fa_failed", req.ip);
+      throw new AppError("INVALID_CODE", "That code is wrong or was already used", 401);
+    }
+    await db.update(users).set({ failedLoginAttempts: 0, lockedUntil: null }).where(eq(users.id, user.id));
+    const accessToken = await issueSession(db, env, res, user.id, { ua: req.headers["user-agent"], ip: req.ip });
+    await writeAudit(db, { orgId: null, actorUserId: user.id, action: "user.login", entityType: "user", entityId: user.id, metadata: { secondFactor: method }, ipAddress: req.ip });
+    res.json({ accessToken, user: await profile(db, user.id) });
+  });
+
+  router.use("/2fa", twoFactorRouter(db, env, refreshHashOf));
 
   router.post("/refresh", async (req, res) => {
     const plaintext = req.cookies?.[REFRESH_COOKIE];

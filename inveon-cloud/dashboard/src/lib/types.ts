@@ -8,11 +8,20 @@ export interface OrgSummary {
   role: Role;
 }
 
+export interface TwoFactorStatus {
+  enabled: boolean;
+  enabledAt: string | null;
+  recoveryCodesLeft: number;
+  /** An owner somewhere, or an admin where the organization requires it. */
+  required: boolean;
+}
+
 export interface User {
   id: string;
   email: string;
   name: string | null;
   organizations: OrgSummary[];
+  twoFactor: TwoFactorStatus;
 }
 
 export interface Server {
@@ -233,6 +242,7 @@ export interface Member {
   name: string | null;
   role: Role;
   joinedAt: string;
+  twoFactorEnabled: boolean;
 }
 
 export interface Invite {

@@ -508,7 +508,8 @@ run `journalctl -u inveon-agent -f`.
 ## Security
 
 - **Roles:**
-  - **owner:** members, roles and the organization;
+  - **owner:** members, roles, the organization and its two-factor
+    requirement, and resetting a member's two-factor;
   - **admin:** servers, apps, environments, domains, backups and their
     retention, release archiving, maintenance windows, alert channels,
     invites and the audit log;
@@ -523,7 +524,9 @@ run `journalctl -u inveon-agent -f`.
   - passwords are hashed with argon2id;
   - access tokens live in memory;
   - the refresh token is a rotating `httpOnly` cookie, and reusing an old
-    refresh token revokes every session.
+    refresh token revokes every session;
+  - [two-factor authentication](#two-factor-authentication) is required for
+    owners (and, per organization, for admins).
 - **Secrets** use envelope encryption. Each value has its own random
   AES-256-GCM data key, and that key is wrapped with `INVEON_MASTER_KEY`.
   The ciphertext is bound to its environment and key, so copying it to
@@ -568,7 +571,7 @@ run `journalctl -u inveon-agent -f`.
 - **Live logs** are relayed, never stored, and stop when the viewer leaves.
   Image removal for archived releases never forces and only names images
   tagged with a full commit SHA.
-- **Audit log:** sign-ups, org changes, members, invites, servers, apps,
+- **Audit log:** sign-ups, org changes, members, invites, two-factor resets, servers, apps,
   environments, variables (keys only, never values), deploys, rollbacks,
   domains, backups, restores, backup pruning, log requests and live log
   streams (with the service), job cancels, registry credentials and deploy
@@ -576,6 +579,40 @@ run `journalctl -u inveon-agent -f`.
   (create, update, test, secret rotation, delete; never the URL or secret),
   release archiving, and deploys queued for, discarded from or started by a
   maintenance window. It records the actor, the IP and the time. Admins and owners can read it under Audit log.
+
+### Two-factor authentication
+
+Every user can turn on two-factor (TOTP, RFC 6238: SHA-1, 6 digits, 30
+seconds) under **Account**. Owners must: until they do, every request in
+their organizations answers `403 TWO_FACTOR_REQUIRED` and the dashboard
+shows only the set-up screen. An owner can tick **Require two-factor for
+admins too** on the Team page to extend this to admins.
+
+- **Set up:** the control plane makes a 160-bit secret, keeps it encrypted
+  and *pending*, and returns an `otpauth://` URI. The dashboard draws the QR
+  code in the browser (`qrcode-generator`) and also shows the key for typing
+  in. A code from the app confirms it; only then is two-factor on. Sessions
+  opened before that (with only a password) are signed out.
+- **Recovery codes:** ten one-time codes (`xxxx-xxxx-xxxx`) are shown once,
+  with copy and download. Only salted SHA-256 hashes are stored. **New
+  recovery codes** (needs a code) replaces all of them.
+- **Sign-in** becomes two steps. A correct password returns no session, only
+  a 5-minute challenge token signed with a key derived from
+  `INVEON_JWT_SECRET` (it can't be used as an access token). The session is
+  issued by `POST /auth/login/2fa` with the challenge and a code or a
+  recovery code. Codes from one step either side are accepted for clock
+  drift, but each 30-second step works only once per user (a code, or an
+  older one, can't be replayed). Wrong codes are rate-limited per IP and
+  count towards the same 5-attempt, 15-minute account lock as passwords.
+- **Turning it off** needs a current code or a recovery code, and signs out
+  other sessions. An owner (who still needs it) is then sent straight back
+  to set-up.
+- **Lost phone and codes:** an owner can **Reset 2FA** for a member on the
+  Team page. It turns two-factor off for that person and signs them out
+  everywhere. It's refused if the person also belongs to an organization
+  where the resetting owner isn't an owner, and for yourself. It's
+  audit-logged (`member.2fa_reset`); enabling, disabling, new recovery codes
+  and failed codes are logged on the user.
 
 ## Tests
 
@@ -591,6 +628,10 @@ The control-plane tests boot the built server against a real Postgres, with
 a fake GitHub API, and act as the agent. They cover:
 
 - auth and roles, invites, and closed sign-up;
+- two-factor: the RFC 4226 and RFC 6238 test vectors, enrolment and the
+  owner requirement (and admins when the organization asks), the two-step
+  sign-in, refusing a replayed code, single-use recovery codes, expired and
+  forged challenges, the lockout, turning it off, and an owner's reset;
 - bootstrap tokens: single use and 15-minute expiry;
 - agent authentication, and that one server can't claim, report on or finish
   another server's job;
@@ -696,7 +737,7 @@ rollback.
   today), and a GitHub App integration for short-lived clone tokens and
   preview links posted on pull requests.
 - Rotate the master key, move it to AWS KMS, and use mTLS for agents.
-- 2FA for owners. SSO later.
+- SSO, and WebAuthn security keys next to TOTP.
 - Metrics (Prometheus + Grafana) and central logs (Loki).
 - Maintenance windows in a chosen time zone (they are UTC today).
 - Many servers behind one proxy, and wildcard certificates (DNS-01).

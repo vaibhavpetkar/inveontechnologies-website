@@ -21,9 +21,29 @@ export const users = pgTable("users", {
   passwordHash: text("password_hash").notNull(),
   failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
   lockedUntil: ts("locked_until"),
+  // Two-factor (TOTP). The secret is envelope-encrypted; a pending secret
+  // waits for the first code during enrolment. totpLastStep is the newest
+  // 30-second step a code was accepted for: an older or equal step is a replay.
+  totpSecretEnc: text("totp_secret_enc"),
+  totpPendingSecretEnc: text("totp_pending_secret_enc"),
+  totpEnabledAt: ts("totp_enabled_at"),
+  totpLastStep: bigint("totp_last_step", { mode: "number" }),
   createdAt: createdAt(),
   updatedAt: ts("updated_at").notNull().defaultNow(),
 });
+
+/** One-time recovery codes for two-factor sign-in, stored as salted SHA-256 hashes. */
+export const userRecoveryCodes = pgTable(
+  "user_recovery_codes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    codeHash: text("code_hash").notNull(),
+    usedAt: ts("used_at"),
+    createdAt: createdAt(),
+  },
+  (t) => ({ uniq: unique().on(t.userId, t.codeHash) }),
+);
 
 // Opaque random refresh tokens, stored as SHA-256 hashes and rotated on use.
 export const refreshTokens = pgTable("refresh_tokens", {
@@ -42,6 +62,8 @@ export const organizations = pgTable("organizations", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
+  // Owners always need two-factor; this extends the requirement to admins.
+  require2faForAdmins: boolean("require_2fa_for_admins").notNull().default(false),
   createdAt: createdAt(),
 });
 

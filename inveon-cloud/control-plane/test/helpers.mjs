@@ -120,10 +120,14 @@ export async function startServer(extraEnv = {}) {
 
   const tokenFor = (userId) => jwt.sign({ sub: userId }, JWT_SECRET, { expiresIn: "15m" });
 
-  /** A user directly in the DB (no rate-limited sign-up), optionally a member of orgId. */
-  async function createUser({ orgId, role, email } = {}) {
+  /**
+   * A user directly in the DB (no rate-limited sign-up), optionally a member
+   * of orgId. Owners need two-factor, so they get it marked as on (the
+   * two-factor tests enrol for real through the API).
+   */
+  async function createUser({ orgId, role, email, twoFactor = role === "owner" } = {}) {
     email ??= `user-${randomUUID()}@test.local`;
-    const { rows } = await pool.query("INSERT INTO users (email, name, password_hash) VALUES ($1, 'Test', 'x') RETURNING id", [email]);
+    const { rows } = await pool.query("INSERT INTO users (email, name, password_hash, totp_enabled_at) VALUES ($1, 'Test', 'x', $2) RETURNING id", [email, twoFactor ? new Date() : null]);
     const id = rows[0].id;
     if (orgId) await pool.query("INSERT INTO memberships (org_id, user_id, role) VALUES ($1, $2, $3)", [orgId, id, role]);
     return { id, email, token: tokenFor(id) };
