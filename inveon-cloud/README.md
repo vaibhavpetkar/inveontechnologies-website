@@ -29,11 +29,14 @@ inveon-cloud/
     (OS, CPU, memory, disk, Docker version), and reports each step's
     output and result.
   - It runs only a fixed list of actions with fixed argument lists:
-    `release.prepare`, `compose.validate|pull|up|down|ps|logs`,
-    `health.check`, `nginx.write_upstream|write_site|reload`,
-    `certbot.issue|renew` and `backup.create|restore`. There is no shell
-    access, every parameter is checked, and an unknown action fails the job
-    before anything runs.
+    `image.build`, `release.prepare|run`,
+    `compose.validate|pull|up|down|ps|logs`, `health.check`,
+    `nginx.write_upstream|write_site|remove_site|remove_upstream|reload`,
+    `certbot.issue|renew|delete`, `backup.create|restore` and
+    `app.remove_folder`. The only programs it starts are `docker`, `nginx`,
+    `systemctl`, `certbot`, `aws`, `tar` and `git`, always with an argv list.
+    There is no shell access, every parameter is checked, and an unknown
+    action fails the job before anything runs.
 - **Scheduler.** It runs inside the control plane. Every 30 seconds it:
   - marks servers offline after 90 seconds without a heartbeat;
   - fails jobs that have been stuck for more than 60 minutes;
@@ -45,27 +48,32 @@ inveon-cloud/
 
 ### Deploy flow
 
-A deploy starts from a GitHub push (signed webhook) or from the Deploy
-button. It creates a **release**, which is the commit plus the compose file
-read from GitHub at that commit, and then a deploy job on the environment's
-server. With the **blue/green** strategy the job runs these steps:
+A deploy starts from a GitHub push (signed webhook), a pull request (for
+[preview environments](#preview-environments)) or the Deploy button. It
+creates a **release**, which is the commit plus the compose file read from
+GitHub at that commit, and then a deploy job on the environment's server.
+With the **blue/green** strategy the job runs these steps:
 
-1. **Prepare release:** writes `docker-compose.yml` and a `0600` `.env` for
+1. **Build image** (only for apps [built on the server](#building-on-the-server)).
+2. **Prepare release:** writes `docker-compose.yml` and a `0600` `.env` for
    the new colour.
-2. **Validate compose file:** `docker compose config --format json`, then the
+3. **Validate compose file:** `docker compose config --format json`, then the
    safety checks below. The control plane re-checks the resolved model the
    agent sends back.
-3. **Pull images.**
-4. **Start** the new colour (blue or green) on its own port.
-5. **Health check** `http://127.0.0.1:<port><health path>` until it answers
+4. **Pull images**, logged in with the app's registry credentials if it has
+   any.
+5. **Back up, then run the release command** (only if the environment has
+   one; see [Release command](#release-command-migrations)).
+6. **Start** the new colour (blue or green) on its own port.
+7. **Health check** `http://127.0.0.1:<port><health path>` until it answers
    2xx or 3xx.
-6. **Switch the nginx upstream** to the new port, and **reload nginx**. If
+8. **Switch the nginx upstream** to the new port, and **reload nginx**. If
    `nginx -t` fails, the old file is restored.
-7. **Stop the old colour.**
+9. **Stop the old colour.**
 
 If any step fails, the live release stays as it was. A clean-up job stops
-the failed colour and, if the upstream had already been switched, points it
-back. **Rollback** redeploys the previous release the same way. The
+the failed colour (including anything the release command started) and, if
+the upstream had already been switched, points it back. **Rollback** redeploys the previous release the same way. The
 **recreate** strategy runs the same steps on a single project in place, so
 there is a short restart. Use recreate when the compose file also runs the
 database.
@@ -96,6 +104,7 @@ Every release gets these values in its `.env`:
 | `INVEON_SLOT` | `blue`, `green` or `main`. |
 | `INVEON_COMMIT_SHA`, `IMAGE_TAG` | The commit being deployed (use it as the image tag). |
 | `IMAGE_REGISTRY` | The app's registry, if set. |
+| `INVEON_IMAGE` | The image built on the server for this commit (only when the app is built on the server). |
 
 Your environment variables and secrets are added to the same `.env`.
 
@@ -113,10 +122,129 @@ services:
       - ${INVEON_DATA_DIR}/uploads:/app/uploads
 ```
 
-Images are built by GitHub Actions in each app repo and pushed to GHCR or
-ECR, tagged with the commit SHA. The MVP does not build images on the
-server, so `build:` sections are skipped by `pull` and are not supported. For
-a private registry, run `docker login ghcr.io` once on the server as root.
+Images are normally built by GitHub Actions in each app repo and pushed to
+GHCR or ECR, tagged with the commit SHA. Repos without a CI image can be
+[built on the server](#building-on-the-server) instead. `build:` sections in
+the compose file are skipped by `pull` and are not supported. For a private
+registry, give the app [registry credentials](#registry-credentials-and-deploy-keys)
+(or run `docker login` once on the server as root).
+
+### Release command (migrations)
+
+Each environment can have a **release command**, for example
+`npm run db:migrate` or `python manage.py migrate --noinput`, and the
+compose service whose image runs it (Deploys tab, admins). On every deploy
+and rollback, after the images are pulled and before anything is started or
+switched:
+
+1. If a release is live and backups are set up for the environment (a
+   bucket, plus a database or folders), the job takes a **backup** of the
+   live colour with the usual `backup.create` action. If the backup fails,
+   the deploy stops.
+2. The agent runs `docker compose run --rm -T <service> <command…>` in the
+   new release's project, so the command sees the new image, the new
+   `.env` and the compose network (dependencies such as the database are
+   started if needed). It times out after 30 minutes.
+3. If the command fails, the job stops there: nothing new is started, the
+   live release keeps serving, and the deploy is marked failed with the
+   error and the last 16 KB of the command's output. The dashboard shows
+   both on the failed deploy, with a **Restore this backup** button for the
+   backup taken in step 1 (a restore always backs up the current state
+   first).
+
+The command is never run through a shell. It is split on spaces into words,
+and each word may only use letters, digits and `_ @ % + = : , . / -` (no
+quotes, `$`, `;`, `|`, `&`, redirects or globs); the first word can't be an
+option. The control plane checks this when you save it and the agent checks
+it again before running it. Use a script in your image for anything more
+complex. Migrations should be backwards compatible with the release that is
+still serving, because with blue/green the old colour keeps running against
+the migrated database until the switch.
+
+### Building on the server
+
+Turn on **Build on the server** in the app's settings for repos that have no
+CI image, and set the Dockerfile path and build context (relative to the
+repo). Each deploy then starts with an `image.build` step on the
+environment's server:
+
+- the agent creates an empty repo, fetches exactly the deploy's commit
+  (`git fetch --depth 1 <url> <sha>`) and checks it out, with hooks off, no
+  system or global git config and no prompts, and checks that `HEAD` is the
+  commit;
+- the URL is always `github.com/<owner>/<repo>`, built by the agent from the
+  app's validated owner and name;
+- a Dockerfile or context that is missing, or that resolves (through a
+  symlink) outside the clone, fails the build;
+- it runs `docker build --pull` and tags the image
+  `inveon-build/<app>-<id>:<commit>`. The release's `.env` gets
+  `INVEON_IMAGE` set to that tag, so the compose file uses
+  `image: ${INVEON_IMAGE}`. The pull step then only pulls images that are
+  missing (`--policy missing`, Docker Compose 2.22 or later).
+
+Public repos are cloned anonymously. For private repos, generate a
+**deploy key** in the app's settings and add its public half in GitHub under
+Settings, Deploy keys, with write access off. The clone uses it over SSH
+with GitHub's published host keys pinned. Built images stay on the server;
+prune old ones with `docker image prune` until release archiving lands.
+
+Servers installed before these features need `git` and `openssh-client`
+(`apt-get install -y git openssh-client`), the new agent bundle in
+`/opt/inveon-agent` and its updated systemd unit (which adds `/root/.docker`
+to `ReadWritePaths` for `docker build`), then
+`systemctl daemon-reload && systemctl restart inveon-agent`. Running the
+installer again with a new install token does all of this.
+
+### Registry credentials and deploy keys
+
+- **Registry credentials** (app settings, admins): a registry host, user
+  name and password or token, used for the pull step and for base images
+  during a build. The password is envelope-encrypted like a secret variable,
+  write-only, and shown masked. It is decrypted only into the agent's copy
+  of the job when that server claims it, never into the stored job steps.
+  The agent logs in with `docker login --password-stdin` into a throwaway
+  `DOCKER_CONFIG` folder for that one step, then runs `docker logout` and
+  deletes the folder, even if the step failed. Root's own `~/.docker` login
+  is never touched. ECR passwords expire after 12 hours, so for ECR prefer
+  the server's instance role with the ECR credential helper.
+- **Deploy keys** are Ed25519 keys generated by the control plane. Only the
+  public half is ever shown; the private half is encrypted and sent only to
+  the server running a build, written to a `0600` file for the clone and
+  deleted afterwards.
+
+The control plane's own `INVEON_GITHUB_TOKEN` is long-lived and never leaves
+the control plane, so clones don't use it. The agent also accepts a
+short-lived token (kept out of argv), ready for a GitHub App integration.
+
+### Preview environments
+
+Turn on **Preview environments** in the app's settings, choose the preview
+server and a base domain (for example `preview.example.com`), and point a
+wildcard DNS record `*.preview.example.com` at that server. Add the
+**Pull requests** event to the repo's webhook. Then:
+
+- **opened, reopened or synchronize:** the control plane creates (or
+  reuses) the environment `pr-<number>` on the preview server, with the
+  domain `pr-<number>.preview.example.com`, and deploys the pull request's
+  head commit. A new preview copies the variables and the deploy settings
+  (strategy, health path, release command) from the environment you chose
+  in the settings, if any. Pick a staging environment, not production:
+  preview code can read those values. After its first successful deploy the
+  preview gets its own Let's Encrypt certificate (the HTTP site is written
+  first, so it works over HTTP even if certbot fails);
+- **closed** (merged or not): a teardown job stops both colours with
+  `docker compose down --volumes`, removes the nginx site and upstream,
+  deletes the certificate and the environment's folder, and then deletes
+  the environment. If the teardown fails, the preview stays listed and an
+  admin can retry it with **Tear down**.
+
+Pull requests from forks are never deployed, since their code would run on
+your server with the preview's variables. Pushes to the branch never deploy
+previews. If a push lands while the preview's previous deploy is still
+running, that commit is skipped; the next push deploys again. Nothing is
+posted back to GitHub: the GitHub integration only reads repository contents
+and can't comment, so open the preview from the dashboard or the
+`pr-<number>` URL.
 
 ## Running it
 
@@ -168,17 +296,20 @@ Then:
    command as root on the host (Ubuntu or Debian):
    `curl -fsSL https://cloud…/install.sh | sudo bash -s -- <token>`. The
    token works **once** and expires after **15 minutes**. It is stored only
-   as a SHA-256 hash. The script installs Docker, nginx, certbot, the AWS
+   as a SHA-256 hash. The script installs Docker, nginx, certbot, git, the AWS
    CLI and Node 20, registers the server, and starts `inveon-agent`. The
    per-server agent token it receives is also stored hashed.
 2. **Add an app.** Give the GitHub repo URL, branch and compose path. Copy
    the webhook URL and secret (shown once) into the repo under Settings,
-   Webhooks, with content type `application/json` and only the push event.
-   For private repos, set `INVEON_GITHUB_TOKEN`, a fine-grained token with
-   read access to contents.
+   Webhooks, with content type `application/json` and the **Pushes** event
+   (add **Pull requests** for preview environments). For private repos, set
+   `INVEON_GITHUB_TOKEN`, a fine-grained token with read access to contents.
+   In the app's **Settings** you can turn on building on the server, add
+   registry credentials, generate a deploy key and set up previews.
 3. **Create an environment** (for example `production`) on a server, choose
    the strategy and health path, and add variables. Mark secrets as
-   *secret*: they are write-only and are never shown again.
+   *secret*: they are write-only and are never shown again. Set a release
+   command in the Deploys tab if the app has migrations.
 4. **Deploy.** Push to the branch, or press Deploy.
 5. **Domains.** Add the hostname, then create the DNS A record the
    dashboard shows (it points at the server's public IP). Press Verify DNS,
@@ -247,7 +378,9 @@ run `journalctl -u inveon-agent -f`.
   dashboard shows them masked. They are decrypted only when a release is
   prepared for the owning server's agent, and they are written to that
   release's `0600` `.env`. Webhook secrets are encrypted the same way and
-  shown once. To rotate the master key, re-wrap every data key (planned for
+  shown once. Registry passwords and deploy keys are encrypted the same
+  way, bound to their app, write-only, and decrypted only into the claiming
+  agent's copy of a job; the stored job steps never hold them. To rotate the master key, re-wrap every data key (planned for
   phase 2). If the master key is lost, every secret has to be entered again.
 - **Agents:**
   - the install token is single-use and expires after 15 minutes;
@@ -261,15 +394,22 @@ run `journalctl -u inveon-agent -f`.
     list of `ReadWritePaths`.
 - **Webhooks:** checked with `X-Hub-Signature-256` (HMAC-SHA256 over the raw
   body, constant-time comparison). Unsigned or mis-signed requests are
-  refused.
+  refused. Pull requests whose head is in another repository (forks) never
+  get a preview.
+- **Release commands and builds** stay inside the allow-list: the release
+  command is a validated argv run with `docker compose run` in the app's own
+  image, and a build clones only `github.com/<owner>/<repo>` at a full commit
+  SHA and builds with `docker build`. Note that a Dockerfile runs as root
+  inside the build container, as it would in CI.
 - **Backups:** the agent uploads with `aws s3 cp --sse AES256` using the
   server's own credentials. Use an EC2 instance role with a write-only policy
   on the backup prefix, and turn on bucket versioning. No AWS keys are stored
   in Inveon Cloud.
 - **Audit log:** sign-ups, org changes, members, invites, servers, apps,
   environments, variables (keys only, never values), deploys, rollbacks,
-  domains, backups, restores, log requests and job cancels. It records the
-  actor, the IP and the time. Admins and owners can read it under Audit log.
+  domains, backups, restores, log requests, job cancels, registry
+  credentials and deploy keys (never their values), and preview creation
+  and teardown. It records the actor, the IP and the time. Admins and owners can read it under Audit log.
 
 ## Tests
 
@@ -291,13 +431,21 @@ a fake GitHub API, and act as the agent. They cover:
 - secret encryption round trip, masking and write-only reads;
 - webhook signatures;
 - blue/green step order, rollback targets and failed-deploy clean-up;
+- release commands: validation, the backup first, keeping the old release
+  live when the command fails, and offering the backup for restore;
+- building on the server, registry credentials and deploy keys (write-only,
+  and only in the agent's copy of the job);
+- preview environments: creation, copied variables, forks ignored, pushes
+  not deploying previews, teardown and retry;
 - compose validation, including the control plane's re-check;
 - health state changes and alerts, domains and certbot, backups and
   restores, log jobs, and the SSE stream.
 
 The agent tests cover the allow-list, parameter checks, the argument lists
 of every command (run through a fake runner), nginx rollback when `nginx -t`
-fails, health retries, backups and every unsafe-compose rule.
+fails, health retries, backups, the release command, the clone and build
+(deploy key, token, symlinks, `HEAD` check), registry login and logout,
+preview teardown and every unsafe-compose rule.
 
 ## Moving the portal, the website and the CRM onto Inveon Cloud
 
@@ -362,11 +510,9 @@ rollback.
 
 - Create EC2 servers from the dashboard (AWS SDK + cloud-init that runs the
   installer).
-- Build on the server or on a build host as a fallback when a repo has no CI
-  image, and keep registry credentials per app.
-- Preview environments per pull request.
-- Run migrations as a deploy step (backup first, then migrate) and roll back
-  automatically if a migration fails.
+- Build on a separate build host (builds run on each environment's server
+  today), and a GitHub App integration for short-lived clone tokens and
+  preview links posted on pull requests.
 - Rotate the master key, move it to AWS KMS, and use mTLS for agents.
 - 2FA for owners. SSO later.
 - Metrics (Prometheus + Grafana), central logs (Loki), live `logs -f`
