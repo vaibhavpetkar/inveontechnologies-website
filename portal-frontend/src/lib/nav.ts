@@ -1,4 +1,4 @@
-import { Award, Network, Settings2, BarChart3, FolderKanban, FolderOpen, NotebookPen, UsersRound, BookOpen, CalendarCheck, CalendarDays, Briefcase, ClipboardCheck, FileCheck2, FileText, GraduationCap, IndianRupee, KanbanSquare, LayoutDashboard, MessagesSquare, ReceiptIndianRupee, ScrollText, UserRound, Users, type LucideIcon } from "lucide-react";
+import { Award, PieChart, Network, Settings2, BarChart3, FolderKanban, FolderOpen, NotebookPen, UsersRound, BookOpen, CalendarCheck, CalendarDays, Briefcase, ClipboardCheck, FileCheck2, FileText, GraduationCap, IndianRupee, KanbanSquare, LayoutDashboard, MessagesSquare, ReceiptIndianRupee, ScrollText, UserRound, Users, type LucideIcon } from "lucide-react";
 import type { UserRole } from "../context/AuthContext";
 
 export interface NavItem {
@@ -30,6 +30,7 @@ export function navForRole(role: UserRole): NavItem[] {
       { href: "/people", label: role === "manager" ? "My team" : "People", icon: Users },
       { href: "/tasks", label: "Tasks", icon: KanbanSquare },
       { href: "/projects", label: "Projects", icon: FolderKanban },
+      { href: "/dashboards", label: "Dashboards", icon: PieChart },
       { href: "/team", label: "Team board", icon: UsersRound },
       { href: "/org-chart", label: "Team structure", icon: Network },
       { href: "/performance", label: "Performance", icon: Award },
@@ -53,6 +54,7 @@ export function navForRole(role: UserRole): NavItem[] {
     { href: "/internships", label: "Internship", icon: GraduationCap },
     { href: "/tasks", label: "My tasks", icon: KanbanSquare },
     { href: "/projects", label: "Projects", icon: FolderKanban },
+    { href: "/dashboards", label: "Dashboards", icon: PieChart },
     { href: "/team", label: "Team board", icon: UsersRound },
     { href: "/org-chart", label: "Team structure", icon: Network },
     { href: "/performance", label: "Performance", icon: Award },

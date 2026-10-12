@@ -2,11 +2,24 @@ import type { UserRole } from "../context/AuthContext";
 
 export type TaskStatus = "todo" | "in_progress" | "in_review" | "changes_requested" | "done" | "cancelled";
 export type TaskPriority = "low" | "medium" | "high" | "urgent";
+export type IssueType = "epic" | "story" | "task" | "bug";
 
 export interface Task {
   id: string;
   projectId: string | null;
   parentTaskId: string | null;
+  /** Project key and number, e.g. "INV-42"; null for personal tasks. */
+  key?: string | null;
+  number?: number | null;
+  type?: IssueType;
+  labels?: string[];
+  /** Scrum: the sprint it's planned into (null = backlog), its story points and backlog position. */
+  sprintId?: string | null;
+  storyPoints?: number | null;
+  rank?: number | null;
+  fixVersionId?: string | null;
+  startDate?: string | null;
+  remainingHours?: string | null;
   title: string;
   description: string | null;
   assigneeId: string | null;
@@ -36,10 +49,61 @@ export interface Task {
   updatedAt: string;
 }
 
+/** A row from the issue search, with names filled in. */
+export interface SearchTask extends Task {
+  assignee: { id: string; name: string } | null;
+  reporter: { id: string; name: string };
+  subtaskCount: number;
+}
+
+export interface SavedFilter {
+  id: string;
+  name: string;
+  filters: Partial<IssueFilters>;
+}
+
+/** What the issue list and board filter on; mirrors the backend's search. */
+export interface IssueFilters {
+  q: string;
+  projectId: string;
+  assignee: string; // a user id, "me" or "none"
+  reporter: string; // "me" or a user id
+  status: TaskStatus[];
+  priority: TaskPriority[];
+  type: IssueType[];
+  label: string;
+  state: "open" | "closed" | "overdue" | "all";
+  watching: boolean;
+  sort: "updated" | "created" | "due" | "priority" | "key" | "title" | "status" | "rank";
+  order: "asc" | "desc";
+}
+
+export const EMPTY_FILTERS: IssueFilters = { q: "", projectId: "", assignee: "", reporter: "", status: [], priority: [], type: [], label: "", state: "all", watching: false, sort: "updated", order: "desc" };
+
+/** Query string for /api/v1/tasks/search; empty values are left out. */
+export function filtersToQuery(f: Partial<IssueFilters>, extra: Record<string, string | number> = {}): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(f)) {
+    if (v === undefined || v === "" || v === false || (Array.isArray(v) && v.length === 0)) continue;
+    if (k === "state" && v === "all") continue;
+    q.set(k, Array.isArray(v) ? v.join(",") : String(v));
+  }
+  for (const [k, v] of Object.entries(extra)) q.set(k, String(v));
+  return q.toString();
+}
+
+export const ISSUE_TYPE_META: Record<IssueType, { label: string; tone: string }> = {
+  epic: { label: "Epic", tone: "violet" },
+  story: { label: "Story", tone: "green" },
+  task: { label: "Task", tone: "blue" },
+  bug: { label: "Bug", tone: "red" },
+};
+
 export interface TaskComment {
   id: string;
   authorId: string;
   body: string;
+  mentionedUserIds?: string[];
   createdAt: string;
 }
 
@@ -49,6 +113,9 @@ export interface TaskEvent {
   action: string;
   fromStatus: TaskStatus | null;
   toStatus: TaskStatus | null;
+  field?: string | null;
+  fromValue?: string | null;
+  toValue?: string | null;
   note: string | null;
   createdAt: string;
 }
@@ -131,9 +198,11 @@ const REVIEWER: Record<TaskStatus, TaskStatus[]> = {
 const PRIVILEGED: UserRole[] = ["hr", "admin", "super_admin"];
 export const CAN_ASSIGN_OTHERS: UserRole[] = ["manager", "hr", "admin", "super_admin"];
 
-export function allowedMoves(task: Task, me: { id: string; role: UserRole }): TaskStatus[] {
+export function allowedMoves(task: Task, me: { id: string; role: UserRole }, opts: { requireReview?: boolean } = {}): TaskStatus[] {
   const moves = new Set<TaskStatus>();
   if (task.assigneeId === me.id) ASSIGNEE[task.status].forEach((s) => moves.add(s));
+  // Projects without a review step let the assignee close their own work.
+  if (opts.requireReview === false && task.assigneeId === me.id && (task.status === "in_progress" || task.status === "changes_requested")) moves.add("done");
   // A project lead is also a reviewer server-side; a manager may be one, so
   // offer the moves and let the API decide.
   const maybeReviewer = PRIVILEGED.includes(me.role) || task.createdBy === me.id || (!!task.projectId && me.role === "manager");
@@ -192,4 +261,77 @@ export function dateInputToIso(value: string): string {
 /** Is the task still open (not done or cancelled)? */
 export function isOpenTask(task: Pick<Task, "status">): boolean {
   return task.status !== "done" && task.status !== "cancelled";
+}
+
+// ---- Sprints ----
+
+export type SprintStatus = "planned" | "active" | "completed";
+
+export interface Sprint {
+  id: string;
+  projectId: string;
+  name: string;
+  goal: string | null;
+  status: SprintStatus;
+  startDate: string | null;
+  endDate: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  committedPoints: number | null;
+  completedPoints: number | null;
+  completedIssues: number | null;
+  carriedOverIssues: number | null;
+}
+
+/** An issue row on the backlog and sprint lists. */
+export interface BacklogIssue {
+  id: string;
+  key: string | null;
+  title: string;
+  type: IssueType;
+  priority: TaskPriority;
+  status: TaskStatus;
+  storyPoints: number | null;
+  labels: string[];
+  rank: number | null;
+  sprintId: string | null;
+  dueDate: string | null;
+  assignee: { id: string; name: string } | null;
+  subtaskCount: number;
+}
+
+export interface ListStats {
+  issues: number;
+  done: number;
+  points: number;
+  donePoints: number;
+}
+
+export interface BacklogView {
+  project: { id: string; key: string; title: string; wipLimits: Partial<Record<TaskStatus, number>> };
+  canManage: boolean;
+  sprints: (Sprint & { stats: ListStats; issues: BacklogIssue[] })[];
+  backlog: { stats: ListStats; issues: BacklogIssue[] };
+  completedSprints: number;
+}
+
+export interface SprintReport {
+  sprint: Sprint;
+  burndown: { days: { at: string; remaining: number; issues: number; ideal: number }[]; committed: number; endsAt?: string };
+  completed: BacklogIssue[];
+  notCompleted: BacklogIssue[];
+  addedAfterStart: BacklogIssue[];
+}
+
+export interface Velocity {
+  sprints: { id: string; name: string; committed: number; completed: number; completedIssues: number; carriedOver: number; completedAt: string | null }[];
+  average: number;
+}
+
+/** "3 Mar – 17 Mar" */
+export function sprintDates(s: Pick<Sprint, "startDate" | "endDate">): string {
+  const f = (d: string) => new Date(d).toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  if (s.startDate && s.endDate) return `${f(s.startDate)} – ${f(s.endDate)}`;
+  if (s.endDate) return `Ends ${f(s.endDate)}`;
+  return "Dates not set";
 }

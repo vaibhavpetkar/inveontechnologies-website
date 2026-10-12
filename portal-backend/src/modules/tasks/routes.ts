@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { and, eq, inArray, lte, or } from "drizzle-orm";
+import { and, eq, inArray, lte, or, sql, type SQL } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
 import {
   tasks,
@@ -12,6 +12,11 @@ import {
   taskEvents,
   taskUpdates,
   taskRequests,
+  taskWatchers,
+  savedTaskFilters,
+  sprints,
+  projectVersions,
+  users,
   projectMilestones,
   courseEnrollments,
   employees,
@@ -28,11 +33,14 @@ import { writeAuditLog } from "../shared/audit.js";
 import { notify } from "../notifications/service.js";
 import { formatWhen } from "../shared/format.js";
 import { isAssigneeTransitionAllowed, isReviewerTransitionAllowed, type TaskStatus } from "./state-machine.js";
+import { allowedOnProject, projectSettings } from "./project-settings.js";
+import { emitAutomation } from "./automation.js";
 import { canAccessProject, canManageProject } from "../projects/routes.js";
 import type { Env } from "../shared/env.js";
 import { claimFile, fileForUrl, publicFile } from "../files/service.js";
 import { pushTaskStatusToGithub } from "../github/push.js";
 import { displayNameFor } from "../employees/onboarding.js";
+import { ISSUE_TYPES, addWatchers, findTaskByRef, labelsSchema, recordChanges, searchSchema, searchTasks, watcherIds, withKeys } from "./issues.js";
 
 const PRIVILEGED_ROLES = ["hr", "admin", "super_admin"] as const;
 const MANAGER_LIKE_ROLES = ["manager", "hr", "admin", "super_admin"] as const;
@@ -47,16 +55,55 @@ const createTaskSchema = z.object({
   estimateHours: z.number().min(0).optional(),
   dueDate: z.string().datetime().optional(),
   milestoneId: z.string().uuid().optional(),
+  type: z.enum(ISSUE_TYPES).default("task"),
+  labels: labelsSchema.default([]),
+  storyPoints: z.number().int().min(0).max(100).optional(),
+  sprintId: z.string().uuid().optional(),
+  fixVersionId: z.string().uuid().optional(),
+  startDate: z.string().datetime().optional(),
 });
 
 const updateTaskSchema = z.object({
   title: z.string().min(2).max(200).optional(),
   description: z.string().max(5000).optional(),
-  assigneeId: z.string().uuid().optional(),
+  assigneeId: z.string().uuid().nullable().optional(),
   priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
   estimateHours: z.number().min(0).optional(),
-  dueDate: z.string().datetime().optional(),
+  dueDate: z.string().datetime().nullable().optional(),
   milestoneId: z.string().uuid().nullable().optional(),
+  type: z.enum(ISSUE_TYPES).optional(),
+  labels: labelsSchema.optional(),
+  storyPoints: z.number().int().min(0).max(100).nullable().optional(),
+  sprintId: z.string().uuid().nullable().optional(),
+  fixVersionId: z.string().uuid().nullable().optional(),
+  startDate: z.string().datetime().nullable().optional(),
+  remainingHours: z.number().min(0).max(9999).nullable().optional(),
+});
+
+// Bulk edit: the same change to many issues at once (Jira's "bulk change").
+const bulkSchema = z.object({
+  taskIds: z.array(z.string().uuid()).min(1).max(200),
+  patch: z
+    .object({
+      assigneeId: z.string().uuid().nullable().optional(),
+      priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
+      type: z.enum(ISSUE_TYPES).optional(),
+      dueDate: z.string().datetime().nullable().optional(),
+      sprintId: z.string().uuid().nullable().optional(),
+      fixVersionId: z.string().uuid().nullable().optional(),
+      storyPoints: z.number().int().min(0).max(100).nullable().optional(),
+      addLabels: labelsSchema.optional(),
+      removeLabels: z.array(z.string().trim().toLowerCase()).max(10).optional(),
+    })
+    .refine((p) => Object.values(p).some((v) => v !== undefined), "Pick at least one change"),
+});
+const timeEntryEditSchema = z.object({ hours: z.number().min(0.1).max(24).optional(), entryDate: z.string().datetime().optional(), note: z.string().max(1000).nullable().optional() });
+const timesheetSchema = z.object({
+  from: z.string().datetime({ offset: true }),
+  to: z.string().datetime({ offset: true }),
+  projectId: z.string().uuid().optional(),
+  userId: z.string().uuid().optional(),
+  format: z.enum(["json", "csv"]).default("json"),
 });
 
 const listQuerySchema = z.object({
@@ -64,7 +111,7 @@ const listQuerySchema = z.object({
   assigneeId: z.string().uuid().optional(),
   status: z.enum(["todo", "in_progress", "in_review", "changes_requested", "done", "cancelled"]).optional(),
   cursor: z.coerce.number().int().optional(),
-  limit: z.coerce.number().int().min(1).max(50).default(20),
+  limit: z.coerce.number().int().min(1).max(500).default(20),
 });
 
 // Starting work can carry a kickoff: the plan, when it should be finished, and a branch or PR link.
@@ -100,9 +147,10 @@ const updateSchema = z.object({
   progressPercent: z.number().int().min(0).max(100).optional(),
   branchOrLink: z.string().trim().max(500).optional(),
 });
-const commentSchema = z.object({ body: z.string().min(1).max(5000) });
+const commentSchema = z.object({ body: z.string().min(1).max(5000), mentionedUserIds: z.array(z.string().uuid()).max(30).default([]) });
+const savedFilterSchema = z.object({ name: z.string().trim().min(1).max(80), filters: z.record(z.unknown()) });
 const attachmentSchema = z.object({ fileName: z.string().min(1).max(300), fileUrl: z.string().min(1).max(2000) });
-const timeEntrySchema = z.object({ hours: z.number().min(0.1).max(24), entryDate: z.string().datetime(), note: z.string().max(1000).optional() });
+const timeEntrySchema = z.object({ hours: z.number().min(0.1).max(24), entryDate: z.string().datetime(), note: z.string().max(1000).optional(), remainingHours: z.number().min(0).max(9999).optional() });
 const templateSchema = z.object({ title: z.string().min(2).max(200), description: z.string().max(5000).optional(), defaultEstimateHours: z.number().min(0).optional() });
 const fromTemplateSchema = z.object({ templateId: z.string().uuid(), projectId: z.string().uuid().optional(), assigneeId: z.string().uuid().optional(), dueDate: z.string().datetime().optional() });
 const recurrenceSchema = z.object({ frequency: z.enum(["daily", "weekly", "monthly"]), nextRunAt: z.string().datetime() });
@@ -112,6 +160,21 @@ async function assertMilestoneFits(db: Database, milestoneId: string | null | un
   if (!milestoneId) return;
   const milestone = await db.query.projectMilestones.findFirst({ where: eq(projectMilestones.id, milestoneId) });
   if (!milestone || milestone.projectId !== projectId) throw new AppError("INVALID_MILESTONE", "That roadmap phase isn't part of this task's project", 400);
+}
+
+/** A task can only be planned into an open sprint of its own project. */
+/** A task's fix version must be an unreleased version of its own project. */
+async function assertVersionFits(db: Database, versionId: string | null | undefined, projectId: string | null | undefined) {
+  if (!versionId) return;
+  const version = await db.query.projectVersions.findFirst({ where: eq(projectVersions.id, versionId) });
+  if (!version || version.projectId !== projectId) throw new AppError("INVALID_VERSION", "That version isn't part of this task's project", 400);
+}
+
+async function assertSprintFits(db: Database, sprintId: string | null | undefined, projectId: string | null | undefined) {
+  if (!sprintId) return;
+  const sprint = await db.query.sprints.findFirst({ where: eq(sprints.id, sprintId) });
+  if (!sprint || sprint.projectId !== projectId) throw new AppError("INVALID_SPRINT", "That sprint isn't part of this task's project", 400);
+  if (sprint.status === "completed") throw new AppError("INVALID_SPRINT", "That sprint is already complete", 400);
 }
 
 function addInterval(date: Date, frequency: "daily" | "weekly" | "monthly"): Date {
@@ -130,7 +193,7 @@ const TASK_ROLES = ["intern", "employee", ...MANAGER_LIKE_ROLES] as const;
 export async function canEditTask(db: Database, userId: string, role: string, task: typeof tasks.$inferSelect): Promise<boolean> {
   if (PRIVILEGED_ROLES.includes(role as (typeof PRIVILEGED_ROLES)[number])) return true;
   if (task.createdBy === userId) return true;
-  return task.projectId ? canManageProject(db, userId, role, task.projectId) : false;
+  return task.projectId ? allowedOnProject(db, { sub: userId, role }, task.projectId, "editAnyIssue") : false;
 }
 
 /**
@@ -176,12 +239,18 @@ export function tasksRouter(db: Database, env: Env) {
   router.post("/", requireAuth(env), requireRole(...TASK_ROLES), async (req, res) => {
     const body = createTaskSchema.parse(req.body);
     if (body.projectId && !(await canAccessProject(db, req.user!.sub, req.user!.role, body.projectId))) throw new ForbiddenError();
+    if (body.projectId && !(await allowedOnProject(db, req.user!, body.projectId, "createIssues"))) throw new ForbiddenError("On this project only the owner and leads create issues");
     await assertCanAssign(db, req.user!, body.assigneeId, body.projectId);
 
     await assertMilestoneFits(db, body.milestoneId, body.projectId);
+    await assertSprintFits(db, body.sprintId, body.projectId);
+    await assertVersionFits(db, body.fixVersionId, body.projectId);
     if (body.parentTaskId) {
       const parent = await db.query.tasks.findFirst({ where: eq(tasks.id, body.parentTaskId) });
       if (!parent) throw new NotFoundError("Parent task not found");
+      // A subtask lives in its parent's project.
+      if ((parent.projectId ?? null) !== (body.projectId ?? null)) throw new AppError("INVALID_PARENT", "A subtask must be in the same project as its parent", 400);
+      if (body.type === "epic") throw new AppError("INVALID_PARENT", "An epic can't be a subtask", 400);
     }
 
     const [task] = await db
@@ -196,14 +265,84 @@ export function tasksRouter(db: Database, env: Env) {
         estimateHours: body.estimateHours?.toString(),
         dueDate: body.dueDate ? new Date(body.dueDate) : undefined,
         milestoneId: body.milestoneId,
+        type: body.type,
+        labels: body.labels,
+        storyPoints: body.storyPoints,
+        sprintId: body.sprintId,
+        fixVersionId: body.fixVersionId,
+        startDate: body.startDate ? new Date(body.startDate) : undefined,
+        remainingHours: body.estimateHours?.toString(),
         createdBy: req.user!.sub,
       })
       .returning();
 
     await db.insert(taskEvents).values({ taskId: task.id, actorUserId: req.user!.sub, action: "create", toStatus: "todo" });
+    await addWatchers(db, task.id, [req.user!.sub, task.assigneeId]);
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "task.create", entityType: "task", entityId: task.id, ipAddress: req.ip });
     await notifyAssigned(db, task, req.user!.sub);
-    res.status(201).json({ task });
+    await emitAutomation(db, "issue_created", task, { actorUserId: req.user!.sub });
+    res.status(201).json({ task: (await withKeys(db, [task]))[0] });
+  });
+
+  /** Issue search: filters, sorting and paging on the server (see issues.ts). */
+  router.get("/search", requireAuth(env), async (req, res) => {
+    const f = searchSchema.parse(req.query);
+    if (f.projectId && !(await canAccessProject(db, req.user!.sub, req.user!.role, f.projectId))) throw new ForbiddenError();
+    const { ids, total } = await searchTasks(db, req.user!, f);
+    const rows = ids.length ? await db.query.tasks.findMany({ where: inArray(tasks.id, ids) }) : [];
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const ordered = ids.map((id) => byId.get(id)!).filter(Boolean);
+    const people = await namesFor(db, ordered.flatMap((t) => [t.assigneeId, t.createdBy]));
+    const subtaskCounts = ids.length
+      ? await db.select({ parentTaskId: tasks.parentTaskId, n: sql<number>`count(*)::int` }).from(tasks).where(inArray(tasks.parentTaskId, ids)).groupBy(tasks.parentTaskId)
+      : [];
+    const subs = new Map(subtaskCounts.map((r) => [r.parentTaskId, r.n]));
+    res.json({
+      tasks: (await withKeys(db, ordered)).map((t) => ({
+        ...t,
+        assignee: t.assigneeId ? { id: t.assigneeId, name: people.get(t.assigneeId) ?? "Someone" } : null,
+        reporter: { id: t.createdBy, name: people.get(t.createdBy) ?? "Someone" },
+        subtaskCount: subs.get(t.id) ?? 0,
+      })),
+      total,
+      page: f.page,
+      pageSize: f.pageSize,
+    });
+  });
+
+  /** Labels already used on tasks the person can see, most used first, for autocomplete. */
+  router.get("/labels", requireAuth(env), async (req, res) => {
+    const { projectId } = z.object({ projectId: z.string().uuid().optional() }).parse(req.query);
+    if (projectId && !(await canAccessProject(db, req.user!.sub, req.user!.role, projectId))) throw new ForbiddenError();
+    const { ids } = await searchTasks(db, req.user!, searchSchema.parse({ projectId, pageSize: 500 }));
+    if (!ids.length) return void res.json({ labels: [] });
+    const r = await db.execute<{ label: string; n: number }>(sql`
+      SELECT l AS label, count(*)::int AS n FROM tasks t, unnest(t.labels) AS l
+      WHERE t.id IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)}) GROUP BY l ORDER BY n DESC, l LIMIT 100
+    `);
+    res.json({ labels: r.rows.map((x) => x.label) });
+  });
+
+  // ---- Saved searches ----
+
+  router.get("/filters", requireAuth(env), async (req, res) => {
+    res.json({ filters: await db.query.savedTaskFilters.findMany({ where: eq(savedTaskFilters.userId, req.user!.sub), orderBy: (f, { asc }) => [asc(f.name)] }) });
+  });
+
+  router.post("/filters", requireAuth(env), async (req, res) => {
+    const body = savedFilterSchema.parse(req.body);
+    // Keep only fields the search understands.
+    const parsed = searchSchema.partial().parse(body.filters);
+    const { page: _p, pageSize: _s, ...filters } = parsed;
+    const [{ count }] = await db.select({ count: sql<number>`count(*)::int` }).from(savedTaskFilters).where(eq(savedTaskFilters.userId, req.user!.sub));
+    if (count >= 30) throw new AppError("TOO_MANY_FILTERS", "You can keep up to 30 saved searches", 400);
+    const [filter] = await db.insert(savedTaskFilters).values({ userId: req.user!.sub, name: body.name, filters }).returning();
+    res.status(201).json({ filter });
+  });
+
+  router.delete("/filters/:id", requireAuth(env), async (req, res) => {
+    await db.delete(savedTaskFilters).where(and(eq(savedTaskFilters.id, req.params.id), eq(savedTaskFilters.userId, req.user!.sub)));
+    res.status(204).end();
   });
 
   router.get("/", requireAuth(env), async (req, res) => {
@@ -219,8 +358,8 @@ export function tasksRouter(db: Database, env: Env) {
       throw new ForbiddenError();
     }
 
-    const rows = await db.query.tasks.findMany({ where: conditions.length ? and(...conditions) : undefined, limit: query.limit });
-    res.json({ tasks: rows });
+    const rows = await db.query.tasks.findMany({ where: conditions.length ? and(...conditions) : undefined, limit: query.limit, orderBy: (t, { desc }) => [desc(t.updatedAt)] });
+    res.json({ tasks: await withKeys(db, rows) });
   });
 
   router.post("/:id/transition", requireAuth(env), async (req, res) => {
@@ -233,7 +372,10 @@ export function tasksRouter(db: Database, env: Env) {
     const isAssignee = task.assigneeId === req.user!.sub;
     const isReviewer = await isTaskReviewer(db, req.user!, task);
 
-    const allowed = (isAssignee && isAssigneeTransitionAllowed(from, body.toStatus)) || (isReviewer && isReviewerTransitionAllowed(from, body.toStatus));
+    // A project can drop the review step: the assignee then closes their own work.
+    const noReview = !!task.projectId && !(await projectSettings(db, task.projectId)).workflow.requireReview;
+    const selfClose = noReview && isAssignee && body.toStatus === "done" && (from === "in_progress" || from === "changes_requested");
+    const allowed = selfClose || (isAssignee && isAssigneeTransitionAllowed(from, body.toStatus)) || (isReviewer && isReviewerTransitionAllowed(from, body.toStatus));
     if (!allowed) {
       throw new AppError("INVALID_TRANSITION", `Cannot move task from "${from}" to "${body.toStatus}" as this user`, 400);
     }
@@ -261,7 +403,11 @@ export function tasksRouter(db: Database, env: Env) {
       }
     });
 
-    await notifyTransition(db, task, body.toStatus, req.user!.sub, body.note, rating);
+    if ((await projectSettings(db, task.projectId)).notifications.statusChange) {
+      await notifyTransition(db, task, body.toStatus, req.user!.sub, body.note, rating);
+      await notifyWatchersOfMove(db, task, body.toStatus, req.user!.sub);
+    }
+    await emitAutomation(db, "status_changed", task, { actorUserId: req.user!.sub, fromStatus: from, toStatus: body.toStatus });
     if (kickoff && task.createdBy !== req.user!.sub) {
       await notify(db, {
         userIds: [task.createdBy],
@@ -484,14 +630,32 @@ export function tasksRouter(db: Database, env: Env) {
     if (!task) throw new NotFoundError("Task not found");
     if (!(await canAccessTask(db, req.user!.sub, req.user!.role, task))) throw new ForbiddenError();
     const body = commentSchema.parse(req.body);
-    const [comment] = await db.insert(taskComments).values({ taskId: task.id, authorId: req.user!.sub, body: body.body }).returning();
+    // Only people who can open the task can be mentioned on it.
+    const candidates = [...new Set(body.mentionedUserIds)].filter((id) => id !== req.user!.sub);
+    const mentioned: string[] = [];
+    if (candidates.length) {
+      const people = await db.query.users.findMany({ where: (u, { inArray }) => inArray(u.id, candidates), columns: { id: true, role: true } });
+      for (const p of people) if (await canAccessTask(db, p.id, p.role, task)) mentioned.push(p.id);
+    }
+    const [comment] = await db.insert(taskComments).values({ taskId: task.id, authorId: req.user!.sub, body: body.body, mentionedUserIds: mentioned }).returning();
     await db.insert(taskEvents).values({ taskId: task.id, actorUserId: req.user!.sub, action: "comment" });
+    await addWatchers(db, task.id, [req.user!.sub, ...mentioned]);
+    const ref = await taskRef(db, task);
+    const excerpt = body.body.length > 200 ? `${body.body.slice(0, 200)}…` : body.body;
+    const who = await displayNameFor(db, req.user!.sub);
+    if (mentioned.length) {
+      await notify(db, { userIds: mentioned, actorUserId: req.user!.sub, kind: "task.mention", title: `${who} mentioned you on ${ref}`, body: excerpt, link: `/tasks/${task.id}`, email: true });
+    }
+    const followers = (await projectSettings(db, task.projectId)).notifications.comment
+      ? (await watcherIds(db, task.id)).concat([task.assigneeId, task.createdBy].filter((x): x is string => !!x))
+      : [];
+    await emitAutomation(db, "comment_added", task, { actorUserId: req.user!.sub });
     await notify(db, {
-      userIds: [task.assigneeId, task.createdBy],
+      userIds: [...new Set(followers)].filter((id) => !mentioned.includes(id)),
       actorUserId: req.user!.sub,
       kind: "task.comment",
-      title: `New comment on "${task.title}"`,
-      body: body.body.length > 200 ? `${body.body.slice(0, 200)}…` : body.body,
+      title: `New comment on ${ref}`,
+      body: excerpt,
       link: `/tasks/${task.id}`,
     });
     res.status(201).json({ comment });
@@ -539,12 +703,49 @@ export function tasksRouter(db: Database, env: Env) {
     const body = timeEntrySchema.parse(req.body);
 
     const [entry] = await db.insert(taskTimeEntries).values({ taskId: task.id, userId: req.user!.sub, hours: body.hours.toString(), entryDate: new Date(body.entryDate), note: body.note }).returning();
-
-    const allEntries = await db.query.taskTimeEntries.findMany({ where: eq(taskTimeEntries.taskId, task.id) });
-    const total = allEntries.reduce((sum, e) => sum + Number(e.hours), 0);
-    await db.update(tasks).set({ actualHours: total.toString(), updatedAt: new Date() }).where(eq(tasks.id, task.id));
-
+    const total = await recomputeHours(db, task.id);
+    // Logging work burns down the remaining estimate, as in Jira.
+    if (body.remainingHours !== undefined || task.remainingHours !== null) {
+      const remaining = body.remainingHours ?? Math.max(0, Number(task.remainingHours) - body.hours);
+      await db.update(tasks).set({ remainingHours: remaining.toString() }).where(eq(tasks.id, task.id));
+    }
     res.status(201).json({ entry, taskActualHours: total });
+  });
+
+  router.get("/:id/time-entries", requireAuth(env), async (req, res) => {
+    const task = await db.query.tasks.findFirst({ where: eq(tasks.id, req.params.id) });
+    if (!task) throw new NotFoundError("Task not found");
+    if (!(await canAccessTask(db, req.user!.sub, req.user!.role, task))) throw new ForbiddenError();
+    const entries = await db.query.taskTimeEntries.findMany({ where: eq(taskTimeEntries.taskId, task.id), orderBy: (e, { desc }) => [desc(e.entryDate), desc(e.createdAt)] });
+    const who = await namesFor(db, entries.map((e) => e.userId));
+    const canManage = await canEditTask(db, req.user!.sub, req.user!.role, task);
+    res.json({ entries: entries.map((e) => ({ ...e, userName: who.get(e.userId) ?? "Someone", canEdit: e.userId === req.user!.sub || canManage })) });
+  });
+
+  /** People fix their own work logs; the task's creator and project leads can fix anyone's. */
+  async function editableEntry(req: { params: Record<string, string>; user?: { sub: string; role: string } }) {
+    const entry = await db.query.taskTimeEntries.findFirst({ where: and(eq(taskTimeEntries.id, req.params.entryId), eq(taskTimeEntries.taskId, req.params.id)) });
+    if (!entry) throw new NotFoundError("Work log not found");
+    const task = (await db.query.tasks.findFirst({ where: eq(tasks.id, entry.taskId) }))!;
+    if (entry.userId !== req.user!.sub && !(await canEditTask(db, req.user!.sub, req.user!.role, task))) throw new ForbiddenError("You can only change your own work logs");
+    return entry;
+  }
+
+  router.put("/:id/time-entries/:entryId", requireAuth(env), async (req, res) => {
+    const entry = await editableEntry(req);
+    const body = timeEntryEditSchema.parse(req.body);
+    const [updated] = await db
+      .update(taskTimeEntries)
+      .set({ hours: body.hours?.toString(), entryDate: body.entryDate ? new Date(body.entryDate) : undefined, note: body.note })
+      .where(eq(taskTimeEntries.id, entry.id))
+      .returning();
+    res.json({ entry: updated, taskActualHours: await recomputeHours(db, entry.taskId) });
+  });
+
+  router.delete("/:id/time-entries/:entryId", requireAuth(env), async (req, res) => {
+    const entry = await editableEntry(req);
+    await db.delete(taskTimeEntries).where(eq(taskTimeEntries.id, entry.id));
+    res.json({ taskActualHours: await recomputeHours(db, entry.taskId) });
   });
 
   router.post("/templates", requireAuth(env), requireRole(...MANAGER_LIKE_ROLES), async (req, res) => {
@@ -560,6 +761,7 @@ export function tasksRouter(db: Database, env: Env) {
   router.post("/from-template", requireAuth(env), requireRole(...MANAGER_LIKE_ROLES), async (req, res) => {
     const body = fromTemplateSchema.parse(req.body);
     if (body.projectId && !(await canAccessProject(db, req.user!.sub, req.user!.role, body.projectId))) throw new ForbiddenError();
+    if (body.projectId && !(await allowedOnProject(db, req.user!, body.projectId, "createIssues"))) throw new ForbiddenError("On this project only the owner and leads create issues");
     await assertCanAssign(db, req.user!, body.assigneeId, body.projectId);
     const template = await db.query.taskTemplates.findFirst({ where: eq(taskTemplates.id, body.templateId) });
     if (!template) throw new NotFoundError("Task template not found");
@@ -680,12 +882,137 @@ export function tasksRouter(db: Database, env: Env) {
   // routes in registration order, and "/templates" or "/workload" would
   // otherwise be captured by "/:id" first (treating the literal word as an
   // id and failing a uuid cast at the DB). Caught by live testing.
+  // Accepts the id or the key (INV-42).
+  /**
+   * Hours logged per person per day. Everyone sees their own; project leads see
+   * their projects' people; HR and admins see everyone. ?format=csv downloads it.
+   */
+  router.get("/timesheet", requireAuth(env), async (req, res) => {
+    const q = timesheetSchema.parse(req.query);
+    const from = new Date(q.from);
+    const to = new Date(q.to);
+    if (to <= from || to.getTime() - from.getTime() > 93 * 86_400_000) throw new AppError("INVALID_RANGE", "Pick a range of up to three months", 400);
+    const privileged = PRIVILEGED_ROLES.includes(req.user!.role as (typeof PRIVILEGED_ROLES)[number]);
+    if (q.projectId && !(await canAccessProject(db, req.user!.sub, req.user!.role, q.projectId))) throw new ForbiddenError();
+    const scope: SQL[] = [sql`e.entry_date >= ${from}`, sql`e.entry_date < ${to}`];
+    if (q.projectId) scope.push(sql`t.project_id = ${q.projectId}`);
+    if (q.userId) scope.push(sql`e.user_id = ${q.userId}`);
+    if (!privileged) {
+      // Own logs, plus anyone's on projects the caller owns or leads.
+      scope.push(sql`(e.user_id = ${req.user!.sub} OR t.project_id IN (
+        SELECT id FROM projects WHERE owner_id = ${req.user!.sub}
+        UNION SELECT project_id FROM project_members WHERE user_id = ${req.user!.sub} AND role_on_project = 'lead'))`);
+    }
+    const r = await db.execute<{ user_id: string; day: string; task_id: string; key: string | null; title: string; project: string | null; hours: string; note: string | null }>(sql`
+      SELECT e.user_id, to_char(e.entry_date AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day, t.id AS task_id,
+             CASE WHEN p.key IS NOT NULL AND t.number IS NOT NULL THEN p.key || '-' || t.number END AS key,
+             t.title, p.title AS project, e.hours::text AS hours, e.note
+      FROM task_time_entries e JOIN tasks t ON t.id = e.task_id LEFT JOIN projects p ON p.id = t.project_id
+      WHERE ${sql.join(scope, sql` AND `)}
+      ORDER BY day, e.user_id
+    `);
+    const who = await namesFor(db, r.rows.map((x) => x.user_id));
+    const rows = r.rows.map((x) => ({ userId: x.user_id, name: who.get(x.user_id) ?? "Someone", day: x.day, taskId: x.task_id, key: x.key, title: x.title, project: x.project, hours: Number(x.hours), note: x.note }));
+    if (q.format === "csv") {
+      const cell = (v: unknown) => {
+        const text = v === null || v === undefined ? "" : String(v);
+        // Quote, and defuse spreadsheet formulas.
+        return `"${(/^[=+\-@]/.test(text) ? `'${text}` : text).replace(/"/g, '""')}"`;
+      };
+      const lines = [["Date", "Person", "Issue", "Title", "Project", "Hours", "Note"].map(cell).join(","), ...rows.map((x) => [x.day, x.name, x.key ?? "", x.title, x.project ?? "", x.hours, x.note ?? ""].map(cell).join(","))];
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="timesheet-${q.from.slice(0, 10)}-to-${q.to.slice(0, 10)}.csv"`);
+      return void res.send(lines.join("\r\n"));
+    }
+    const people = new Map<string, { userId: string; name: string; total: number; days: Record<string, number> }>();
+    for (const x of rows) {
+      const person = people.get(x.userId) ?? { userId: x.userId, name: x.name, total: 0, days: {} };
+      person.total = Math.round((person.total + x.hours) * 100) / 100;
+      person.days[x.day] = Math.round(((person.days[x.day] ?? 0) + x.hours) * 100) / 100;
+      people.set(x.userId, person);
+    }
+    res.json({ people: [...people.values()].sort((a, b) => a.name.localeCompare(b.name)), entries: rows });
+  });
+
+  /** Apply one change to many issues. Every issue must be one the caller may edit. */
+  router.post("/bulk", requireAuth(env), async (req, res) => {
+    const { taskIds, patch } = bulkSchema.parse(req.body);
+    const rows = await db.query.tasks.findMany({ where: inArray(tasks.id, taskIds) });
+    if (rows.length !== new Set(taskIds).size) throw new NotFoundError("Some of those issues no longer exist");
+    for (const t of rows) {
+      if (!(await canEditTask(db, req.user!.sub, req.user!.role, t))) throw new ForbiddenError(`You can't edit ${(await taskRef(db, t))}`);
+      if (patch.assigneeId !== undefined) await assertCanAssign(db, req.user!, patch.assigneeId, t.projectId);
+      if (patch.sprintId) await assertSprintFits(db, patch.sprintId, t.projectId);
+      if (patch.fixVersionId) await assertVersionFits(db, patch.fixVersionId, t.projectId);
+      if (patch.type === "epic" && t.parentTaskId) throw new AppError("INVALID_PARENT", `${await taskRef(db, t)} is a subtask and can't be an epic`, 400);
+    }
+    const names = {
+      person: async (id: string) => (await namesFor(db, [id])).get(id) ?? "Someone",
+      phase: async () => "A phase",
+      task: async () => "A task",
+      sprint: async (id: string) => (await db.query.sprints.findFirst({ where: eq(sprints.id, id), columns: { name: true } }))?.name ?? "A sprint",
+      version: async (id: string) => (await db.query.projectVersions.findFirst({ where: eq(projectVersions.id, id), columns: { name: true } }))?.name ?? "A version",
+    };
+    const updated: TaskRow[] = [];
+    for (const t of rows) {
+      let labels = t.labels;
+      if (patch.addLabels?.length) labels = [...new Set([...labels, ...patch.addLabels])].slice(0, 10);
+      if (patch.removeLabels?.length) labels = labels.filter((l) => !patch.removeLabels!.includes(l));
+      const [u] = await db
+        .update(tasks)
+        .set({
+          assigneeId: patch.assigneeId,
+          priority: patch.priority,
+          type: patch.type,
+          dueDate: patch.dueDate === null ? null : patch.dueDate ? new Date(patch.dueDate) : undefined,
+          sprintId: patch.sprintId,
+          fixVersionId: patch.fixVersionId,
+          storyPoints: patch.storyPoints,
+          labels,
+          updatedAt: new Date(),
+        })
+        .where(eq(tasks.id, t.id))
+        .returning();
+      await recordChanges(db, t, u, req.user!.sub, names);
+      if (u.assigneeId && u.assigneeId !== t.assigneeId) {
+        await addWatchers(db, u.id, [u.assigneeId]);
+        await notifyAssigned(db, u, req.user!.sub);
+      }
+      updated.push(u);
+    }
+    await writeAuditLog(db, { actorUserId: req.user!.sub, action: "task.bulk_edit", entityType: "task", entityId: taskIds[0], ipAddress: req.ip, metadata: { count: taskIds.length, fields: Object.keys(patch) } });
+    res.json({ updated: updated.length, tasks: await withKeys(db, updated) });
+  });
+
   router.get("/:id", requireAuth(env), async (req, res) => {
+    const task = await findTaskByRef(db, req.params.id);
+    if (!task) throw new NotFoundError("Task not found");
+    if (!(await canAccessTask(db, req.user!.sub, req.user!.role, task))) throw new ForbiddenError();
+    const subtasks = await db.query.tasks.findMany({ where: eq(tasks.parentTaskId, task.id), orderBy: (t, { asc }) => [asc(t.createdAt)] });
+    const parent = task.parentTaskId ? await db.query.tasks.findFirst({ where: eq(tasks.id, task.parentTaskId) }) : undefined;
+    const watchers = await watcherIds(db, task.id);
+    const names = await namesFor(db, watchers);
+    const [keyed, ...keyedSubs] = await withKeys(db, [task, ...subtasks]);
+    res.json({
+      task: keyed,
+      subtasks: keyedSubs,
+      parent: parent ? (await withKeys(db, [parent]))[0] : null,
+      watchers: watchers.map((id) => ({ id, name: names.get(id) ?? "Someone" })),
+      watching: watchers.includes(req.user!.sub),
+    });
+  });
+
+  router.post("/:id/watch", requireAuth(env), async (req, res) => {
     const task = await db.query.tasks.findFirst({ where: eq(tasks.id, req.params.id) });
     if (!task) throw new NotFoundError("Task not found");
     if (!(await canAccessTask(db, req.user!.sub, req.user!.role, task))) throw new ForbiddenError();
-    const subtasks = await db.query.tasks.findMany({ where: eq(tasks.parentTaskId, task.id) });
-    res.json({ task, subtasks });
+    await addWatchers(db, task.id, [req.user!.sub]);
+    res.json({ watching: true });
+  });
+
+  router.delete("/:id/watch", requireAuth(env), async (req, res) => {
+    await db.delete(taskWatchers).where(and(eq(taskWatchers.taskId, req.params.id), eq(taskWatchers.userId, req.user!.sub)));
+    res.json({ watching: false });
   });
 
   router.put("/:id", requireAuth(env), async (req, res) => {
@@ -705,14 +1032,44 @@ export function tasksRouter(db: Database, env: Env) {
       if (!isEditor) throw new ForbiddenError("Only the task's creator or a project lead can move it between roadmap phases");
       await assertMilestoneFits(db, body.milestoneId, task.projectId);
     }
+    if (body.type === "epic" && task.parentTaskId) throw new AppError("INVALID_PARENT", "A subtask can't be an epic", 400);
+    if (body.sprintId !== undefined && body.sprintId !== task.sprintId) {
+      if (!isEditor) throw new ForbiddenError("Only the task's creator or a project lead can move it between sprints");
+      await assertSprintFits(db, body.sprintId, task.projectId);
+    }
+    if (body.fixVersionId !== undefined && body.fixVersionId !== task.fixVersionId) {
+      if (!isEditor) throw new ForbiddenError("Only the task's creator or a project lead can change its version");
+      await assertVersionFits(db, body.fixVersionId, task.projectId);
+    }
 
     const [updated] = await db
       .update(tasks)
-      .set({ ...body, estimateHours: body.estimateHours?.toString(), dueDate: body.dueDate ? new Date(body.dueDate) : undefined, updatedAt: new Date() })
+      .set({
+        ...body,
+        estimateHours: body.estimateHours?.toString(),
+        dueDate: body.dueDate === null ? null : body.dueDate ? new Date(body.dueDate) : undefined,
+        startDate: body.startDate === null ? null : body.startDate ? new Date(body.startDate) : undefined,
+        remainingHours: body.remainingHours === null ? null : body.remainingHours?.toString(),
+        updatedAt: new Date(),
+      })
       .where(eq(tasks.id, task.id))
       .returning();
-    if (updated.assigneeId && updated.assigneeId !== task.assigneeId) await notifyAssigned(db, updated, req.user!.sub);
-    res.json({ task: updated });
+    await recordChanges(db, task, updated, req.user!.sub, {
+      person: async (id) => (await namesFor(db, [id])).get(id) ?? "Someone",
+      phase: async (id) => (await db.query.projectMilestones.findFirst({ where: eq(projectMilestones.id, id), columns: { title: true } }))?.title ?? "A phase",
+      task: async (id) => {
+        const t = await db.query.tasks.findFirst({ where: eq(tasks.id, id) });
+        return t ? taskRef(db, t) : "A task";
+      },
+      sprint: async (id) => (await db.query.sprints.findFirst({ where: eq(sprints.id, id), columns: { name: true } }))?.name ?? "A sprint",
+      version: async (id) => (await db.query.projectVersions.findFirst({ where: eq(projectVersions.id, id), columns: { name: true } }))?.name ?? "A version",
+    });
+    if (updated.assigneeId && updated.assigneeId !== task.assigneeId) {
+      await addWatchers(db, task.id, [updated.assigneeId]);
+      await notifyAssigned(db, updated, req.user!.sub);
+    }
+    if (updated.assigneeId !== task.assigneeId) await emitAutomation(db, "issue_assigned", updated, { actorUserId: req.user!.sub });
+    res.json({ task: (await withKeys(db, [updated]))[0] });
   });
 
   return router;
@@ -733,6 +1090,7 @@ async function taskReviewerIds(db: Database, task: TaskRow) {
 }
 
 async function notifyAssigned(db: Database, task: TaskRow, actorUserId: string) {
+  if (!(await projectSettings(db, task.projectId)).notifications.assigned) return;
   const due = task.dueDate ? ` It's due ${formatWhen(task.dueDate)}.` : "";
   await notify(db, {
     userIds: [task.assigneeId],
@@ -811,4 +1169,34 @@ export async function generateDueRecurrences(db: Database, now = new Date()) {
     created++;
   }
   return created;
+}
+
+/** "INV-42 Fix the login page", or just the title for a personal task. */
+async function taskRef(db: Database, task: TaskRow) {
+  const [keyed] = await withKeys(db, [task]);
+  return keyed.key ? `${keyed.key} ${task.title}` : `"${task.title}"`;
+}
+
+/** Display names for user ids. */
+async function namesFor(db: Database, ids: (string | null | undefined)[]) {
+  const unique = [...new Set(ids.filter((id): id is string => !!id))];
+  const out = new Map<string, string>();
+  await Promise.all(unique.map(async (id) => out.set(id, await displayNameFor(db, id))));
+  return out;
+}
+
+/** Watchers hear when a task is approved, cancelled or sent for review; the assignee and creator already get their own alerts. */
+async function notifyWatchersOfMove(db: Database, task: TaskRow, to: TaskStatus, actorUserId: string) {
+  if (!["in_review", "done", "cancelled"].includes(to)) return;
+  const others = (await watcherIds(db, task.id)).filter((id) => id !== task.assigneeId && id !== task.createdBy);
+  if (!others.length) return;
+  const label = { in_review: "is ready for review", done: "is done", cancelled: "was cancelled" }[to as "in_review" | "done" | "cancelled"];
+  await notify(db, { userIds: others, actorUserId, kind: "task.watch", title: `${await taskRef(db, task)} ${label}`, body: `A task you follow ${label}.`, link: `/tasks/${task.id}` });
+}
+
+/** Re-adds a task's logged hours after a work log changes. */
+async function recomputeHours(db: Database, taskId: string) {
+  const [{ total }] = await db.select({ total: sql<string>`coalesce(sum(${taskTimeEntries.hours}), 0)::text` }).from(taskTimeEntries).where(eq(taskTimeEntries.taskId, taskId));
+  await db.update(tasks).set({ actualHours: total, updatedAt: new Date() }).where(eq(tasks.id, taskId));
+  return Number(total);
 }

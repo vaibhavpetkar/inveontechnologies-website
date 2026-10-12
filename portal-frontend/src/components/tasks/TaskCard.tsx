@@ -3,7 +3,9 @@ import { motion } from "framer-motion";
 import { CalendarClock, Clock, Github, MessageSquare } from "lucide-react";
 import { formatDue, isOverdue, PRIORITY_META, type Task } from "../../lib/tasks";
 import type { DirectoryUser } from "../../lib/useDirectory";
+import { IssueKey, IssueTypeIcon, LabelChips } from "./IssueBits";
 import { Avatar } from "../Avatar";
+import "../../styles/sprints.css";
 
 interface Props {
   task: Task;
@@ -35,6 +37,7 @@ export const TaskCard = forwardRef<HTMLDivElement, Props>(function TaskCard({ ta
       <div
         className={`task-card${overdue ? " overdue" : ""}`}
         role="button"
+        data-issue-row
         tabIndex={0}
         draggable={draggable}
         onDragStart={(e) => {
@@ -52,10 +55,15 @@ export const TaskCard = forwardRef<HTMLDivElement, Props>(function TaskCard({ ta
         }}
       >
         <div className="task-card-top">
-          <span className={`pill pill-${priority.tone}`}>{priority.label}</span>
+          <span className="task-card-id">
+            <IssueTypeIcon type={task.type} size={16} />
+            <IssueKey value={task.key} />
+            <span className={`pill pill-${priority.tone}`}>{priority.label}</span>
+          </span>
           {assignee ? <Avatar email={assignee.email} size={24} /> : task.assigneeId ? null : <span className="task-unassigned">Unassigned</span>}
         </div>
         <div className="task-card-title">{task.title}</div>
+        {!!task.labels?.length && <div className="task-card-labels"><LabelChips labels={task.labels} max={3} /></div>}
         {task.status === "in_progress" && (task.progressPercent ?? 0) > 0 && (
           <div className="task-card-progress" aria-label={`${task.progressPercent}% done`}>
             <span className="progress-bar"><motion.span className="progress-fill" initial={{ width: 0 }} animate={{ width: `${task.progressPercent}%` }} transition={{ duration: 0.5 }} /></span>
@@ -77,6 +85,11 @@ export const TaskCard = forwardRef<HTMLDivElement, Props>(function TaskCard({ ta
           {task.githubIssueNumber && (
             <span className={`gh-chip ${task.githubIssueState ?? "open"}`} title={`GitHub issue ${task.githubRepo}#${task.githubIssueNumber}`}>
               <Github size={13} /> #{task.githubIssueNumber}
+            </span>
+          )}
+          {task.storyPoints != null && (
+            <span className="points-badge" title="Story points" style={{ width: "auto", padding: "0 0.45rem" }}>
+              {task.storyPoints}
             </span>
           )}
           {task.description && (

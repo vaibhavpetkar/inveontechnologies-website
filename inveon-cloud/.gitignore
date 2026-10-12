@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.env
+agent/inveon-agent.tar.gz
+# Lockfiles are kept here (the repo root ignores them) so the Docker build is reproducible with npm ci.
+!package-lock.json

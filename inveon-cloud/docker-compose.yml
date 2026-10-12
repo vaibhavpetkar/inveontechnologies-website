@@ -1,0 +1,51 @@
+# Inveon Cloud control plane + its Postgres.
+#
+#   cp .env.example .env    # fill in the secrets
+#   docker compose up -d --build
+#
+# The API, dashboard and install.sh are served on 127.0.0.1:4100. Put it
+# behind HTTPS (nginx + Let's Encrypt, or a load balancer) at the URL in
+# INVEON_PUBLIC_URL: agents refuse plain http to anything but localhost.
+services:
+  control-plane:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      INVEON_DATABASE_URL: postgres://inveon:${INVEON_POSTGRES_PASSWORD:?Set INVEON_POSTGRES_PASSWORD in .env}@postgres:5432/inveon_cloud
+      INVEON_JWT_SECRET: ${INVEON_JWT_SECRET:?Set INVEON_JWT_SECRET in .env}
+      INVEON_MASTER_KEY: ${INVEON_MASTER_KEY:?Set INVEON_MASTER_KEY in .env}
+      INVEON_PUBLIC_URL: ${INVEON_PUBLIC_URL:?Set INVEON_PUBLIC_URL in .env}
+      NODE_ENV: production
+      INVEON_OPEN_SIGNUP: ${INVEON_OPEN_SIGNUP:-false}
+      INVEON_GITHUB_TOKEN: ${INVEON_GITHUB_TOKEN:-}
+      INVEON_ACME_EMAIL: ${INVEON_ACME_EMAIL:-}
+      INVEON_SMTP_HOST: ${INVEON_SMTP_HOST:-}
+      INVEON_SMTP_PORT: ${INVEON_SMTP_PORT:-587}
+      INVEON_SMTP_SECURE: ${INVEON_SMTP_SECURE:-false}
+      INVEON_SMTP_USER: ${INVEON_SMTP_USER:-}
+      INVEON_SMTP_PASSWORD: ${INVEON_SMTP_PASSWORD:-}
+      INVEON_MAIL_FROM: ${INVEON_MAIL_FROM:-Inveon Cloud <no-reply@inveontechnologies.in>}
+    ports:
+      - "127.0.0.1:4100:4100"
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: inveon_cloud
+      POSTGRES_USER: inveon
+      POSTGRES_PASSWORD: ${INVEON_POSTGRES_PASSWORD:?Set INVEON_POSTGRES_PASSWORD in .env}
+    volumes:
+      - inveon-cloud-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inveon -d inveon_cloud"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # No published port: only the control plane reaches it.
+
+volumes:
+  inveon-cloud-postgres:

@@ -246,6 +246,34 @@
       "when": 1791649891496,
       "tag": "0034_black_mindworm",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1791710085025,
+      "tag": "0035_tiny_harpoon",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1791713941292,
+      "tag": "0036_wide_bishop",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1791714985986,
+      "tag": "0037_tearful_nitro",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1791783133987,
+      "tag": "0038_late_phil_sheldon",
+      "breakpoints": true
     }
   ]
 }

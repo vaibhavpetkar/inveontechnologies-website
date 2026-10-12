@@ -1,0 +1,94 @@
+/* Scrum: backlog and sprint planning, sprint reports, board WIP limits and swimlanes. */
+.backlog { display: grid; gap: 0.9rem; }
+.backlog-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
+.backlog-head p { margin: 0; }
+.sprint-box { border: 1px solid var(--line); border-radius: 14px; background: var(--paper); overflow: hidden; }
+.sprint-box.active { border-color: rgba(37, 99, 235, 0.45); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.07); }
+.backlog-box { background: var(--surface); }
+.sprint-head { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--line); }
+.sprint-toggle { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem; }
+.sprint-toggle:focus-visible { outline: 2px solid var(--primary); border-radius: 6px; }
+.sprint-dates, .sprint-stats { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; color: var(--muted); }
+.sprint-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 0.35rem; }
+.sprint-goal { display: flex; align-items: center; gap: 0.4rem; margin: 0; padding: 0.45rem 0.8rem; font-size: 0.85rem; color: var(--ink); background: rgba(37, 99, 235, 0.04); border-bottom: 1px solid var(--line); }
+.sprint-goal svg { color: var(--primary); flex: none; }
+
+.backlog-list { list-style: none; margin: 0; padding: 0.3rem; min-height: 44px; transition: background 0.12s; }
+.backlog-list.dragging { background: rgba(37, 99, 235, 0.03); }
+.backlog-list.drop-end { box-shadow: inset 0 -2px 0 var(--primary); }
+.backlog-empty { padding: 0.8rem; text-align: center; font-size: 0.84rem; color: var(--muted); border: 1px dashed var(--line); border-radius: 10px; }
+.backlog-row { position: relative; }
+.backlog-row.drop-before::before { content: ""; position: absolute; left: 6px; right: 6px; top: -1px; height: 2px; border-radius: 2px; background: var(--primary); }
+.backlog-row.is-dragging { opacity: 0.45; }
+.backlog-row-inner { display: flex; align-items: center; gap: 0.5rem; padding: 0.42rem 0.5rem; border-radius: 9px; background: var(--paper); cursor: pointer; font-size: 0.88rem; }
+.backlog-row-inner[draggable="true"] { cursor: grab; }
+.backlog-row-inner:hover, .backlog-row-inner:focus-visible { background: var(--surface); outline: none; }
+.backlog-box .backlog-row-inner { background: var(--paper); margin-bottom: 2px; }
+.backlog-row.done .backlog-title { text-decoration: line-through; color: var(--muted); }
+.backlog-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.backlog-assignee { display: inline-grid; place-items: center; width: 24px; height: 24px; flex: none; border-radius: 50%; background: var(--surface); border: 1px solid var(--line); font-size: 0.66rem; font-weight: 700; color: var(--muted); }
+.points-input, .points-badge { width: 42px; flex: none; text-align: center; font: inherit; font-size: 0.78rem; font-weight: 600; border-radius: 999px; padding: 0.12rem 0.2rem; background: var(--surface); border: 1px solid var(--line); color: var(--ink); }
+.points-input { -moz-appearance: textfield; appearance: textfield; }
+.points-input::-webkit-inner-spin-button, .points-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.points-input:focus { outline: none; border-color: var(--primary); background: var(--paper); }
+.move-select { flex: none; width: 74px; padding: 0.18rem 0.2rem; font: inherit; font-size: 0.76rem; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; opacity: 0; transition: opacity 0.12s; }
+.backlog-row-inner:hover .move-select, .move-select:focus { opacity: 1; border-color: var(--line); }
+
+.sprint-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; margin-bottom: 0.9rem; }
+.sprint-summary div { display: grid; gap: 0.1rem; padding: 0.6rem; border-radius: 10px; background: var(--surface); text-align: center; }
+.sprint-summary strong { font-family: var(--font-display); font-size: 1.4rem; }
+.sprint-summary span { font-size: 0.76rem; color: var(--muted); }
+.chip-row { display: flex; gap: 0.35rem; flex-wrap: wrap; margin: -0.2rem 0 0.6rem; }
+
+/* Reports */
+.sprint-reports { display: grid; gap: 1rem; }
+.report-card { border: 1px solid var(--line); border-radius: 14px; background: var(--paper); padding: 1rem; }
+.report-head { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.3rem; }
+.report-head h3 { display: inline-flex; align-items: center; gap: 0.4rem; margin: 0; font-size: 1.02rem; }
+.report-head select { padding: 0.38rem 0.55rem; border: 1px solid var(--line); border-radius: 9px; font: inherit; font-size: 0.86rem; background: var(--paper); color: var(--ink); }
+.chart { display: block; width: 100%; max-width: 760px; height: auto; margin: 0.5rem 0; overflow: visible; }
+.chart-legend { display: flex; gap: 1rem; font-size: 0.8rem; color: var(--muted); }
+.chart-legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+.chart-legend i { display: inline-block; width: 16px; height: 3px; border-radius: 2px; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .axis { fill: var(--muted); font-size: 11px; font-family: var(--font-body); }
+.chart .ideal { stroke: #94a3b8; stroke-width: 1.5; stroke-dasharray: 5 4; fill: none; }
+.chart .remaining { stroke: var(--primary); stroke-width: 2.5; fill: none; stroke-linejoin: round; }
+.chart .dot { fill: var(--paper); stroke: var(--primary); stroke-width: 2; }
+.chart .bar-committed { fill: #cbd5e1; }
+.chart .bar-completed { fill: #16a34a; }
+.report-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0.8rem; margin-top: 0.4rem; }
+.report-group { min-width: 0; }
+.report-group h4 { display: flex; align-items: center; gap: 0.4rem; margin: 0 0 0.35rem; font-size: 0.86rem; }
+.report-group ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.report-group li button { all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 0.45rem; padding: 0.35rem 0.45rem; border-radius: 8px; cursor: pointer; font-size: 0.85rem; }
+.report-group li button:hover, .report-group li button:focus-visible { background: var(--surface); }
+
+/* Board: sprint and swimlane controls, WIP limits */
+.board-toolbar { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+.board-toolbar select { padding: 0.38rem 0.55rem; border: 1px solid var(--line); border-radius: 9px; font: inherit; font-size: 0.84rem; background: var(--paper); color: var(--ink); }
+.board-toolbar .sprint-banner { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.84rem; color: var(--muted); }
+.board-toolbar .sprint-banner strong { color: var(--ink); }
+.column-count.over { background: var(--danger-surface); color: var(--danger); font-weight: 700; }
+.board-column.over-limit { border-color: rgba(220, 38, 38, 0.45); background: linear-gradient(var(--danger-surface), transparent 120px); }
+.wip-button { all: unset; cursor: pointer; margin-left: auto; white-space: nowrap; font-size: 0.72rem; color: var(--muted); padding: 0.05rem 0.35rem; border-radius: 6px; }
+.wip-button:hover, .wip-button:focus-visible { background: var(--surface); color: var(--ink); }
+.swimlane { margin-bottom: 0.9rem; }
+.swimlane-head { display: flex; align-items: center; gap: 0.45rem; margin: 0 0 0.45rem; font-size: 0.88rem; font-weight: 600; }
+.swimlane-head .column-count { margin-left: 0.2rem; }
+.swimlane .board .column-body { min-height: 48px; }
+
+/* Six project tabs don't fit a phone: scroll them sideways instead of the page. */
+.project-tabs { overflow-x: auto; scrollbar-width: none; }
+.project-tabs::-webkit-scrollbar { display: none; }
+.project-tabs .tab { flex: none; }
+
+@media (max-width: 760px) {
+  .sprint-actions { margin-left: 0; width: 100%; }
+  .backlog-row-inner { flex-wrap: wrap; }
+  .backlog-title { flex-basis: 100%; order: 2; white-space: normal; }
+  .move-select { opacity: 1; border-color: var(--line); }
+  .backlog-row-inner .label-chips, .backlog-row-inner .hide-sm { display: none; }
+}
+.swimlane .board-column { min-height: 0; }
+.report-group li { min-width: 0; }

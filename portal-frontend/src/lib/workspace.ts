@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import { apiFetch } from "./api";
 import type { Colleague } from "./calendar";
-import type { Task } from "./tasks";
+import type { Sprint, Task, TaskStatus } from "./tasks";
 
 /** Every staff account with a name, for pickers anyone on staff can use (not candidates). */
 export function useColleagues() {
@@ -32,10 +32,14 @@ export interface Progress {
 export interface ProjectSummary {
   id: string;
   title: string;
+  /** Issue key prefix, e.g. "INV". */
+  key?: string;
   description: string | null;
   status: ProjectStatus;
   ownerId: string;
   githubRepo: string | null;
+  /** Board column limits, e.g. { in_progress: 4 }. */
+  wipLimits?: Partial<Record<TaskStatus, number>>;
   updatedAt: string;
   owner: { id: string; name: string } | null;
   members: { id: string; name: string }[];
@@ -73,6 +77,7 @@ export interface ProjectOverview {
   milestones: Milestone[];
   tasks: Task[];
   progress: Progress;
+  activeSprint?: Sprint | null;
 }
 
 export const PROJECT_STATUS: Record<ProjectStatus, { label: string; tone: string }> = {

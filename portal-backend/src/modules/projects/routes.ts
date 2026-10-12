@@ -2,12 +2,13 @@ import { Router } from "express";
 import { z } from "zod";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../shared/db/client.js";
-import { projects, projectMembers, projectMilestones, projectRisks, projectIssues, tasks, users } from "../shared/db/schema.js";
+import { projects, projectMembers, projectMilestones, projectRisks, projectIssues, sprints, tasks, users } from "../shared/db/schema.js";
 import { requireAuth, requireRole } from "../auth/middleware.js";
 import { AppError, ForbiddenError, NotFoundError } from "../shared/errors.js";
 import { writeAuditLog } from "../shared/audit.js";
 import { notify } from "../notifications/service.js";
 import type { Env } from "../shared/env.js";
+import { assertKeyFree, projectKeySchema, suggestProjectKey, withKeys } from "../tasks/issues.js";
 
 const PRIVILEGED_ROLES = ["hr", "admin", "super_admin"] as const;
 const MANAGER_LIKE_ROLES = ["manager", "hr", "admin", "super_admin"] as const;
@@ -21,8 +22,15 @@ const createProjectSchema = z.object({
   memberIds: z.array(z.string().uuid()).max(200).default([]),
   githubRepo: z.string().trim().regex(repoPattern, "Use owner/name").optional(),
   status: z.enum(["planning", "active", "on_hold", "completed", "cancelled"]).optional(),
+  // Short key for issue numbers (INV-42); made from the title when left out.
+  key: projectKeySchema.optional(),
 });
-const updateProjectSchema = z.object({ title: z.string().min(2).max(200).optional(), description: z.string().max(5000).optional(), status: z.enum(["planning", "active", "on_hold", "completed", "cancelled"]).optional() });
+const updateProjectSchema = z.object({
+  title: z.string().min(2).max(200).optional(),
+  description: z.string().max(5000).optional(),
+  status: z.enum(["planning", "active", "on_hold", "completed", "cancelled"]).optional(),
+  key: projectKeySchema.optional(),
+});
 const addMemberSchema = z.object({ userId: z.string().uuid(), roleOnProject: z.enum(["lead", "member"]).default("member") });
 const createMilestoneSchema = z.object({
   title: z.string().trim().min(2).max(200),
@@ -88,10 +96,12 @@ export function projectsRouter(db: Database, env: Env) {
       const found = await db.query.users.findMany({ where: inArray(users.id, memberIds), columns: { id: true, role: true } });
       if (found.length !== memberIds.length || found.some((u) => u.role === "candidate")) throw new AppError("INVALID_MEMBER", "Project members must be staff accounts", 400);
     }
+    const key = body.key ?? (await suggestProjectKey(db, body.title));
+    if (body.key) await assertKeyFree(db, key);
     const project = await db.transaction(async (tx) => {
       const [created] = await tx
         .insert(projects)
-        .values({ title: body.title, description: body.description, ownerId, githubRepo: body.githubRepo, status: body.status ?? "planning", createdBy: req.user!.sub })
+        .values({ title: body.title, description: body.description, ownerId, githubRepo: body.githubRepo, status: body.status ?? "planning", key, createdBy: req.user!.sub })
         .returning();
       await tx.insert(projectMembers).values([{ projectId: created.id, userId: ownerId, roleOnProject: "lead" as const }, ...memberIds.map((userId) => ({ projectId: created.id, userId }))]).onConflictDoNothing();
       return created;
@@ -100,6 +110,12 @@ export function projectsRouter(db: Database, env: Env) {
     const added = [ownerId, ...memberIds].filter((id) => id !== req.user!.sub);
     if (added.length) await notify(db, { userIds: added, actorUserId: req.user!.sub, kind: "project.added", title: `Added to project: ${project.title}`, body: project.description?.slice(0, 200) ?? "Open it to see the roadmap and your tasks.", link: `/projects/${project.id}` });
     res.status(201).json({ project });
+  });
+
+  /** A free key for a new project's title, for the create form. */
+  router.get("/key-suggestion", requireAuth(env), requireRole(...MANAGER_LIKE_ROLES), async (req, res) => {
+    const { title } = z.object({ title: z.string().trim().min(1).max(200) }).parse(req.query);
+    res.json({ key: await suggestProjectKey(db, title) });
   });
 
   // Only projects the caller is a member/owner of, or all of them if privileged, with progress for the list.
@@ -152,10 +168,11 @@ export function projectsRouter(db: Database, env: Env) {
     if (!(await canAccessProject(db, req.user!.sub, req.user!.role, req.params.id))) throw new ForbiddenError();
     const project = await db.query.projects.findFirst({ where: eq(projects.id, req.params.id) });
     if (!project) throw new NotFoundError("Project not found");
-    const [members, milestones, projectTasks] = await Promise.all([
+    const [members, milestones, projectTasks, activeSprint] = await Promise.all([
       db.query.projectMembers.findMany({ where: eq(projectMembers.projectId, project.id) }),
       db.query.projectMilestones.findMany({ where: eq(projectMilestones.projectId, project.id), orderBy: [asc(projectMilestones.orderIndex), asc(projectMilestones.dueDate)] }),
       db.query.tasks.findMany({ where: eq(tasks.projectId, project.id), orderBy: (t, { desc }) => [desc(t.updatedAt)], limit: 1000 }),
+      db.query.sprints.findFirst({ where: and(eq(sprints.projectId, project.id), eq(sprints.status, "active")) }),
     ]);
     const who = await peopleById(db, [...new Set([project.ownerId, ...members.map((m) => m.userId)])]);
     res.json({
@@ -163,14 +180,16 @@ export function projectsRouter(db: Database, env: Env) {
       canManage: await canManageProject(db, req.user!.sub, req.user!.role, project.id),
       members: members.map((m) => ({ ...m, name: who.get(m.userId)?.name ?? "Someone", email: who.get(m.userId)?.email ?? "", role: who.get(m.userId)?.role ?? "employee" })),
       milestones: milestones.map((m) => ({ ...m, progress: progressOf(projectTasks.filter((t) => t.milestoneId === m.id)) })),
-      tasks: projectTasks,
+      tasks: await withKeys(db, projectTasks),
       progress: progressOf(projectTasks),
+      activeSprint: activeSprint ?? null,
     });
   });
 
   router.put("/:id", requireAuth(env), async (req, res) => {
     if (!(await canManageProject(db, req.user!.sub, req.user!.role, req.params.id))) throw new ForbiddenError();
     const body = updateProjectSchema.parse(req.body);
+    if (body.key) await assertKeyFree(db, body.key, req.params.id);
     const [updated] = await db.update(projects).set({ ...body, updatedAt: new Date() }).where(eq(projects.id, req.params.id)).returning();
     if (!updated) throw new NotFoundError("Project not found");
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "project.update", entityType: "project", entityId: updated.id, ipAddress: req.ip });

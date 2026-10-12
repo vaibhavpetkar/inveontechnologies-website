@@ -1,5 +1,5 @@
-import { pgTable, uuid, text, timestamp, boolean, jsonb, pgEnum, integer, primaryKey, unique, numeric, index, date } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { pgTable, uuid, text, timestamp, boolean, jsonb, pgEnum, integer, primaryKey, unique, numeric, index, date, doublePrecision } from "drizzle-orm/pg-core";
+import { relations, sql } from "drizzle-orm";
 import type { CheckReport, ExerciseSpec } from "../../internships/exercises/types.js";
 
 /**
@@ -912,6 +912,8 @@ export const riskStatusEnum = pgEnum("risk_status", ["open", "mitigated", "close
 export const issueStatusEnum = pgEnum("issue_status", ["open", "resolved"]);
 export const taskPriorityEnum = pgEnum("task_priority", ["low", "medium", "high", "urgent"]);
 export const taskStatusEnum = pgEnum("task_status", ["todo", "in_progress", "in_review", "changes_requested", "done", "cancelled"]);
+// Jira-style issue types. Subtasks are any task with a parentTaskId.
+export const issueTypeEnum = pgEnum("issue_type", ["epic", "story", "task", "bug"]);
 export const recurrenceFrequencyEnum = pgEnum("recurrence_frequency", ["daily", "weekly", "monthly"]);
 
 export const projects = pgTable("projects", {
@@ -921,6 +923,13 @@ export const projects = pgTable("projects", {
   status: projectStatusEnum("status").notNull().default("planning"),
   ownerId: uuid("owner_id").notNull().references(() => users.id), // the manager accountable for the project
   githubRepo: text("github_repo"), // "owner/name": new task issues go here and its issues can be imported
+  // Short project key (e.g. "INV"); tasks are numbered within the project: INV-1, INV-2…
+  key: text("key").notNull().unique(),
+  nextIssueNumber: integer("next_issue_number").notNull().default(1),
+  // Board column limits, e.g. { in_progress: 4, in_review: 2 }. Columns over their limit are flagged.
+  wipLimits: jsonb("wip_limits").$type<Partial<Record<string, number>>>().notNull().default({}),
+  // Workflow, permission and notification schemes; missing keys fall back to defaults (see tasks/project-settings.ts).
+  settings: jsonb("settings").$type<Record<string, unknown>>().notNull().default({}),
   createdBy: uuid("created_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -982,10 +991,64 @@ export const taskTemplates = pgTable("task_templates", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const sprintStatusEnum = pgEnum("sprint_status", ["planned", "active", "completed"]);
+
+/** A Scrum sprint: a time box on one project. One active sprint per project at a time. */
+export const sprints = pgTable("sprints", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  goal: text("goal"),
+  status: sprintStatusEnum("status").notNull().default("planned"),
+  startDate: timestamp("start_date", { withTimezone: true }),
+  endDate: timestamp("end_date", { withTimezone: true }),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  // Snapshots for velocity: points planned when it started, points done when it closed.
+  committedPoints: integer("committed_points"),
+  completedPoints: integer("completed_points"),
+  completedIssues: integer("completed_issues"),
+  carriedOverIssues: integer("carried_over_issues"),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const versionStatusEnum = pgEnum("version_status", ["unreleased", "released", "archived"]);
+
+/** A release ("v1.2", "June launch"): issues are fixed in a version, which is shipped as a whole. */
+export const projectVersions = pgTable(
+  "project_versions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    status: versionStatusEnum("status").notNull().default("unreleased"),
+    startDate: timestamp("start_date", { withTimezone: true }),
+    releaseDate: timestamp("release_date", { withTimezone: true }),
+    releasedAt: timestamp("released_at", { withTimezone: true }),
+    createdBy: uuid("created_by").notNull().references(() => users.id),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ uniqName: unique("project_versions_project_name_unique").on(t.projectId, t.name) }),
+);
+
 export const tasks = pgTable("tasks", {
   id: uuid("id").primaryKey().defaultRandom(),
   projectId: uuid("project_id").references(() => projects.id, { onDelete: "cascade" }), // nullable — personal/ad-hoc tasks are allowed
   parentTaskId: uuid("parent_task_id"), // subtasks — self-reference, no FK constraint to keep Drizzle table definition simple; validated in code
+  // Number within the project (shown as KEY-number). Personal tasks have none.
+  number: integer("number"),
+  type: issueTypeEnum("type").notNull().default("task"),
+  labels: text("labels").array().notNull().default(sql`'{}'::text[]`),
+  // Scrum: the sprint it's planned into (null = backlog), its points, and its place in the backlog (lower = higher up).
+  sprintId: uuid("sprint_id").references(() => sprints.id, { onDelete: "set null" }),
+  storyPoints: integer("story_points"),
+  rank: doublePrecision("rank"),
+  // Releases and planning: the version it ships in, when work is planned to start, and hours left.
+  fixVersionId: uuid("fix_version_id").references(() => projectVersions.id, { onDelete: "set null" }),
+  startDate: timestamp("start_date", { withTimezone: true }),
+  remainingHours: numeric("remaining_hours", { precision: 6, scale: 2 }),
   title: text("title").notNull(),
   description: text("description"),
   assigneeId: uuid("assignee_id").references(() => users.id),
@@ -1016,7 +1079,131 @@ export const tasks = pgTable("tasks", {
   ratedAt: timestamp("rated_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-}, (t) => ({ uniqGithubIssue: unique("tasks_github_issue_unique").on(t.githubRepo, t.githubIssueNumber) }));
+}, (t) => ({
+  uniqGithubIssue: unique("tasks_github_issue_unique").on(t.githubRepo, t.githubIssueNumber),
+  uniqNumber: unique("tasks_project_number_unique").on(t.projectId, t.number),
+}));
+
+/**
+ * When each issue joined and left each sprint, for burndown charts that show
+ * scope added mid-sprint. Kept by a trigger on tasks.sprint_id, so every path
+ * that moves an issue is covered.
+ */
+export const sprintScope = pgTable(
+  "sprint_scope",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sprintId: uuid("sprint_id").notNull().references(() => sprints.id, { onDelete: "cascade" }),
+    taskId: uuid("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    addedAt: timestamp("added_at", { withTimezone: true }).notNull().defaultNow(),
+    removedAt: timestamp("removed_at", { withTimezone: true }),
+  },
+  (t) => ({ bySprint: index("sprint_scope_sprint_idx").on(t.sprintId) }),
+);
+
+export const issueLinkTypeEnum = pgEnum("issue_link_type", ["blocks", "relates", "duplicates", "clones"]);
+
+/** "RAIL-3 blocks RAIL-7": read from the source's side; the target sees the inverse ("is blocked by"). */
+export const taskLinks = pgTable(
+  "task_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sourceTaskId: uuid("source_task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    targetTaskId: uuid("target_task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    type: issueLinkTypeEnum("type").notNull(),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    uniq: unique("task_links_unique").on(t.sourceTaskId, t.targetTaskId, t.type),
+    byTarget: index("task_links_target_idx").on(t.targetTaskId),
+  }),
+);
+
+/**
+ * Branches, commits and pull requests that mention an issue key, collected
+ * from the GitHub webhook so the issue shows its development work.
+ */
+export const taskDevLinks = pgTable(
+  "task_dev_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    taskId: uuid("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["branch", "commit", "pull_request"] }).notNull(),
+    repo: text("repo").notNull(),
+    // Branch name, commit sha, or pull request number.
+    ref: text("ref").notNull(),
+    title: text("title"),
+    url: text("url"),
+    state: text("state", { enum: ["open", "closed", "merged", "draft", "deleted"] }),
+    author: text("author"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ uniq: unique("task_dev_links_unique").on(t.taskId, t.kind, t.repo, t.ref) }),
+);
+
+export const automationTriggerEnum = pgEnum("automation_trigger", ["issue_created", "status_changed", "issue_assigned", "comment_added", "due_soon", "sprint_started"]);
+
+/** "When X happens to an issue, if Y, then do Z": a project's automation rules. */
+export const automationRules = pgTable("automation_rules", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  enabled: boolean("enabled").notNull().default(true),
+  trigger: automationTriggerEnum("trigger").notNull(),
+  conditions: jsonb("conditions").$type<Record<string, unknown>>().notNull().default({}),
+  actions: jsonb("actions").$type<Record<string, unknown>[]>().notNull().default([]),
+  runCount: integer("run_count").notNull().default(0),
+  lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** The audit trail of automation: each rule run on an issue and what it did. */
+export const automationRuns = pgTable(
+  "automation_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ruleId: uuid("rule_id").notNull().references(() => automationRules.id, { onDelete: "cascade" }),
+    taskId: uuid("task_id").references(() => tasks.id, { onDelete: "cascade" }),
+    status: text("status", { enum: ["success", "failed", "skipped"] }).notNull(),
+    message: text("message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ byRule: index("automation_runs_rule_idx").on(t.ruleId, t.createdAt) }),
+);
+
+/** A person's dashboard: gadgets (charts and issue lists) in order. Shared ones are visible to all staff. */
+export const dashboards = pgTable("dashboards", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  ownerId: uuid("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  shared: boolean("shared").notNull().default(false),
+  gadgets: jsonb("gadgets").$type<{ id: string; kind: string; config: Record<string, unknown> }[]>().notNull().default([]),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** People following a task: they hear about comments and status changes. */
+export const taskWatchers = pgTable(
+  "task_watchers",
+  {
+    taskId: uuid("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.taskId, t.userId] }) }),
+);
+
+/** A person's saved issue searches ("My open bugs", "Due this week"). */
+export const savedTaskFilters = pgTable("saved_task_filters", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  filters: jsonb("filters").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 export const taskRecurrences = pgTable("task_recurrences", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -1040,6 +1227,7 @@ export const taskComments = pgTable("task_comments", {
   taskId: uuid("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
   authorId: uuid("author_id").notNull().references(() => users.id),
   body: text("body").notNull(),
+  mentionedUserIds: uuid("mentioned_user_ids").array().notNull().default(sql`'{}'::uuid[]`),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -1061,6 +1249,10 @@ export const taskEvents = pgTable("task_events", {
   action: text("action").notNull(), // e.g. "status_change", "comment", "attachment_added"
   fromStatus: taskStatusEnum("from_status"),
   toStatus: taskStatusEnum("to_status"),
+  // For "field_change": which field, and its old and new values as shown to people.
+  field: text("field"),
+  fromValue: text("from_value"),
+  toValue: text("to_value"),
   note: text("note"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

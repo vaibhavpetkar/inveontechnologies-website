@@ -1,13 +1,24 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useLocation, useRoute, useSearch } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, CalendarRange, Check, Crown, Flag, Github, KanbanSquare, NotebookPen, Pencil, Plus, Trash2, UserMinus, Users, X } from "lucide-react";
+import { ArrowLeft, CalendarRange, Check, Crown, FileSpreadsheet, Flag, GanttChartSquare, Github, KanbanSquare, ListOrdered, NotebookPen, Package, Pencil, Plus, Timer, Settings2, Trash2, TrendingDown, UserMinus, Users, X } from "lucide-react";
 import { DashboardShell } from "../components/DashboardShell";
 import { Avatar } from "../components/Avatar";
 import { TaskCard } from "../components/tasks/TaskCard";
 import { TaskDrawer } from "../components/tasks/TaskDrawer";
+import "../styles/issues.css";
 import { StartWorkDialog, type Kickoff } from "../components/tasks/StartWorkDialog";
 import { ImportIssuesDialog } from "../components/tasks/ImportIssuesDialog";
+import { Backlog } from "../components/tasks/Backlog";
+import { SprintReports } from "../components/tasks/SprintReports";
+import { Timeline } from "../components/tasks/Timeline";
+import { Releases } from "../components/tasks/Releases";
+import { Timesheet } from "../components/tasks/Timesheet";
+import { ImportCsvDialog } from "../components/tasks/ImportCsvDialog";
+import { ProjectSettingsPanel } from "../components/tasks/ProjectSettingsPanel";
+import { statusLabel, useProjectSettings } from "../lib/projectSettings";
+import { IssueTypeIcon } from "../components/tasks/IssueBits";
+import "../styles/sprints.css";
 import { PeoplePicker, type Picked } from "../components/PeoplePicker";
 import { NotesList } from "../components/notes/NotesList";
 import { useToast } from "../components/Toast";
@@ -15,17 +26,22 @@ import { useAuth } from "../context/AuthContext";
 import { apiFetch, ApiError } from "../lib/api";
 import { useGithubStatus } from "../lib/github";
 import { ROLE_LABELS } from "../lib/nav";
-import { allowedMoves, BOARD_COLUMNS, STATUS_META, type Task, type TaskPriority, type TaskStatus } from "../lib/tasks";
+import { allowedMoves, BOARD_COLUMNS, PRIORITY_META, sprintDates, STATUS_META, type Task, type TaskPriority, type TaskStatus } from "../lib/tasks";
 import type { DirectoryUser } from "../lib/useDirectory";
 import { fmtDate, PROJECT_STATUS, useColleagues, type Milestone, type ProjectOverview, type ProjectStatus } from "../lib/workspace";
 import { ProgressRing } from "./Projects";
 
-type Tab = "board" | "roadmap" | "team" | "notes";
+type Tab = "board" | "backlog" | "timeline" | "releases" | "reports" | "roadmap" | "team" | "notes" | "settings";
 const TABS: { id: Tab; label: string; icon: typeof KanbanSquare }[] = [
   { id: "board", label: "Board", icon: KanbanSquare },
+  { id: "backlog", label: "Backlog", icon: ListOrdered },
+  { id: "timeline", label: "Timeline", icon: GanttChartSquare },
+  { id: "releases", label: "Releases", icon: Package },
+  { id: "reports", label: "Reports", icon: TrendingDown },
   { id: "roadmap", label: "Roadmap", icon: CalendarRange },
   { id: "team", label: "Team", icon: Users },
   { id: "notes", label: "Notes", icon: NotebookPen },
+  { id: "settings", label: "Settings", icon: Settings2 },
 ];
 
 /** One project: its task board, roadmap phases, team and shared notes. */
@@ -39,19 +55,28 @@ export default function ProjectDetail() {
   const openTask = new URLSearchParams(search).get("task");
   const [data, setData] = useState<ProjectOverview | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("board");
+  const initialTab = new URLSearchParams(search).get("view");
+  const [tab, setTab] = useState<Tab>(TABS.some((t) => t.id === initialTab) ? (initialTab as Tab) : "board");
+  // Board scope ("sprint" shows the running sprint only) and swimlanes, remembered per browser.
+  const [scope, setScope] = useState<"sprint" | "all">(() => (readPref("portal.board.scope") === "all" ? "all" : "sprint"));
+  const [lanes, setLanes] = useState<Lanes>(() => (["none", "assignee", "epic", "priority"].includes(readPref("portal.board.lanes") ?? "") ? (readPref("portal.board.lanes") as Lanes) : "none"));
+  const [version, setVersion] = useState(0);
   const [phase, setPhase] = useState<string>("all");
   const [adding, setAdding] = useState<{ milestoneId?: string } | null>(null);
   const [editingPhase, setEditingPhase] = useState<Milestone | "new" | null>(null);
   const [importing, setImporting] = useState(false);
+  const [importingCsv, setImportingCsv] = useState(false);
   const [dragging, setDragging] = useState<Task | null>(null);
   const [starting, setStarting] = useState<{ task: Task; resolve: (k: Kickoff | undefined | false) => void } | null>(null);
   const { status: github } = useGithubStatus(accessToken);
+  const settings = useProjectSettings(projectId, accessToken);
+  const reviewOpt = { requireReview: settings.workflow.requireReview };
 
   const load = useCallback(async () => {
     try {
       setData(await apiFetch<ProjectOverview>(`/api/v1/projects/${projectId}/overview`, { accessToken }));
       setError(null);
+      setVersion((v) => v + 1);
     } catch (err) {
       setError(err instanceof ApiError && err.status === 403 ? "You're not on this project." : "Couldn't load this project.");
     }
@@ -61,7 +86,63 @@ export default function ProjectDetail() {
   }, [load]);
 
   const byId = useMemo(() => new Map<string, DirectoryUser>((data?.members ?? []).map((m) => [m.userId, { id: m.userId, email: m.email, role: m.role as DirectoryUser["role"] }])), [data]);
-  const tasks = useMemo(() => (data?.tasks ?? []).filter((t) => !t.parentTaskId && (phase === "all" || (phase === "none" ? !t.milestoneId : t.milestoneId === phase))), [data, phase]);
+  const epics = useMemo(() => new Map((data?.tasks ?? []).filter((t) => t.type === "epic").map((t) => [t.id, t])), [data]);
+  const sprint = data?.activeSprint ?? null;
+  const sprintOnly = scope === "sprint" && !!sprint;
+  // Board cards: top-level issues and those under an epic (subtasks show inside their parent).
+  const tasks = useMemo(
+    () =>
+      (data?.tasks ?? []).filter(
+        (t) =>
+          (!t.parentTaskId || epics.has(t.parentTaskId)) &&
+          (!sprintOnly || (t.sprintId === sprint!.id && t.type !== "epic")) &&
+          (phase === "all" || (phase === "none" ? !t.milestoneId : t.milestoneId === phase)),
+      ),
+    [data, phase, epics, sprintOnly, sprint],
+  );
+  const wip = data?.project.wipLimits ?? {};
+
+  async function setWipLimit(col: TaskStatus) {
+    const now = wip[col];
+    const answer = window.prompt(`Most issues allowed in "${STATUS_META[col].label}" at once (leave empty for no limit)`, now ? String(now) : "");
+    if (answer === null) return;
+    const n = answer.trim() === "" ? null : Math.round(Number(answer));
+    if (n !== null && (!Number.isFinite(n) || n < 1 || n > 99)) return toast("Use a number from 1 to 99.", "error");
+    try {
+      await apiFetch(`/api/v1/projects/${projectId}/wip-limits`, { method: "PUT", body: { limits: { ...wip, [col]: n } }, accessToken });
+      load();
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "Couldn't save the limit.", "error");
+    }
+  }
+
+  /** Board rows for the chosen swimlanes, each with its own columns. */
+  const laneGroups = useMemo(() => {
+    if (lanes === "none") return [{ id: "all", title: "", tasks }];
+    const groups = new Map<string, { id: string; title: string; tasks: Task[]; order: number }>();
+    for (const t of tasks) {
+      let id = "none";
+      let title = "";
+      let order = 999;
+      if (lanes === "assignee") {
+        id = t.assigneeId ?? "none";
+        title = t.assigneeId ? data?.members.find((m) => m.userId === t.assigneeId)?.name ?? "Someone" : "Unassigned";
+        order = t.assigneeId === user?.id ? 0 : t.assigneeId ? 1 : 2;
+      } else if (lanes === "epic") {
+        const epic = t.type === "epic" ? t : t.parentTaskId ? epics.get(t.parentTaskId) : undefined;
+        id = epic?.id ?? "none";
+        title = epic ? `${epic.key ? `${epic.key} ` : ""}${epic.title}` : "No epic";
+        order = epic ? 0 : 1;
+      } else {
+        id = t.priority;
+        title = PRIORITY_META[t.priority].label;
+        order = ["urgent", "high", "medium", "low"].indexOf(t.priority);
+      }
+      if (!groups.has(id)) groups.set(id, { id, title, tasks: [], order });
+      groups.get(id)!.tasks.push(t);
+    }
+    return [...groups.values()].sort((a, b) => a.order - b.order || a.title.localeCompare(b.title));
+  }, [lanes, tasks, data, epics, user?.id]);
 
   const move = useCallback(
     async (task: Task, to: TaskStatus, note?: string) => {
@@ -74,7 +155,7 @@ export default function ProjectDetail() {
       setData((d) => (d ? { ...d, tasks: d.tasks.map((t) => (t.id === task.id ? { ...t, status: to } : t)) } : d));
       try {
         await apiFetch(`/api/v1/tasks/${task.id}/transition`, { method: "POST", body: { toStatus: to, note, kickoff }, accessToken });
-        toast(`Moved to ${STATUS_META[to].label.toLowerCase()}`);
+        toast(`Moved to ${statusLabel(to, settings).toLowerCase()}`);
         load();
         return true;
       } catch (err) {
@@ -135,7 +216,7 @@ export default function ProjectDetail() {
                   <button className="btn btn-secondary btn-sm" onClick={linkRepo}><Github size={14} /> Link a repo</button>
                 ) : null}
               </div>
-              <h1>{p.title}</h1>
+              <h1>{p.title} {p.key && <span className="issue-key" style={{ fontSize: "0.9rem", verticalAlign: "middle" }}>{p.key}</span>}</h1>
               {p.description && <p className="project-hero-desc">{p.description}</p>}
               <div className="project-hero-meta">
                 <span>{data.progress.done} of {data.progress.total} tasks done</span>
@@ -145,11 +226,12 @@ export default function ProjectDetail() {
             </div>
             <div className="page-head-actions">
               {data.canManage && github?.enabled && <button className="btn btn-secondary" onClick={() => setImporting(true)}><Github size={16} /> Import issues</button>}
+              {data.canManage && <button className="btn btn-secondary" onClick={() => setImportingCsv(true)}><FileSpreadsheet size={16} /> Import CSV</button>}
               <motion.button className="btn" whileTap={{ scale: 0.96 }} onClick={() => setAdding({ milestoneId: phase !== "all" && phase !== "none" ? phase : undefined })}><Plus size={17} /> Add task</motion.button>
             </div>
           </motion.header>
 
-          <div className="tabs" role="tablist">
+          <div className="tabs project-tabs" role="tablist">
             {TABS.map((t) => (
               <button key={t.id} role="tab" aria-selected={tab === t.id} className={`tab${tab === t.id ? " active" : ""}`} onClick={() => setTab(t.id)}>
                 {tab === t.id && <motion.span layoutId="project-tab" className="tab-underline" />}
@@ -170,14 +252,47 @@ export default function ProjectDetail() {
                       ))}
                     </div>
                   )}
+                  <div className="board-toolbar">
+                    {sprint ? (
+                      <select aria-label="Board shows" value={scope} onChange={(e) => { setScope(e.target.value as "sprint" | "all"); writePref("portal.board.scope", e.target.value); }}>
+                        <option value="sprint">{sprint.name}</option>
+                        <option value="all">All issues</option>
+                      </select>
+                    ) : null}
+                    {sprintOnly && (
+                      <span className="sprint-banner">
+                        <Timer size={14} /> {sprintDates(sprint!)}
+                        {sprint!.endDate && <strong>{daysLeft(sprint!.endDate)}</strong>}
+                        {sprint!.goal && <span>· {sprint!.goal}</span>}
+                      </span>
+                    )}
+                    {!sprint && <span className="sprint-banner">No sprint running. Plan one on the Backlog tab, or keep using the board as it is.</span>}
+                    <select aria-label="Swimlanes" style={{ marginLeft: "auto" }} value={lanes} onChange={(e) => { setLanes(e.target.value as Lanes); writePref("portal.board.lanes", e.target.value); }}>
+                      <option value="none">No swimlanes</option>
+                      <option value="assignee">Lanes by assignee</option>
+                      <option value="epic">Lanes by epic</option>
+                      <option value="priority">Lanes by priority</option>
+                    </select>
+                  </div>
+                  {laneGroups.map((lane) => (
+                    <div key={lane.id} className={lanes === "none" ? undefined : "swimlane"}>
+                      {lanes !== "none" && (
+                        <h3 className="swimlane-head">
+                          {lanes === "epic" && lane.id !== "none" && <IssueTypeIcon type="epic" size={16} />}
+                          {lane.title} <span className="column-count">{lane.tasks.length}</span>
+                        </h3>
+                      )}
                   <div className="board">
-                    {BOARD_COLUMNS.map((col) => {
-                      const items = tasks.filter((t) => t.status === col);
-                      const canDrop = !!dragging && !!user && allowedMoves(dragging, user).includes(col);
+                    {BOARD_COLUMNS.filter((col) => col !== "changes_requested" || settings.workflow.showChangesRequested || tasks.some((t) => t.status === col)).map((col) => {
+                      const items = lane.tasks.filter((t) => t.status === col);
+                      const total = tasks.filter((t) => t.status === col).length;
+                      const limit = wip[col];
+                      const over = !!limit && total > limit;
+                      const canDrop = !!dragging && !!user && allowedMoves(dragging, user, reviewOpt).includes(col);
                       return (
                         <section
                           key={col}
-                          className={`board-column${canDrop ? " can-drop" : ""}`}
+                          className={`board-column${canDrop ? " can-drop" : ""}${over ? " over-limit" : ""}`}
                           onDragOver={(e) => canDrop && e.preventDefault()}
                           onDrop={(e) => {
                             e.preventDefault();
@@ -193,8 +308,13 @@ export default function ProjectDetail() {
                         >
                           <header className="column-head">
                             <span className={`status-dot tone-${STATUS_META[col].tone}`} />
-                            <span>{STATUS_META[col].label}</span>
-                            <span className="column-count">{items.length}</span>
+                            <span>{statusLabel(col, settings)}</span>
+                            <span className={`column-count${over ? " over" : ""}`} title={limit ? `${total} of at most ${limit}` : undefined}>{limit ? `${total}/${limit}` : items.length}</span>
+                            {data.canManage && lane === laneGroups[0] && (
+                              <button type="button" className="wip-button" onClick={() => setWipLimit(col)} aria-label={`Set the limit for ${statusLabel(col, settings)}`}>
+                                Limit
+                              </button>
+                            )}
                           </header>
                           <div className="column-body">
                             <AnimatePresence mode="popLayout">
@@ -203,8 +323,8 @@ export default function ProjectDetail() {
                                   key={t.id}
                                   task={t}
                                   assignee={t.assigneeId ? byId.get(t.assigneeId) : undefined}
-                                  draggable={!!user && allowedMoves(t, user).length > 0}
-                                  onOpen={() => navigate(`/projects/${projectId}?task=${t.id}`)}
+                                  draggable={!!user && allowedMoves(t, user, reviewOpt).length > 0}
+                                  onOpen={() => navigate(`/projects/${projectId}?task=${t.key ?? t.id}`)}
                                   onDragStart={() => setDragging(t)}
                                   onDragEnd={() => setDragging(null)}
                                 />
@@ -216,7 +336,22 @@ export default function ProjectDetail() {
                       );
                     })}
                   </div>
+                    </div>
+                  ))}
                 </>
+              )}
+
+              {tab === "backlog" && <Backlog projectId={projectId} version={version} onOpenTask={(ref) => navigate(`/projects/${projectId}?task=${ref}`)} onChanged={load} />}
+
+              {tab === "timeline" && <Timeline projectId={projectId} version={version} onOpenTask={(ref) => navigate(`/projects/${projectId}?task=${ref}`)} />}
+
+              {tab === "releases" && <Releases projectId={projectId} version={version} onOpenTask={(ref) => navigate(`/projects/${projectId}?task=${ref}`)} />}
+
+              {tab === "reports" && (
+                <div style={{ display: "grid", gap: "1rem" }}>
+                  <SprintReports projectId={projectId} version={version} onOpenTask={(ref) => navigate(`/projects/${projectId}?task=${ref}`)} />
+                  <Timesheet projectId={projectId} />
+                </div>
               )}
 
               {tab === "roadmap" && (
@@ -232,13 +367,14 @@ export default function ProjectDetail() {
               {tab === "team" && <Team data={data} onChanged={load} />}
 
               {tab === "notes" && <NotesList projectId={projectId} compact />}
+              {tab === "settings" && <ProjectSettingsPanel projectId={projectId} canManage={data.canManage} people={data.members.map((m) => ({ id: m.userId, name: m.name }))} />}
             </motion.div>
           </AnimatePresence>
         </>
       )}
 
       <AnimatePresence>
-        {openTask && data && <TaskDrawer key={openTask} taskId={openTask} byId={byId} onClose={() => navigate(`/projects/${projectId}`)} onMove={move} onChanged={load} />}
+        {openTask && data && <TaskDrawer key={openTask} taskId={openTask} byId={byId} onClose={() => navigate(`/projects/${projectId}`)} onMove={move} onChanged={load} onOpenTask={(ref) => navigate(`/projects/${projectId}?task=${ref}`)} />}
       </AnimatePresence>
       <AnimatePresence>
         {adding && data && (
@@ -271,6 +407,18 @@ export default function ProjectDetail() {
             initialProjectId={projectId}
             onClose={() => setImporting(false)}
             onImported={(n) => {
+              toast(`Imported ${n} ${n === 1 ? "issue" : "issues"}`);
+              load();
+            }}
+          />
+        )}
+        {importingCsv && data?.project.key && (
+          <ImportCsvDialog
+            projectId={projectId}
+            projectKey={data.project.key}
+            onClose={() => setImportingCsv(false)}
+            onImported={(n) => {
+              setImportingCsv(false);
               toast(`Imported ${n} ${n === 1 ? "issue" : "issues"}`);
               load();
             }}
@@ -620,4 +768,30 @@ function PhaseDialog({ projectId, phase, onClose, onSaved }: { projectId: string
       </motion.form>
     </motion.div>
   );
+}
+
+type Lanes = "none" | "assignee" | "epic" | "priority";
+
+function readPref(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function writePref(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* private mode: the choice just isn't remembered */
+  }
+}
+
+/** "3 days left", "Ends today", "2 days over". */
+function daysLeft(end: string) {
+  const d = Math.ceil((new Date(end).getTime() - Date.now()) / 86_400_000);
+  if (d > 1) return `${d} days left`;
+  if (d === 1) return "1 day left";
+  if (d === 0) return "Ends today";
+  return `${-d} day${d === -1 ? "" : "s"} over`;
 }

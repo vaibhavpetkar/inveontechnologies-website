@@ -1,0 +1,83 @@
+/* Jira-style issues: type icons, keys, labels, the issue list and filters. */
+.issue-type { display: inline-grid; place-items: center; flex: none; border-radius: 5px; color: #fff; }
+.issue-type.tone-violet { background: #7c3aed; }
+.issue-type.tone-green { background: #16a34a; }
+.issue-type.tone-blue { background: #2563eb; }
+.issue-type.tone-red { background: #dc2626; }
+.issue-key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.76rem; font-weight: 600; color: var(--muted); letter-spacing: 0.01em; white-space: nowrap; }
+.label-chips { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; min-width: 0; }
+.label-chip { display: inline-block; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: inherit; font-size: 0.72rem; line-height: 1.5; padding: 0 0.45rem; border-radius: 6px; background: var(--surface); border: 1px solid var(--line); color: var(--ink); }
+button.label-chip { cursor: pointer; }
+button.label-chip:hover { border-color: var(--primary); color: var(--primary); }
+.label-chip.more { color: var(--muted); }
+
+.task-card-top { gap: 0.4rem; }
+.task-card-id { display: flex; align-items: center; gap: 0.4rem; min-width: 0; flex-wrap: wrap; }
+.task-card-labels { margin-top: 0.35rem; }
+
+/* Filters */
+.issue-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.9rem; }
+.issue-filters .search-box { flex: 1 1 220px; max-width: 340px; }
+.issue-filters select { padding: 0.42rem 0.6rem; border: 1px solid var(--line); border-radius: 9px; font: inherit; font-size: 0.86rem; background: var(--paper); color: var(--ink); max-width: 180px; }
+.issue-filters select.on { border-color: var(--primary); color: var(--primary); background: rgba(37, 99, 235, 0.06); }
+.type-toggle { display: inline-flex; gap: 0.25rem; }
+.type-toggle button { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.3rem 0.55rem; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); font: inherit; font-size: 0.82rem; color: var(--ink); cursor: pointer; }
+.type-toggle button[aria-pressed="true"] { border-color: var(--primary); background: rgba(37, 99, 235, 0.08); color: var(--primary); }
+.saved-filters { position: relative; }
+.saved-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; width: 260px; background: var(--paper); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-lg, 0 12px 32px rgba(15, 23, 42, 0.16)); padding: 0.4rem; }
+.saved-menu ul { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow-y: auto; }
+.saved-menu li { display: flex; align-items: center; gap: 0.25rem; }
+.saved-menu li > button:first-child { flex: 1; text-align: left; padding: 0.45rem 0.55rem; border: 0; background: none; border-radius: 8px; font: inherit; font-size: 0.86rem; color: var(--ink); cursor: pointer; }
+.saved-menu li > button:first-child:hover { background: var(--surface); }
+.saved-menu form { display: flex; gap: 0.35rem; padding: 0.4rem 0.2rem 0.2rem; border-top: 1px solid var(--line); margin-top: 0.3rem; }
+.saved-menu form input { flex: 1; min-width: 0; padding: 0.38rem 0.5rem; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 0.85rem; }
+.saved-menu .muted-small { padding: 0.4rem 0.55rem; }
+
+/* List */
+.issue-table-wrap { border: 1px solid var(--line); border-radius: 14px; background: var(--paper); overflow: hidden; }
+.issue-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+.issue-table th { text-align: left; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--line); background: var(--surface); white-space: nowrap; }
+.issue-table th button { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 0.2rem; }
+.issue-table th button:focus-visible { outline: 2px solid var(--primary); border-radius: 4px; }
+.issue-table td { padding: 0.55rem 0.75rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.issue-table tbody tr { cursor: pointer; transition: background 0.12s; }
+.issue-table tbody tr:hover { background: var(--surface); }
+.issue-table tbody tr:last-child td { border-bottom: 0; }
+.issue-title-cell { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+.issue-title-cell .title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; }
+.issue-who { display: inline-flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+.issue-table .muted-cell { color: var(--muted); white-space: nowrap; }
+.issue-pager { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.6rem 0.75rem; border-top: 1px solid var(--line); font-size: 0.85rem; color: var(--muted); }
+.issue-pager div { display: flex; gap: 0.4rem; }
+
+@media (max-width: 760px) {
+  .issue-filters .search-box { max-width: none; flex-basis: 100%; }
+  .issue-table thead { display: none; }
+  .issue-table, .issue-table tbody, .issue-table tr, .issue-table td { display: block; width: 100%; }
+  .issue-table tr { padding: 0.65rem 0.75rem; border-bottom: 1px solid var(--line); }
+  .issue-table td { border: 0; padding: 0.1rem 0; }
+  .issue-table td.hide-sm { display: none; }
+  .issue-title-cell .title { white-space: normal; max-width: none; }
+  .issue-table td.inline-sm { display: inline-block; width: auto; margin-right: 0.6rem; }
+}
+
+/* Drawer additions */
+.drawer-crumbs { display: flex; align-items: center; gap: 0.45rem; min-width: 0; flex-wrap: wrap; }
+.drawer-crumbs a, .drawer-crumbs button.link-button { font-size: 0.8rem; }
+.watch-button { display: inline-flex; align-items: center; gap: 0.35rem; }
+.issue-edit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.6rem; margin: 0.4rem 0 0.8rem; }
+.issue-edit-grid .field { margin: 0; }
+.issue-edit-grid label { font-size: 0.75rem; }
+.label-editor { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; padding: 0.3rem 0.4rem; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); min-height: 38px; }
+.label-editor input { border: 0; outline: 0; flex: 1; min-width: 90px; font: inherit; font-size: 0.85rem; background: transparent; color: var(--ink); }
+.label-editor .label-chip button { all: unset; cursor: pointer; margin-left: 0.25rem; color: var(--muted); }
+.subtask-row.clickable { cursor: pointer; border-radius: 8px; padding: 0.35rem 0.4rem; }
+.subtask-row.clickable:hover { background: var(--surface); }
+.subtask-row .issue-key { margin-left: auto; }
+.subtask-add { display: flex; gap: 0.4rem; margin-top: 0.4rem; }
+.subtask-add input { flex: 1; min-width: 0; padding: 0.4rem 0.55rem; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 0.86rem; }
+.comment-body .mention { color: var(--primary); font-weight: 600; background: rgba(37, 99, 235, 0.08); border-radius: 4px; padding: 0 0.15rem; }
+.comment-form { position: relative; }
+.comment-form .mention-pop { bottom: calc(100% + 6px); left: 0; }
+.change-values { display: inline; }
+.change-values del { color: var(--muted); }
