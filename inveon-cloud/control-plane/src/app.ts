@@ -22,8 +22,10 @@ import { jobsRouter } from "./modules/jobs/routes.js";
 import { domainsRouter } from "./modules/domains/routes.js";
 import { healthRouter } from "./modules/health/routes.js";
 import { backupsRouter } from "./modules/backups/routes.js";
+import { registerPreviewHooks } from "./modules/previews/service.js";
 
 export function createApp(db: Database, pool: pg.Pool, env: Env) {
+  registerPreviewHooks(env);
   const app = express();
   app.set("trust proxy", 1);
   app.disable("x-powered-by");

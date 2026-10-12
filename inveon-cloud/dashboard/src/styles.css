@@ -302,3 +302,6 @@ textarea { resize: vertical; font-family: var(--font-mono); font-size: 0.85rem; 
 .settings-section:last-child { border-bottom: 0; padding-bottom: 0; }
 .settings-section h3 { display: flex; align-items: center; gap: 0.4rem; margin: 0; font-size: 1rem; }
 .settings-section p { margin: 0; }
+.preview-note { align-items: center; flex-wrap: wrap; }
+.preview-note > span { flex: 1 1 240px; }
+.preview-note a { color: inherit; font-weight: 600; }

@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation, useParams, useSearch } from "wouter";
-import { ArrowLeft, Github, Layers, Plus, RefreshCw, Settings } from "lucide-react";
+import { ArrowLeft, ExternalLink, GitPullRequest, Github, Layers, Plus, RefreshCw, Settings, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useAuth, useOrgPath } from "../context/AuthContext";
@@ -13,6 +13,7 @@ import { HealthTab } from "./app/HealthTab";
 import { BackupsTab } from "./app/BackupsTab";
 import { LogsTab } from "./app/LogsTab";
 import { AppSettings } from "./app/AppSettings";
+import { JobView } from "../components/JobView";
 
 const TABS = ["Deploys", "Variables", "Domains", "Health", "Backups", "Logs"] as const;
 type Tab = (typeof TABS)[number];
@@ -92,6 +93,8 @@ export default function AppDetail() {
   const [newEnvOpen, setNewEnvOpen] = useState(false);
   const [secret, setSecret] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [teardownJob, setTeardownJob] = useState<string | null>(null);
+  const teardown = useAction();
   const rotate = useAction();
 
   const selectEnv = (e: string) => navigate(`/apps/${id}?env=${e}`, { replace: true });
@@ -156,7 +159,7 @@ export default function AppDetail() {
           <div className="pills" role="tablist" aria-label="Environments">
             {app.data.environments.map((e) => (
               <button key={e.id} role="tab" aria-selected={e.id === envId} className={`pill ${e.id === envId ? "active" : ""}`} onClick={() => selectEnv(e.id)}>
-                {e.name} <span className="muted small">on {e.serverName}</span>
+                {e.previewPr !== null && <GitPullRequest size={13} aria-label="preview" />} {e.name} <span className="muted small">on {e.serverName}</span>
               </button>
             ))}
           </div>
@@ -176,6 +179,39 @@ export default function AppDetail() {
                   <code>{detail.data.environment.slug}</code>
                 </span>
               </div>
+              {detail.data.environment.previewPr !== null && (
+                <div className="note note-info preview-note">
+                  <GitPullRequest size={16} />
+                  <span>
+                    Preview of{" "}
+                    <a href={`${a.repoUrl}/pull/${detail.data.environment.previewPr}`} target="_blank" rel="noreferrer">
+                      pull request #{detail.data.environment.previewPr}
+                    </a>
+                    . Deployed on every push to it and torn down when it closes.
+                    {detail.data.domains[0] && (
+                      <>
+                        {" "}
+                        <a href={`${detail.data.domains[0].status === "active" ? "https" : "http"}://${detail.data.domains[0].hostname}`} target="_blank" rel="noreferrer">
+                          {detail.data.domains[0].hostname} <ExternalLink size={12} />
+                        </a>
+                      </>
+                    )}
+                  </span>
+                  {can("admin") && (
+                    <button
+                      className="btn btn-small btn-ghost"
+                      disabled={teardown.busy}
+                      onClick={() => {
+                        if (confirm(`Tear down ${detail.data!.environment.name}? Its containers, volumes, nginx site, certificate and data are deleted.`))
+                          void teardown.run(async () => setTeardownJob((await api<{ jobId: string }>(orgPath(`/environments/${detail.data!.environment.id}`), { method: "DELETE" })).jobId));
+                      }}
+                    >
+                      <Trash2 size={14} /> Tear down
+                    </button>
+                  )}
+                </div>
+              )}
+              <ErrorNote error={teardown.error} />
               <div className="tabs" role="tablist">
                 {TABS.map((t) => (
                   <button key={t} role="tab" aria-selected={tab === t} className={`tab ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>
@@ -208,7 +244,21 @@ export default function AppDetail() {
         />
       </Modal>
       <Modal open={settingsOpen} title={`${a.name} settings`} onClose={() => setSettingsOpen(false)} wide>
-        <AppSettings app={a} onSaved={() => void app.reload()} />
+        <AppSettings app={a} environments={app.data.environments} onSaved={() => void app.reload()} />
+      </Modal>
+      <Modal open={!!teardownJob} title="Tearing down the preview" onClose={() => setTeardownJob(null)} wide>
+        {teardownJob && (
+          <JobView
+            jobId={teardownJob}
+            onFinished={(job) => {
+              if (job.status === "success") {
+                setTeardownJob(null);
+                navigate(`/apps/${id}`, { replace: true });
+              }
+              void app.reload();
+            }}
+          />
+        )}
       </Modal>
       <Modal open={!!secret} title="New webhook secret" onClose={() => setSecret(null)} wide>
         {secret && (

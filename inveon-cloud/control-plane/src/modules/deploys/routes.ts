@@ -1,17 +1,18 @@
 import express, { Router } from "express";
 import { z } from "zod";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
 import type { Env } from "../../env.js";
 import { apps, backups, deployments, environments, releases } from "../../db/schema.js";
 import { requireRole } from "../auth/middleware.js";
 import { audit, writeAudit } from "../../lib/audit.js";
-import { AppError, NotFoundError } from "../../lib/errors.js";
+import { AppError, ConflictError, NotFoundError } from "../../lib/errors.js";
 import { verifyGithubSignature } from "../../lib/crypto.js";
 import { logger } from "../../lib/logger.js";
 import { loadEnvironment, webhookSecretFor } from "../apps/routes.js";
 import { createJob, notifyServer } from "../jobs/service.js";
 import { createDeployment, resolveRelease } from "./service.js";
+import { previewName, previewsReady, startPreviewTeardown, upsertPreviewEnvironment } from "../previews/service.js";
 
 export function deploysRouter(db: Database, env: Env) {
   const router = Router({ mergeParams: true });
@@ -115,16 +116,22 @@ export function webhookRouter(db: Database, env: Env) {
       res.json({ ok: true, pong: true });
       return;
     }
-    if (event !== "push") {
+    if (event !== "push" && event !== "pull_request") {
       res.status(202).json({ ok: true, ignored: `event ${event}` });
       return;
     }
-    let payload: { ref?: string; after?: string; deleted?: boolean; head_commit?: { message?: string } | null };
+    let body: unknown;
     try {
-      payload = JSON.parse(raw.toString("utf8"));
+      body = JSON.parse(raw.toString("utf8"));
     } catch {
       throw new AppError("INVALID_JSON", "Payload is not JSON", 400);
     }
+    if (event === "pull_request") {
+      const result = await handlePullRequest(db, env, app, body as PullRequestPayload, req.ip);
+      res.status(202).json({ ok: true, ...result });
+      return;
+    }
+    const payload = body as { ref?: string; after?: string; deleted?: boolean; head_commit?: { message?: string } | null };
     if (payload.ref !== `refs/heads/${app.branch}` || payload.deleted || !payload.after || !/^[0-9a-f]{40}$/.test(payload.after)) {
       res.status(202).json({ ok: true, ignored: "not a push to the deploy branch" });
       return;
@@ -134,7 +141,8 @@ export function webhookRouter(db: Database, env: Env) {
 
     const targets = await db.select().from(environments).where(eq(environments.appId, app.id));
     const started: string[] = [];
-    for (const environment of targets.filter((e) => e.autoDeploy)) {
+    // Previews are deployed only by their own pull request.
+    for (const environment of targets.filter((e) => e.autoDeploy && e.previewPr === null)) {
       try {
         const { job } = await createDeployment(db, { environment, app, release, kind: "deploy" });
         started.push(job.id);
@@ -146,4 +154,64 @@ export function webhookRouter(db: Database, env: Env) {
     res.status(202).json({ ok: true, releaseId: release.id, jobIds: started });
   });
   return router;
+}
+
+interface PullRequestPayload {
+  action?: string;
+  number?: number;
+  pull_request?: {
+    title?: string;
+    head?: { sha?: string; repo?: { full_name?: string } | null };
+    base?: { repo?: { full_name?: string } | null };
+  };
+}
+
+/**
+ * pull_request webhook: opened, synchronize and reopened create or update
+ * the PR's preview and deploy its head commit; closed tears it down. Pull
+ * requests from forks are never deployed: their code would run on our
+ * server with the preview's variables.
+ */
+async function handlePullRequest(db: Database, env: Env, app: typeof apps.$inferSelect, payload: PullRequestPayload, ip: string | undefined) {
+  if (!previewsReady(app)) return { ignored: "previews are off for this app" };
+  const pr = payload.number;
+  const action = payload.action ?? "";
+  if (!Number.isInteger(pr) || pr! < 1 || pr! > 1e9) return { ignored: "no pull request number" };
+  const repo = `${app.repoOwner}/${app.repoName}`.toLowerCase();
+  const headRepo = payload.pull_request?.head?.repo?.full_name?.toLowerCase();
+  const baseRepo = payload.pull_request?.base?.repo?.full_name?.toLowerCase();
+  if (baseRepo !== repo) return { ignored: "pull request is for another repository" };
+
+  if (action === "closed") {
+    const environment = await db.query.environments.findFirst({ where: and(eq(environments.appId, app.id), eq(environments.name, previewName(pr!))) });
+    if (!environment || environment.previewPr !== pr) return { ignored: "no preview for this pull request" };
+    const job = await startPreviewTeardown(db, environment, app, null);
+    await writeAudit(db, { orgId: app.orgId, action: "preview.teardown", entityType: "environment", entityId: environment.id, metadata: { pr, jobId: job.id, source: "webhook" }, ipAddress: ip });
+    return { environmentId: environment.id, jobId: job.id, teardown: true };
+  }
+  if (!["opened", "synchronize", "reopened"].includes(action)) return { ignored: `pull_request ${action}` };
+  if (headRepo !== repo) return { ignored: "pull requests from forks are not previewed" };
+  const headSha = payload.pull_request?.head?.sha;
+  if (!headSha || !/^[0-9a-f]{40}$/.test(headSha)) return { ignored: "no head commit" };
+
+  let upserted;
+  try {
+    upserted = await upsertPreviewEnvironment(db, app, pr!);
+  } catch (err) {
+    if (err instanceof AppError) return { ignored: err.message };
+    throw err;
+  }
+  const { environment, created } = upserted;
+  if (created) {
+    await writeAudit(db, { orgId: app.orgId, action: "preview.create", entityType: "environment", entityId: environment.id, metadata: { pr, name: environment.name }, ipAddress: ip });
+  }
+  const release = await resolveRelease(db, env, app, { commitSha: headSha, commitMessage: payload.pull_request?.title ?? null, source: "pull_request" });
+  try {
+    const { job } = await createDeployment(db, { environment, app, release, kind: "deploy" });
+    await writeAudit(db, { orgId: app.orgId, action: "deploy.create", entityType: "environment", entityId: environment.id, metadata: { jobId: job.id, commitSha: release.commitSha, source: "pull_request", pr } });
+    return { environmentId: environment.id, releaseId: release.id, jobIds: [job.id] };
+  } catch (err) {
+    if (err instanceof ConflictError) return { environmentId: environment.id, releaseId: release.id, jobIds: [], skipped: err.message };
+    throw err;
+  }
 }

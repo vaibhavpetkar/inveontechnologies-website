@@ -107,6 +107,24 @@ async function writeNginxFile(ctx: ActionContext, file: string, content: string)
   }
 }
 
+/** Remove an nginx file, test the config, and put it back if the test fails. */
+async function removeNginxFile(ctx: ActionContext, file: string) {
+  if (!existsSync(file)) {
+    ctx.log(`${file} not found; nothing to remove\n`);
+    return;
+  }
+  const previous = readFileSync(file, "utf8");
+  rmSync(file, { force: true });
+  ctx.log(`removed ${file}\n`);
+  try {
+    await exec(ctx, "nginx", ["-t"]);
+  } catch (err) {
+    writeAtomic(file, previous);
+    ctx.log(`nginx -t failed; restored ${file}\n`);
+    throw err;
+  }
+}
+
 function certExpiry(config: AgentConfig, hostname: string) {
   const file = join(config.letsencryptDir, "live", hostname, "cert.pem");
   try {
@@ -480,7 +498,16 @@ export const ACTIONS: Record<string, Action<any>> = {
     run: buildImage,
   },
   "compose.up": composeSimple(["up", "-d", "--remove-orphans"], "up"),
-  "compose.down": composeSimple(["down", "--remove-orphans"], "down"),
+  /** Stops a slot. removeVolumes (preview teardown) also deletes its named volumes. */
+  "compose.down": {
+    parse(params: unknown) {
+      const p = obj(params);
+      return { ...parseAppRef(p), removeVolumes: p.removeVolumes === undefined ? false : bool(p, "removeVolumes") };
+    },
+    async run(p: AppRef & { removeVolumes: boolean }, ctx) {
+      return composeSimple(["down", "--remove-orphans", ...(p.removeVolumes ? ["--volumes"] : [])], "down").run(p, ctx);
+    },
+  },
   "compose.ps": composeSimple(["ps"], "ps"),
 
   /**
@@ -576,6 +603,24 @@ export const ACTIONS: Record<string, Action<any>> = {
     },
   },
 
+  "nginx.remove_site": {
+    parse(params: unknown) {
+      return { hostname: str(obj(params), "hostname", HOSTNAME_RE) };
+    },
+    async run(p: { hostname: string }, ctx) {
+      await removeNginxFile(ctx, join(ctx.config.nginxConfDir, `inveon-site-${p.hostname}.conf`));
+    },
+  },
+
+  "nginx.remove_upstream": {
+    parse(params: unknown) {
+      return { slug: str(obj(params), "slug", SLUG_RE) };
+    },
+    async run(p: { slug: string }, ctx) {
+      await removeNginxFile(ctx, join(ctx.config.nginxConfDir, `inveon-upstream-${p.slug}.conf`));
+    },
+  },
+
   "nginx.reload": {
     parse: (params: unknown) => (obj(params ?? {}), {}),
     async run(_p, ctx) {
@@ -607,6 +652,40 @@ export const ACTIONS: Record<string, Action<any>> = {
     async run(p: { hostnames: string[] }, ctx) {
       await exec(ctx, "certbot", ["renew", "--non-interactive"], { timeoutMs: 900_000 });
       return { certs: p.hostnames.map((h) => certExpiry(ctx.config, h)) };
+    },
+  },
+
+  /** Deletes a certificate (preview teardown) so certbot stops renewing it. */
+  "certbot.delete": {
+    parse(params: unknown) {
+      return { hostname: str(obj(params), "hostname", HOSTNAME_RE) };
+    },
+    async run(p: { hostname: string }, ctx) {
+      if (!existsSync(join(ctx.config.letsencryptDir, "renewal", `${p.hostname}.conf`)) && !existsSync(join(ctx.config.letsencryptDir, "live", p.hostname))) {
+        ctx.log(`no certificate for ${p.hostname}; nothing to delete\n`);
+        return;
+      }
+      await exec(ctx, "certbot", ["delete", "--cert-name", p.hostname, "--non-interactive"], { timeoutMs: 120_000 });
+    },
+  },
+
+  /**
+   * Deletes an environment's folder (<appsRoot>/<slug>: both colours and the
+   * data folder). Used only by preview teardown, after its containers are down.
+   */
+  "app.remove_folder": {
+    parse(params: unknown) {
+      return { slug: str(obj(params), "slug", SLUG_RE) };
+    },
+    async run(p: { slug: string }, ctx) {
+      const dir = join(ctx.config.appsRoot, p.slug);
+      if (dirname(dir) !== ctx.config.appsRoot.replace(/\/+$/, "") || !isInside(ctx.config.appsRoot, dir)) throw new ParamError("Folder escapes the apps root");
+      if (!existsSync(dir)) {
+        ctx.log(`${dir} not found; nothing to remove\n`);
+        return;
+      }
+      rmSync(dir, { recursive: true, force: true });
+      ctx.log(`removed ${dir}\n`);
     },
   },
 

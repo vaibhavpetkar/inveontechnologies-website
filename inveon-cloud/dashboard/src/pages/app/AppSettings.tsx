@@ -1,8 +1,9 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { Hammer, KeyRound, Lock, Trash2 } from "lucide-react";
+import { GitPullRequest, Hammer, KeyRound, Lock, Trash2 } from "lucide-react";
 import { api } from "../../lib/api";
 import { useOrgPath } from "../../context/AuthContext";
-import type { App } from "../../lib/types";
+import type { App, Environment, Server } from "../../lib/types";
+import { useApi } from "../../lib/useApi";
 import { CopyField, ErrorNote, Field, useAction } from "../../components/ui";
 
 function Section({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
@@ -158,15 +159,100 @@ function DeployKeySettings({ app, onSaved }: { app: App; onSaved: (app: App) => 
   );
 }
 
-export function AppSettings({ app, onSaved, extra }: { app: App; onSaved: (app: App) => void; extra?: ReactNode }) {
+/** One environment per pull request, at pr-<number>.<base domain>. */
+function PreviewSettings({ app, environments, onSaved }: { app: App; environments: Environment[]; onSaved: (app: App) => void }) {
+  const orgPath = useOrgPath();
+  const servers = useApi<{ servers: Server[] }>(orgPath("/servers"));
+  const initial = () => ({
+    previewsEnabled: app.previewsEnabled,
+    previewServerId: app.previewServerId ?? "",
+    previewBaseDomain: app.previewBaseDomain ?? "",
+    previewVarsFromEnvironmentId: app.previewVarsFromEnvironmentId ?? "",
+  });
+  const [form, setForm] = useState(initial);
+  const action = useAction();
+  useEffect(() => setForm(initial()), [app]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!form.previewServerId && servers.data?.servers[0]) setForm((f) => ({ ...f, previewServerId: servers.data!.servers[0].id }));
+  }, [servers.data, form.previewServerId]);
+  const sources = environments.filter((e) => e.previewPr === null);
+  const save = (e: FormEvent) => {
+    e.preventDefault();
+    void action.run(async () =>
+      onSaved(
+        (
+          await api<{ app: App }>(orgPath(`/apps/${app.id}`), {
+            method: "PATCH",
+            body: {
+              previewsEnabled: form.previewsEnabled,
+              previewServerId: form.previewServerId || null,
+              previewBaseDomain: form.previewBaseDomain.trim() || null,
+              previewVarsFromEnvironmentId: form.previewVarsFromEnvironmentId || null,
+            },
+          })
+        ).app,
+      ),
+    );
+  };
+  const example = `pr-12.${form.previewBaseDomain.trim() || "preview.example.com"}`;
+  return (
+    <Section icon={<GitPullRequest size={16} />} title="Preview environments">
+      <p className="muted small">
+        Each pull request gets its own environment, <code>pr-&lt;number&gt;</code>, deployed on open and on every push to it, and torn down (containers, volumes, nginx site, certificate
+        and data) when it closes. Pull requests from forks are never deployed. Turn on the <strong>Pull requests</strong> event in the GitHub webhook.
+      </p>
+      <form className="form" onSubmit={save}>
+        <label className="check">
+          <input type="checkbox" checked={form.previewsEnabled} onChange={(e) => setForm({ ...form, previewsEnabled: e.target.checked })} /> Create a preview for each pull request
+        </label>
+        <div className="row">
+          <Field label="Preview server">
+            <select value={form.previewServerId} onChange={(e) => setForm({ ...form, previewServerId: e.target.value })} required={form.previewsEnabled}>
+              {servers.data?.servers.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} ({s.status})
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Base domain" hint={`Previews live at ${example}.`}>
+            <input value={form.previewBaseDomain} onChange={(e) => setForm({ ...form, previewBaseDomain: e.target.value })} placeholder="preview.example.com" required={form.previewsEnabled} />
+          </Field>
+        </div>
+        <Field label="Copy variables and deploy settings from" hint="Copied when a preview is created. Pick a staging environment, not production: preview code can read these values.">
+          <select value={form.previewVarsFromEnvironmentId} onChange={(e) => setForm({ ...form, previewVarsFromEnvironmentId: e.target.value })}>
+            <option value="">Nothing (start empty)</option>
+            {sources.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        {form.previewsEnabled && (
+          <p className="note note-info">
+            Point a wildcard DNS record <code>*.{form.previewBaseDomain.trim() || "preview.example.com"}</code> at the preview server's IP. Each preview gets its own Let's Encrypt
+            certificate after its first deploy.
+          </p>
+        )}
+        <ErrorNote error={servers.error ?? action.error} />
+        <div className="btn-row">
+          <button className="btn btn-primary" disabled={action.busy}>
+            Save
+          </button>
+        </div>
+      </form>
+    </Section>
+  );
+}
+
+export function AppSettings({ app, environments, onSaved }: { app: App; environments: Environment[]; onSaved: (app: App) => void }) {
   return (
     <div className="stack">
       <BuildSettings app={app} onSaved={onSaved} />
       <RegistrySettings app={app} onSaved={onSaved} />
       <DeployKeySettings app={app} onSaved={onSaved} />
-      {extra}
+      <PreviewSettings app={app} environments={environments} onSaved={onSaved} />
     </div>
   );
 }
-
-export { Section as SettingsSection };

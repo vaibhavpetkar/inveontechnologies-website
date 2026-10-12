@@ -5,6 +5,7 @@ import { apps, backupConfigs, backups, deployments, environments, jobSteps, jobs
 import { ConflictError } from "../../lib/errors.js";
 import { fetchFileAtCommit, fetchHeadCommit } from "../../lib/github.js";
 import { parseReleaseCommand } from "../../lib/release-command.js";
+import { logger } from "../../lib/logger.js";
 import { createJob, notifyServer, registerJobEffect, type StepInput } from "../jobs/service.js";
 import { backupConfigured, backupParams, newBackupRow, recordBackupStep } from "../backups/routes.js";
 
@@ -18,7 +19,7 @@ export async function resolveRelease(
   db: Database,
   env: Env,
   app: App,
-  input: { commitSha?: string; commitMessage?: string | null; source: "webhook" | "manual"; userId?: string | null },
+  input: { commitSha?: string; commitMessage?: string | null; source: Release["source"]; userId?: string | null },
 ): Promise<Release> {
   let sha = input.commitSha;
   let message = input.commitMessage ?? null;
@@ -190,10 +191,26 @@ async function onDeployFinished(db: Database, job: typeof jobs.$inferSelect, ste
     return;
   }
   const previous = environment.currentReleaseId && environment.currentReleaseId !== deployment.releaseId ? environment.currentReleaseId : environment.previousReleaseId;
-  await db
+  const [updated] = await db
     .update(environments)
     .set({ currentReleaseId: deployment.releaseId, previousReleaseId: previous, activeSlot: deployment.slot })
-    .where(eq(environments.id, environment.id));
+    .where(eq(environments.id, environment.id))
+    .returning();
+  for (const [name, hook] of successHooks) {
+    try {
+      await hook(db, updated);
+    } catch (err) {
+      logger.error({ err, hook: name, environmentId: environment.id }, "Deploy hook failed");
+    }
+  }
+}
+
+type SuccessHook = (db: Database, environment: Environment) => Promise<void>;
+const successHooks = new Map<string, SuccessHook>();
+
+/** Runs after a deploy or rollback succeeds and the environment points at the new release. */
+export function onDeploySucceeded(name: string, fn: SuccessHook) {
+  successHooks.set(name, fn);
 }
 
 /**

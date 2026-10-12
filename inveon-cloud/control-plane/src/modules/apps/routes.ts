@@ -11,10 +11,12 @@ import { AppError, ConflictError, NotFoundError } from "../../lib/errors.js";
 import { parseGithubRepo } from "../../lib/github.js";
 import { generateDeployKey } from "../../lib/ssh-key.js";
 import { deployKeyAad, registryAad } from "../../lib/aad.js";
+import { HOSTNAME_RE } from "../domains/routes.js";
+import { startPreviewTeardown } from "../previews/service.js";
 import { parseReleaseCommand, RELEASE_SERVICE_RE } from "../../lib/release-command.js";
 import { slugify } from "../auth/routes.js";
 import { loadServer, publicServer } from "../servers/routes.js";
-import { envVarAad, createJob, notifyServer } from "../jobs/service.js";
+import { envVarAad, createJob, notifyServer, type Tx } from "../jobs/service.js";
 
 export const COMPOSE_PATH_RE = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._\/-]{1,200}\.ya?ml$/;
 export const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
@@ -66,6 +68,29 @@ const appBody = z.object({
   dockerfilePath: z.string().trim().regex(REL_PATH_RE, "A relative path inside the repo, without ..").default("Dockerfile"),
   buildContext: z.string().trim().regex(REL_PATH_RE, "A relative folder inside the repo, without ..").default("."),
 });
+
+/**
+ * Inserts an environment with two host ports (blue and green) allocated per
+ * server, a unique folder slug and an empty backup config. Run it inside a
+ * transaction: the advisory lock serialises port allocation per server.
+ */
+export async function createEnvironmentRecord(
+  tx: Tx,
+  app: typeof apps.$inferSelect,
+  serverId: string,
+  values: Pick<typeof environments.$inferInsert, "name" | "strategy" | "healthPath" | "autoDeploy" | "releaseCommand" | "releaseService" | "previewPr">,
+) {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${serverId}))`);
+  const [{ maxPort }] = await tx.select({ maxPort: sql<number | null>`max(${environments.greenPort})` }).from(environments).where(eq(environments.serverId, serverId));
+  const bluePort = maxPort ? maxPort + 1 : PORT_BASE;
+  const slug = `${app.slug}-${values.name}-${randomToken(4).toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 4) || "x"}`.slice(0, 60).replace(/-+$/, "");
+  const [row] = await tx
+    .insert(environments)
+    .values({ ...values, orgId: app.orgId, appId: app.id, serverId, slug, bluePort, greenPort: bluePort + 1 })
+    .returning();
+  await tx.insert(backupConfigs).values({ environmentId: row.id });
+  return row;
+}
 
 export function appsRouter(db: Database, env: Env) {
   const router = Router({ mergeParams: true });
@@ -123,8 +148,26 @@ export function appsRouter(db: Database, env: Env) {
   });
 
   router.patch("/:id", requireRole("admin"), async (req, res) => {
-    const body = appBody.partial().omit({ repoUrl: true }).parse(req.body);
+    const body = appBody
+      .partial()
+      .omit({ repoUrl: true })
+      .extend({
+        previewsEnabled: z.boolean().optional(),
+        previewServerId: z.string().uuid().nullable().optional(),
+        previewBaseDomain: z.string().trim().toLowerCase().regex(HOSTNAME_RE, "Enter a domain like preview.example.com").max(200).nullable().optional(),
+        previewVarsFromEnvironmentId: z.string().uuid().nullable().optional(),
+      })
+      .parse(req.body);
     const app = await loadApp(db, req.member!.orgId, req.params.id);
+    if (body.previewServerId) await loadServer(db, req.member!.orgId, body.previewServerId);
+    if (body.previewVarsFromEnvironmentId) {
+      const source = await db.query.environments.findFirst({ where: and(eq(environments.id, body.previewVarsFromEnvironmentId), eq(environments.appId, app.id)) });
+      if (!source || source.previewPr !== null) throw new AppError("INVALID_PREVIEW_SOURCE", "Copy variables from one of this app's own (non-preview) environments", 400);
+    }
+    const merged = { ...app, ...body };
+    if (merged.previewsEnabled && (!merged.previewServerId || !merged.previewBaseDomain)) {
+      throw new AppError("PREVIEW_SETTINGS_INCOMPLETE", "Previews need a server and a base domain", 400);
+    }
     const [updated] = await db.update(apps).set({ ...body, updatedAt: new Date() }).where(eq(apps.id, app.id)).returning();
     await audit(db, req, "app.update", "app", app.id, body);
     res.json({ app: publicApp(updated, env) });
@@ -216,19 +259,7 @@ export function appsRouter(db: Database, env: Env) {
     const body = envBody.parse(req.body);
     const app = await loadApp(db, req.member!.orgId, req.params.id);
     const server = await loadServer(db, req.member!.orgId, body.serverId);
-    const environment = await db.transaction(async (tx) => {
-      // Two host ports per environment (blue and green), allocated per server.
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${server.id}))`);
-      const [{ maxPort }] = await tx.select({ maxPort: sql<number | null>`max(${environments.greenPort})` }).from(environments).where(eq(environments.serverId, server.id));
-      const bluePort = maxPort ? maxPort + 1 : PORT_BASE;
-      const slug = `${app.slug}-${body.name}-${randomToken(4).toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 4) || "x"}`.slice(0, 60);
-      const [row] = await tx
-        .insert(environments)
-        .values({ orgId: app.orgId, appId: app.id, serverId: server.id, name: body.name, slug, strategy: body.strategy, healthPath: body.healthPath, autoDeploy: body.autoDeploy, bluePort, greenPort: bluePort + 1 })
-        .returning();
-      await tx.insert(backupConfigs).values({ environmentId: row.id });
-      return row;
-    });
+    const environment = await db.transaction((tx) => createEnvironmentRecord(tx, app, server.id, body));
     await audit(db, req, "environment.create", "environment", environment.id, { app: app.name, name: body.name, server: server.name });
     res.status(201).json({ environment });
   });
@@ -283,8 +314,15 @@ export function environmentsRouter(db: Database, env: Env) {
   });
 
   // Stops the running containers (a job on the server), then removes the record.
+  // A preview is torn down completely and removed once that job succeeds.
   router.delete("/:envId", requireRole("admin"), async (req, res) => {
     const { environment, app } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
+    if (environment.previewPr !== null) {
+      const job = await startPreviewTeardown(db, environment, app, req.user!.sub);
+      await audit(db, req, "preview.teardown", "environment", environment.id, { app: app.name, name: environment.name, jobId: job.id });
+      res.status(202).json({ ok: true, jobId: job.id, pending: true });
+      return;
+    }
     let jobId: string | null = null;
     if (environment.activeSlot) {
       const job = await createJob(db, {

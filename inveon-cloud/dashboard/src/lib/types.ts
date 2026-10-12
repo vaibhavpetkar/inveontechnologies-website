@@ -48,6 +48,10 @@ export interface App {
   buildContext: string;
   registryCredentials: { server: string; username: string | null; password: string } | null;
   deployKey: { publicKey: string } | null;
+  previewsEnabled: boolean;
+  previewServerId: string | null;
+  previewBaseDomain: string | null;
+  previewVarsFromEnvironmentId: string | null;
   webhookUrl: string;
   environmentCount?: number;
   createdAt: string;
@@ -69,6 +73,7 @@ export interface Environment {
   autoDeploy: boolean;
   releaseCommand: string | null;
   releaseService: string | null;
+  previewPr: number | null;
   createdAt: string;
   serverName?: string;
   serverIp?: string | null;
@@ -79,7 +84,7 @@ export interface Release {
   id: string;
   commitSha: string;
   commitMessage: string | null;
-  source: "webhook" | "manual";
+  source: "webhook" | "manual" | "pull_request";
   createdAt: string;
 }
 

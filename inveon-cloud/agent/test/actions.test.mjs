@@ -48,8 +48,10 @@ afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 test("the action allow-list is exactly the documented set", () => {
   assert.deepEqual(Object.keys(ACTIONS).sort(), [
+    "app.remove_folder",
     "backup.create",
     "backup.restore",
+    "certbot.delete",
     "certbot.issue",
     "certbot.renew",
     "compose.down",
@@ -61,6 +63,8 @@ test("the action allow-list is exactly the documented set", () => {
     "health.check",
     "image.build",
     "nginx.reload",
+    "nginx.remove_site",
+    "nginx.remove_upstream",
     "nginx.write_site",
     "nginx.write_upstream",
     "release.prepare",
@@ -435,6 +439,63 @@ test("release.prepare points INVEON_IMAGE at the image built on the server", asy
   const env = readFileSync(join(config.appsRoot, ref.slug, "main", ".env"), "utf8");
   assert.match(env, new RegExp(`^INVEON_IMAGE='${image}'$`, "m"));
   await assert.rejects(runAction("release.prepare", { ...ref, composeContent: "x", env: {}, commitSha: SHA, port: 20000, builtImage: "alpine:latest" }, ctx()));
+});
+
+test("preview teardown: down with volumes, remove nginx files (restored if nginx -t fails), delete cert and folder", async () => {
+  const ref = { slug: "site-pr-12-ab12", slot: "blue", composePath: "docker-compose.yml" };
+  const dir = join(config.appsRoot, ref.slug, "blue");
+  mkdirSync(dir, { recursive: true });
+  mkdirSync(join(config.appsRoot, ref.slug, "data", "uploads"), { recursive: true });
+  writeFileSync(join(dir, "docker-compose.yml"), "services: {}\n");
+  await runAction("compose.down", { ...ref, removeVolumes: true }, ctx());
+  assert.deepEqual(calls[0].args.slice(-3), ["down", "--remove-orphans", "--volumes"]);
+  calls = [];
+  await runAction("compose.down", ref, ctx());
+  assert.deepEqual(calls[0].args.slice(-2), ["down", "--remove-orphans"]);
+
+  // nginx files: removed, then put back when nginx -t fails.
+  const host = "pr-12.preview.example.com";
+  await runAction("nginx.write_site", { hostname: host, slug: ref.slug, tls: false }, ctx());
+  await runAction("nginx.write_upstream", { slug: ref.slug, port: 20010 }, ctx());
+  const site = join(config.nginxConfDir, `inveon-site-${host}.conf`);
+  const upstream = join(config.nginxConfDir, `inveon-upstream-${ref.slug}.conf`);
+  runnerImpl = async (bin) => ({ code: bin === "nginx" ? 1 : 0, stdout: "" });
+  await assert.rejects(runAction("nginx.remove_upstream", { slug: ref.slug }, ctx()), /nginx/);
+  assert.ok(existsSync(upstream), "restored after a failed nginx -t");
+  runnerImpl = async () => ({ code: 0, stdout: "" });
+  calls = [];
+  await runAction("nginx.remove_site", { hostname: host }, ctx());
+  await runAction("nginx.remove_upstream", { slug: ref.slug }, ctx());
+  assert.ok(!existsSync(site) && !existsSync(upstream));
+  assert.deepEqual(calls.map((c) => [c.bin, ...c.args]), [["nginx", "-t"], ["nginx", "-t"]]);
+  calls = [];
+  await runAction("nginx.remove_site", { hostname: host }, ctx()); // already gone: nothing to do
+  assert.equal(calls.length, 0);
+
+  // certbot delete only when a certificate exists.
+  await runAction("certbot.delete", { hostname: host }, ctx());
+  assert.equal(calls.length, 0);
+  mkdirSync(join(config.letsencryptDir, "live", host), { recursive: true });
+  await runAction("certbot.delete", { hostname: host }, ctx());
+  assert.deepEqual(calls.map((c) => [c.bin, ...c.args]), [["certbot", "delete", "--cert-name", host, "--non-interactive"]]);
+
+  await runAction("app.remove_folder", { slug: ref.slug }, ctx());
+  assert.ok(!existsSync(join(config.appsRoot, ref.slug)));
+  assert.ok(existsSync(config.appsRoot), "only the environment's own folder goes");
+
+  calls = [];
+  for (const [name, params] of [
+    ["app.remove_folder", { slug: ".." }],
+    ["app.remove_folder", { slug: "" }],
+    ["app.remove_folder", { slug: "a/../../etc" }],
+    ["nginx.remove_site", { hostname: "../../etc/nginx/nginx" }],
+    ["nginx.remove_upstream", { slug: "../x" }],
+    ["certbot.delete", { hostname: "--all" }],
+    ["compose.down", { ...ref, removeVolumes: "yes" }],
+  ]) {
+    await assert.rejects(runAction(name, params, ctx()), undefined, `${name} ${JSON.stringify(params)}`);
+  }
+  assert.equal(calls.length, 0);
 });
 
 function readdirCount(dir) {

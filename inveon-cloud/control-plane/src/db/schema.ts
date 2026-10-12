@@ -154,6 +154,13 @@ export const apps = pgTable(
     // (private half encrypted; the public half is added to GitHub by hand).
     deployKeyEnc: text("deploy_key_enc"),
     deployKeyPublic: text("deploy_key_public"),
+    // Preview environments: one per pull request (pr-<number>), on this
+    // server, at pr-<number>.<previewBaseDomain>. Variables are copied from
+    // previewVarsFromEnvironmentId when the preview is created.
+    previewsEnabled: boolean("previews_enabled").notNull().default(false),
+    previewServerId: uuid("preview_server_id").references(() => servers.id, { onDelete: "set null" }),
+    previewBaseDomain: text("preview_base_domain"),
+    previewVarsFromEnvironmentId: uuid("preview_vars_from_environment_id"),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
     updatedAt: ts("updated_at").notNull().defaultNow(),
@@ -186,6 +193,8 @@ export const environments = pgTable(
     // Stored as text, split into a validated argv: never run through a shell.
     releaseCommand: text("release_command"),
     releaseService: text("release_service"),
+    // Set on preview environments: the pull request they belong to.
+    previewPr: integer("preview_pr"),
     createdAt: createdAt(),
   },
   (t) => ({ uniqName: unique().on(t.appId, t.name), uniqPort: unique().on(t.serverId, t.bluePort) }),
@@ -215,7 +224,7 @@ export const releases = pgTable(
     commitSha: text("commit_sha").notNull(),
     commitMessage: text("commit_message"),
     composeContent: text("compose_content").notNull(),
-    source: text("source").$type<"webhook" | "manual">().notNull(),
+    source: text("source").$type<"webhook" | "manual" | "pull_request">().notNull(),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
