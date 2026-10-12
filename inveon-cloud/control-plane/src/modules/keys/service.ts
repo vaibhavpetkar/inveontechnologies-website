@@ -6,6 +6,7 @@ import { logger } from "../../lib/logger.js";
 import { envVarAad } from "../jobs/service.js";
 import { channelSecretAad, channelUrlAad } from "../alerts/service.js";
 import { totpAad, totpPendingAad } from "../auth/two-factor.js";
+import { awsSecretAad } from "../aws/service.js";
 
 /**
  * Every column holding an envelope-encrypted value, with how to rebuild its
@@ -30,6 +31,7 @@ export const ENCRYPTED_COLUMNS: EncryptedColumn[] = [
   { table: "alert_channels", column: "signing_secret_enc", extra: [], aad: (r) => channelSecretAad(r.id) },
   { table: "users", column: "totp_secret_enc", extra: [], aad: (r) => totpAad(r.id) },
   { table: "users", column: "totp_pending_secret_enc", extra: [], aad: (r) => totpPendingAad(r.id) },
+  { table: "aws_connections", column: "secret_access_key_enc", extra: ["org_id"], aad: (r) => awsSecretAad(r.org_id) },
 ];
 
 export function registerEncryptedColumn(c: EncryptedColumn) {

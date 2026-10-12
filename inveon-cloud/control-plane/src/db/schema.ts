@@ -131,8 +131,45 @@ export const servers = pgTable("servers", {
   agentVersion: text("agent_version"),
   lastSeenAt: ts("last_seen_at"),
   registeredAt: ts("registered_at"),
+  // "aws" when Inveon Cloud launched the EC2 instance itself.
+  provider: text("provider").$type<"manual" | "aws">().notNull().default("manual"),
+  // pending (launched) -> running (instance up) -> agent_online (registered);
+  // terminating -> terminated after Terminate. failed if the launch failed.
+  provisionState: text("provision_state").$type<"pending" | "running" | "agent_online" | "terminating" | "terminated" | "failed">(),
+  provisionError: text("provision_error"),
+  awsRegion: text("aws_region"),
+  awsInstanceId: text("aws_instance_id"),
+  awsInstanceType: text("aws_instance_type"),
+  awsAmiId: text("aws_ami_id"),
+  awsState: text("aws_state"),
+  awsSecurityGroupId: text("aws_security_group_id"),
+  // The security group was created for this server (deleted after termination).
+  awsCreatedSecurityGroup: boolean("aws_created_security_group").notNull().default(false),
+  terminatedAt: ts("terminated_at"),
   createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: createdAt(),
+});
+
+/**
+ * An organization's AWS account, for launching servers. Preferred: a role
+ * the control plane assumes with this external id (generated here, never
+ * chosen by the user). Otherwise an access key, its secret envelope-encrypted.
+ */
+export const awsConnections = pgTable("aws_connections", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  orgId: uuid("org_id").notNull().unique().references(() => organizations.id, { onDelete: "cascade" }),
+  // null until the connection is saved (the row exists early to hold the external id).
+  authType: text("auth_type").$type<"role" | "keys">(),
+  roleArn: text("role_arn"),
+  externalId: text("external_id").notNull(),
+  accessKeyId: text("access_key_id"),
+  secretAccessKeyEnc: text("secret_access_key_enc"),
+  defaultRegion: text("default_region").notNull().default("ap-south-1"),
+  accountId: text("account_id"),
+  verifiedAt: ts("verified_at"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: createdAt(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
 });
 
 export const serverBootstrapTokens = pgTable("server_bootstrap_tokens", {

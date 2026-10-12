@@ -27,6 +27,7 @@ import { alertsRouter } from "./modules/alerts/routes.js";
 import { configureAlerts } from "./modules/alerts/service.js";
 import { configureOutbound } from "./lib/outbound.js";
 import { platformRouter } from "./modules/keys/routes.js";
+import { awsRouter } from "./modules/aws/routes.js";
 
 export function createApp(db: Database, pool: pg.Pool, env: Env) {
   registerPreviewHooks(env);
@@ -79,6 +80,7 @@ export function createApp(db: Database, pool: pg.Pool, env: Env) {
 
   const org = Router({ mergeParams: true });
   org.use(requireAuth(env), requireMember(db));
+  org.use("/", awsRouter(db, env));
   org.use("/servers", serversRouter(db, env));
   org.use("/apps", appsRouter(db, env));
   org.use("/environments", environmentsRouter(db, env));

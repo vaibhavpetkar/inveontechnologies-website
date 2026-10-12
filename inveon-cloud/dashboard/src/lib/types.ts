@@ -42,6 +42,37 @@ export interface Server {
   lastSeenAt: string | null;
   registeredAt: string | null;
   createdAt: string;
+  provider: "manual" | "aws";
+  provisionState: "pending" | "running" | "agent_online" | "terminating" | "terminated" | "failed" | null;
+  provisionError: string | null;
+  awsRegion: string | null;
+  awsInstanceId: string | null;
+  awsInstanceType: string | null;
+  awsAmiId: string | null;
+  awsState: string | null;
+  awsSecurityGroupId: string | null;
+  awsCreatedSecurityGroup: boolean;
+  terminatedAt: string | null;
+}
+
+export interface AwsConnection {
+  connected: boolean;
+  authType: "role" | "keys" | null;
+  roleArn: string | null;
+  externalId: string;
+  accessKeyId: string | null;
+  hasSecret: boolean;
+  defaultRegion: string;
+  accountId: string | null;
+  verifiedAt: string | null;
+  updatedAt: string;
+}
+
+export interface AwsInfo {
+  connection: AwsConnection | null;
+  regions: string[];
+  instanceTypes: { id: string; arch: "x86_64" | "arm64"; vcpu: number; memoryGb: number }[];
+  disk: { min: number; max: number };
 }
 
 export interface App {

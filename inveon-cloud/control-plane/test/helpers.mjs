@@ -16,7 +16,7 @@ export const JWT_SECRET = "test-jwt-secret-".padEnd(48, "x");
 export const MASTER_KEY = Buffer.alloc(32, 7).toString("base64");
 const DATABASE_URL = process.env.TEST_DATABASE_URL;
 
-function freePort() {
+export function freePort() {
   return new Promise((resolve) => {
     const srv = createNetServer();
     srv.listen(0, () => {
@@ -59,7 +59,7 @@ async function startFakeGithub() {
   };
 }
 
-export async function startServer(extraEnv = {}) {
+export async function startServer(extraEnv = {}, { nodeArgs = [] } = {}) {
   if (!DATABASE_URL) throw new Error("Set TEST_DATABASE_URL to run the API tests");
   const github = await startFakeGithub();
   const env = {
@@ -81,7 +81,7 @@ export async function startServer(extraEnv = {}) {
   execFileSync(process.execPath, ["dist/migrate.js"], { env, stdio: "inherit" });
 
   const port = await freePort();
-  const child = spawn(process.execPath, ["dist/index.js"], { env: { ...env, INVEON_PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [...nodeArgs, "dist/index.js"], { env: { ...env, INVEON_PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"] });
   let logs = "";
   child.stdout.on("data", (d) => (logs += d));
   child.stderr.on("data", (d) => (logs += d));

@@ -325,3 +325,7 @@ textarea { resize: vertical; font-family: var(--font-mono); font-size: 0.85rem; 
 .recovery-codes { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; }
 .recovery-codes code { font-size: 0.95rem; letter-spacing: 0.04em; }
 @media (max-width: 420px) { .recovery-codes { grid-template-columns: 1fr; } }
+
+/* AWS servers */
+fieldset.field { border: none; padding: 0; margin: 0; display: grid; gap: 0.5rem; min-width: 0; }
+.modal-body pre.log { max-height: 260px; overflow: auto; white-space: pre; font-size: 0.78rem; }

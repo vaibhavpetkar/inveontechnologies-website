@@ -448,6 +448,8 @@ Then:
    as a SHA-256 hash. The script installs Docker, nginx, certbot, git, the AWS
    CLI and Node 20, registers the server, and starts `inveon-agent`. The
    per-server agent token it receives is also stored hashed.
+   Or [create the server on AWS](#creating-servers-on-aws) from the
+   dashboard, which runs the same command for you on first boot.
 2. **Add an app.** Give the GitHub repo URL, branch and compose path. Copy
    the webhook URL and secret (shown once) into the repo under Settings,
    Webhooks, with content type `application/json` and the **Pushes** event
@@ -474,6 +476,109 @@ Then:
    and you can also take one manually. A restore always takes a fresh
    backup first, in the same job. Set [retention](#backup-retention) to
    delete old backups.
+
+### Creating servers on AWS
+
+Servers, **AWS account** (admins) connects one AWS account per
+organization:
+
+- **Role (recommended).** The dashboard shows an **external id** generated
+  for the organization (`inveon-…`, never chosen by hand). Create an IAM role
+  in your account whose trust policy lets the control plane's own role
+  assume it with that external id, attach the permissions below, and paste
+  the role's ARN. The control plane calls `sts:AssumeRole` with its own
+  credentials (its EC2 instance role, or the default AWS credential chain)
+  for 15 minutes at a time. No AWS keys are stored.
+- **Access key.** An IAM user's long-term key (`AKIA…`). The secret is
+  envelope-encrypted like a secret variable, write-only, and included in
+  [master key rotation](#rotating-the-master-key).
+
+Either way, **Check and save** calls `sts:GetCallerIdentity` and only saves
+a connection that works; the account id is shown. Trust policy for the
+organization's role:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Principal": { "AWS": "arn:aws:iam::<control plane account>:role/<control plane's role>" },
+    "Action": "sts:AssumeRole",
+    "Condition": { "StringEquals": { "sts:ExternalId": "<external id from the dashboard>" } }
+  }]
+}
+```
+
+Permissions for that role (or the IAM user):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "Describe", "Effect": "Allow", "Resource": "*",
+      "Action": ["ec2:DescribeInstances", "ec2:DescribeSecurityGroups", "ec2:DescribeKeyPairs",
+                 "ec2:DescribeVpcs", "ec2:DescribeSubnets"] },
+    { "Sid": "Launch", "Effect": "Allow", "Resource": "*",
+      "Action": ["ec2:RunInstances", "ec2:CreateSecurityGroup"] },
+    { "Sid": "TagOnCreate", "Effect": "Allow", "Resource": "*", "Action": "ec2:CreateTags",
+      "Condition": { "StringEquals": { "ec2:CreateAction": ["RunInstances", "CreateSecurityGroup"] } } },
+    { "Sid": "OnlyInveonResources", "Effect": "Allow", "Resource": "*",
+      "Action": ["ec2:TerminateInstances", "ec2:AuthorizeSecurityGroupIngress", "ec2:DeleteSecurityGroup"],
+      "Condition": { "StringEquals": { "aws:ResourceTag/inveon:managed-by": "inveon-cloud" } } },
+    { "Sid": "UbuntuAmi", "Effect": "Allow", "Action": "ssm:GetParameter",
+      "Resource": "arn:aws:ssm:*::parameter/aws/service/canonical/*" },
+    { "Sid": "InstanceProfileOptional", "Effect": "Allow", "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::<account>:role/inveon-*",
+      "Condition": { "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" } } }
+  ]
+}
+```
+
+The control plane's own role needs `sts:AssumeRole` on the organizations'
+role ARNs. Drop the last statement if you don't attach instance profiles.
+
+**Create on AWS** then asks for:
+
+| Field | Rules |
+|---|---|
+| Name | 1 to 80 characters. |
+| Region | One of 16 commercial regions (`ap-south-1`, `eu-west-1`, `us-east-1`, …). |
+| Instance type | `t3.small`, `t3.medium`, `t3.large`, `t3.xlarge`, `m6i.large`, `m6i.xlarge`, or Arm `t4g.small`, `t4g.medium`, `t4g.large`, `m7g.large`. |
+| Disk | 20 to 1000 GB, gp3, encrypted, deleted with the instance. |
+| Security group | An existing one (`sg-…`, picked from the region's list), or a new one that opens 80 and 443 to everyone and, optionally, 22 to one IPv4 network between `/16` and `/32` (no SSH by default: the agent needs no inbound port). |
+| Key pair | Optional, from the region's list. |
+| Subnet, instance profile | Optional. Without a subnet, the region's default VPC. An instance profile lets the server write backups to S3. |
+
+Anything else in the request is refused. The control plane looks up the
+current Ubuntu 24.04 LTS image from Canonical's public SSM parameter
+(`/aws/service/canonical/ubuntu/server/24.04/stable/current/<amd64|arm64>/hvm/ebs-gp3/ami-id`),
+issues a fresh single-use install token (valid for 60 minutes, since boot
+and install take a few), and calls `RunInstances` with IMDSv2 required (hop
+limit 1, so containers can't reach the instance's credentials), tags
+`inveon:server-id`, `inveon:org-id` and `inveon:managed-by=inveon-cloud`,
+and cloud-init user data that runs only:
+
+```bash
+curl -fsSL --retry 10 --retry-delay 6 --retry-all-errors '<INVEON_PUBLIC_URL>/install.sh' | bash -s -- '<token>'
+```
+
+The token can be read from the instance's metadata, but it is used up when
+the agent registers. If the launch fails, a security group made for it is
+deleted and no server is left behind; the error from AWS is shown.
+
+Servers shows the state: **pending** (launched), **running** (the instance
+is up; the public IP is filled in), **agent online** (the agent
+registered), then **terminating** and **terminated**. The scheduler checks
+EC2 every 30 seconds while a server is changing; **Refresh** checks now.
+Installation logs are in `/var/log/cloud-init-output.log` on the instance.
+
+**Terminate** asks you to type the server's name. It's refused while the
+server has environments, and only for the instance whose
+`inveon:server-id` tag matches. The agent's token stops working at once.
+When EC2 reports the instance terminated, a security group created for it
+is deleted, and the server can be removed from the list (it can't be
+removed while its instance may still run). Launches, terminations and
+connection changes are audit-logged (never the secret key).
 
 ### Control plane environment variables
 
@@ -512,7 +617,8 @@ run `journalctl -u inveon-agent -f`.
 - **Roles:**
   - **owner:** members, roles, the organization and its two-factor
     requirement, and resetting a member's two-factor;
-  - **admin:** servers, apps, environments, domains, backups and their
+  - **admin:** servers (including the AWS account and EC2 launches and
+    terminations), apps, environments, domains, backups and their
     retention, release archiving, maintenance windows, alert channels,
     invites and the audit log;
   - **developer:** deploy, roll back, edit variables, read and follow
@@ -571,6 +677,11 @@ run `journalctl -u inveon-agent -f`.
   public addresses, checked on save and again at connect time with the
   resolved address pinned, and never follow redirects (SSRF). Webhook
   bodies are signed with HMAC-SHA256 over the timestamp and body.
+- **AWS:** prefer a role assumed with a per-organization external id over
+  stored keys; a stored secret key is encrypted and write-only. Launch
+  inputs are checked against allow-lists, user data only carries the
+  installer URL and a single-use token, instances require IMDSv2, and
+  terminate checks the instance's tag first.
 - **Live logs** are relayed, never stored, and stop when the viewer leaves.
   Image removal for archived releases never forces and only names images
   tagged with a full commit SHA.
@@ -580,7 +691,8 @@ run `journalctl -u inveon-agent -f`.
   streams (with the service), job cancels, registry credentials and deploy
   keys (never their values), preview creation and teardown, alert channels
   (create, update, test, secret rotation, delete; never the URL or secret),
-  master key rotations started from the dashboard,
+  master key rotations started from the dashboard, AWS connections, EC2
+  launches and terminations,
   release archiving, and deploys queued for, discarded from or started by a
   maintenance window. It records the actor, the IP and the time. Admins and owners can read it under Audit log.
 
@@ -625,7 +737,7 @@ Every encrypted value records which master key wrapped its data key:
 (key id `legacy`); `v2.<key id>.…` names any other key, and the id is also
 authenticated with the value. Encrypted values: variables, app webhook
 secrets, registry passwords, deploy keys, alert channel URLs and signing
-secrets, two-factor secrets.
+secrets, two-factor secrets and AWS secret keys.
 
 | Variable | Meaning |
 |---|---|
@@ -716,6 +828,15 @@ a fake GitHub API, and act as the agent. They cover:
   week), queuing and replacing pushes, deploying when the window opens,
   and manual deploys flagged but allowed.
 
+The EC2 tests run the control plane with a fake AWS (`test/fake-aws.mjs`,
+preloaded with `node --import`) and never call AWS. They cover the
+connection (external id, verifying before saving, the secret encrypted and
+never returned), every input check, the AMI lookup per architecture, the
+security group rules, the user data and its single-use one-hour token,
+pending to running to agent online, a failed launch cleaning up, and
+terminate (typed confirmation, environments, the tag check, the agent cut
+off, the group deleted afterwards).
+
 The agent tests cover the allow-list, parameter checks, the argument lists
 of every command (run through a fake runner), nginx rollback when `nginx -t`
 fails, health retries, backups, the release command, the clone and build
@@ -785,8 +906,8 @@ rollback.
 
 ## Phase 2
 
-- Create EC2 servers from the dashboard (AWS SDK + cloud-init that runs the
-  installer).
+- Other clouds (DigitalOcean, Hetzner) behind the same provider interface as
+  EC2, and resizing or stopping instances from the dashboard.
 - Build on a separate build host (builds run on each environment's server
   today), and a GitHub App integration for short-lived clone tokens and
   preview links posted on pull requests.
