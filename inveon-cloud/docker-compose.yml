@@ -28,6 +28,7 @@ services:
       INVEON_SMTP_USER: ${INVEON_SMTP_USER:-}
       INVEON_SMTP_PASSWORD: ${INVEON_SMTP_PASSWORD:-}
       INVEON_MAIL_FROM: ${INVEON_MAIL_FROM:-Inveon Cloud <no-reply@inveontechnologies.in>}
+      INVEON_ALERT_PRIVATE_HOSTS: ${INVEON_ALERT_PRIVATE_HOSTS:-}
     ports:
       - "127.0.0.1:4100:4100"
 

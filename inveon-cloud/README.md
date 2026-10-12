@@ -27,31 +27,42 @@ inveon-cloud/
     works behind NAT.
   - It long-polls for jobs, heartbeats every 30 seconds with host facts
     (OS, CPU, memory, disk, Docker version), and reports each step's
-    output and result.
+    output and result. It polls two lanes: the main lane runs one job at a
+    time (deploys, backups and the rest), and the stream lane runs up to 4
+    [live log streams](#live-logs) next to them, so following logs never
+    holds up a deploy.
   - It runs only a fixed list of actions with fixed argument lists:
-    `image.build`, `release.prepare|run`,
-    `compose.validate|pull|up|down|ps|logs`, `health.check`,
+    `image.build|remove`, `release.prepare|run`,
+    `compose.validate|pull|up|down|ps|logs|logs_follow`, `health.check`,
     `nginx.write_upstream|write_site|remove_site|remove_upstream|reload`,
-    `certbot.issue|renew|delete`, `backup.create|restore` and
+    `certbot.issue|renew|delete`, `backup.create|restore|delete` and
     `app.remove_folder`. The only programs it starts are `docker`, `nginx`,
     `systemctl`, `certbot`, `aws`, `tar` and `git`, always with an argv list.
     There is no shell access, every parameter is checked, and an unknown
     action fails the job before anything runs.
 - **Scheduler.** It runs inside the control plane. Every 30 seconds it:
   - marks servers offline after 90 seconds without a heartbeat;
-  - fails jobs that have been stuck for more than 60 minutes;
+  - fails jobs that have been stuck for more than 60 minutes, and ends live
+    log streams past their 10 minutes;
   - runs due health checks;
-  - queues nightly backups when each environment's backup hour arrives.
+  - queues nightly backups when each environment's backup hour arrives;
+  - deploys releases that were [waiting for a maintenance window](#maintenance-windows)
+    once it opens;
+  - retries [alert](#alerts) deliveries that are due.
 
-  Once a day it queues certificate renewals. Run only **one** control-plane
-  instance.
+  Once a day it queues certificate renewals, alerts about certificates that
+  expire within 14 days, applies [backup retention](#backup-retention),
+  [archives old releases](#release-archiving) and clears alert deliveries
+  older than 30 days. Run only **one** control-plane instance.
 
 ### Deploy flow
 
 A deploy starts from a GitHub push (signed webhook), a pull request (for
 [preview environments](#preview-environments)) or the Deploy button. It
 creates a **release**, which is the commit plus the compose file read from
-GitHub at that commit, and then a deploy job on the environment's server.
+GitHub at that commit, and then a deploy job on the environment's server
+(a push outside the environment's [maintenance windows](#maintenance-windows)
+waits for the next one).
 With the **blue/green** strategy the job runs these steps:
 
 1. **Build image** (only for apps [built on the server](#building-on-the-server)).
@@ -185,8 +196,8 @@ environment's server:
 Public repos are cloned anonymously. For private repos, generate a
 **deploy key** in the app's settings and add its public half in GitHub under
 Settings, Deploy keys, with write access off. The clone uses it over SSH
-with GitHub's published host keys pinned. Built images stay on the server;
-prune old ones with `docker image prune` until release archiving lands.
+with GitHub's published host keys pinned. Built images stay on the server
+until their release is [archived](#release-archiving).
 
 Servers installed before these features need `git` and `openssh-client`
 (`apt-get install -y git openssh-client`), the new agent bundle in
@@ -245,6 +256,144 @@ running, that commit is skipped; the next push deploys again. Nothing is
 posted back to GitHub: the GitHub integration only reads repository contents
 and can't comment, so open the preview from the dashboard or the
 `pr-<number>` URL.
+
+## Operations
+
+### Live logs
+
+App, Logs, **Live logs**: pick a compose service and how many recent lines
+to start with, and press **Follow**. The agent runs
+`docker compose logs -f --tail <N> <service>` against the live colour and
+sends its output every second; the control plane relays it to the browser
+over the job's Server-Sent Events stream and **stores none of it**.
+
+- It stops when you press Stop or leave the tab: the control plane cancels
+  the job about 3 seconds after its last viewer disconnects, and the agent
+  stops `docker` as soon as its next check-in (every 5 seconds even when the
+  service is quiet) is refused. It never runs longer than 10 minutes.
+- Streams run on the agent's stream lane, at most 4 per server (a fifth gets
+  `429`), next to deploys rather than after them.
+- Developers and up only. Every follow is audit-logged (`logs.follow`, with
+  the service). Container log jobs (the "last lines" fetch too) are readable
+  by developers and up only, since apps can print anything.
+- If no agent picks the stream up within 30 seconds (server offline, or an
+  agent from before this feature), it fails with a message saying so.
+
+### Alerts
+
+**Alerts** (owners and admins) holds the organization's notification
+channels. Each channel picks its events:
+
+| Event | When |
+|---|---|
+| `deploy.failed` / `deploy.succeeded` | A deploy or rollback finished (succeeded is off by default). |
+| `health.down` / `health.up` | A health check failed 3 times in a row / recovered. |
+| `server.offline` / `server.online` | No heartbeat for 90 seconds / the agent checks in again. |
+| `backup.failed` | A nightly, manual, pre-deploy or pre-restore backup failed. |
+| `cert.expiring` | A certificate expires within 14 days (once per certificate and expiry date). |
+
+- **Slack:** an incoming-webhook URL. Messages are plain `text` with a link
+  back to the dashboard, so Slack-compatible receivers work too.
+- **Webhook:** any https endpoint. The body is JSON
+  (`id, event, createdAt, organizationId, title, text, severity, url, details`)
+  with these headers:
+
+  ```
+  X-Inveon-Event: deploy.failed
+  X-Inveon-Delivery: <delivery id>
+  X-Inveon-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>">
+  ```
+
+  The signing secret is generated when the channel is created and shown
+  once (**New secret** rotates it). Verify with the raw body, compare in
+  constant time and reject timestamps older than a few minutes.
+- **Email:** through the control plane's SMTP settings, to the listed
+  addresses or, if none, the organization's owners and admins.
+
+Slack and webhook URLs are secrets (a Slack URL is its own credential):
+they are envelope-encrypted like secret variables and never returned; the
+dashboard shows only the scheme and host. **Send test** delivers a test
+message right away and shows the result. Every alert is queued per channel
+in Postgres and sent at once; a failure is retried after 1 minute, 5
+minutes, 30 minutes and 2 hours (5 attempts), and the **delivery log** shows
+each delivery's status, HTTP status or error and attempts for 30 days.
+
+Webhook and Slack URLs must be `https://` on a public address. On save the
+control plane refuses user names and passwords in the URL, `localhost`,
+`.local`/`.internal` names, single-label hosts and IP addresses in private,
+loopback, link-local (including `169.254.169.254`), CGNAT, multicast,
+documentation and IPv6 unique-local ranges (and IPv4 addresses mapped into
+IPv6). When sending, it resolves the name itself, refuses if any address is
+non-public, and connects to the address it checked, so DNS rebinding can't
+point it inward. Redirects are not followed. For an internal receiver on a
+trusted network, list its host in `INVEON_ALERT_PRIVATE_HOSTS`.
+
+Health checks still email owners and admins as before, unless a channel
+subscribes to that health event: then the channel takes over.
+
+### Backup retention
+
+In the Backups tab, **Delete old backups** keeps the newest backup of each
+of the last N days, plus the newest of each of the last N weeks (ISO
+weeks, UTC; 0 for none). Backups younger than 24 hours and anything still
+running are always kept; failed backups past that age are cleared.
+
+Once a day (or with **Apply retention now**, admins) a prune job asks the
+environment's server to delete the old archives with the allow-listed
+`backup.delete` action: `aws s3 rm s3://<bucket>/<key>` per key, never
+`--recursive`, and the agent checks that every key is a `.tar.gz` directly
+inside that environment's own `<prefix>/<slug>/` folder. The records are
+deleted only after the job succeeds; if any delete fails, all of them are
+kept and retried the next day. The server's AWS role needs
+`s3:DeleteObject` on the backup prefix. With bucket versioning on, a delete
+leaves a delete marker; add a lifecycle rule that expires noncurrent
+versions to actually free the space.
+
+### Release archiving
+
+Each environment keeps its last **10** deployed releases (Deploys,
+Releases; at least 2). After every successful deploy, and in a daily
+sweep, older releases are archived: a job runs the allow-listed
+`image.remove` action, `docker image rm <image>` per image (never forced,
+so Docker refuses an image a container still uses and the agent skips it),
+and when it succeeds the releases are marked archived for that environment.
+
+- The live and the previous release are never archived.
+- Only images tagged with the release's own commit SHA are removed: images
+  built on the server, and `image:` lines that resolve through
+  `${IMAGE_TAG}` or `${INVEON_COMMIT_SHA}`. Shared images such as
+  `postgres:16` are never touched, and neither is an image that another
+  environment on the same server still keeps.
+- **Roll back to this** (any kept release) and the Roll back button work as
+  before; an archived release can't be rolled back to. Deploying its commit
+  again works (the image is pulled or built afresh) and un-archives it.
+
+### Maintenance windows
+
+Deploys, Maintenance windows: add weekly windows (UTC weekday, start time
+and length; a window can run past midnight). With at least one window:
+
+- a push that arrives outside every window doesn't deploy. Its release is
+  queued on the environment, a newer push replaces it, and the scheduler
+  deploys it when the next window opens (within 30 seconds). The
+  environment shows **Waiting for the window** with the commit, and
+  developers can discard it;
+- manual deploys and rollbacks still run at any time; the dashboard warns
+  first, and the API returns `outsideMaintenanceWindow: true`;
+- the environment bar shows the next window, or that one is open now.
+
+Preview environments have no windows.
+
+### Upgrading servers for these features
+
+Live logs, backup retention and release archiving need the new agent on
+each server: copy the new bundle to `/opt/inveon-agent` and run
+`systemctl restart inveon-agent` (or run the installer again with a new
+install token). An older agent keeps working for everything else; a live
+log stream to it fails after 30 seconds with a message, and prune and
+archive jobs fail with "Action not allowed" until it is updated. Give the
+server's AWS role `s3:DeleteObject` on its backup prefix before turning on
+retention.
 
 ## Running it
 
@@ -318,11 +467,13 @@ Then:
    daily.
 6. **Health.** Set the URL and interval. After 3 failures in a row, owners
    and admins get an email that the app is down, and another when it
-   recovers. Without `INVEON_SMTP_HOST`, alerts are only logged.
+   recovers. Without `INVEON_SMTP_HOST`, emails are only logged. Add
+   [alert channels](#alerts) for Slack, webhooks or other recipients.
 7. **Backups.** Set the database service, name and user, any data folders,
    the S3 bucket, prefix and region, and the hour (UTC). Backups run nightly,
    and you can also take one manually. A restore always takes a fresh
-   backup first, in the same job.
+   backup first, in the same job. Set [retention](#backup-retention) to
+   delete old backups.
 
 ### Control plane environment variables
 
@@ -338,7 +489,8 @@ Then:
 | `INVEON_AGENT_DIR` | `../agent` | Folder with `install.sh` and `inveon-agent.tar.gz`. |
 | `INVEON_GITHUB_TOKEN` | unset | Needed for private repos. |
 | `INVEON_ACME_EMAIL` | unset | Let's Encrypt account email. |
-| `INVEON_SMTP_HOST`, `_PORT`, `_SECURE`, `_USER`, `_PASSWORD`, `INVEON_MAIL_FROM` | unset | Invites and health alerts. |
+| `INVEON_SMTP_HOST`, `_PORT`, `_SECURE`, `_USER`, `_PASSWORD`, `INVEON_MAIL_FROM` | unset | Invites, health emails and email alert channels. |
+| `INVEON_ALERT_PRIVATE_HOSTS` | unset | Comma-separated hosts that alert webhooks may reach on a private address or over plain http. Only for trusted internal endpoints. |
 | `INVEON_ACCESS_TOKEN_TTL_MIN` / `INVEON_REFRESH_TOKEN_TTL_DAYS` | `15` / `30` | |
 | `INVEON_AUTH_RATE_LIMIT` | `20` | Login, sign-up and agent registration attempts per 15 minutes per IP. |
 | `INVEON_HEARTBEAT_TIMEOUT_SEC` | `90` | |
@@ -357,10 +509,11 @@ run `journalctl -u inveon-agent -f`.
 
 - **Roles:**
   - **owner:** members, roles and the organization;
-  - **admin:** servers, apps, environments, domains, backups, invites and
-    the audit log;
-  - **developer:** deploy, roll back, edit variables, read logs, take
-    backups;
+  - **admin:** servers, apps, environments, domains, backups and their
+    retention, release archiving, maintenance windows, alert channels,
+    invites and the audit log;
+  - **developer:** deploy, roll back, edit variables, read and follow
+    container logs, take backups;
   - **viewer:** read-only.
 
   Nobody can invite above their own role. An organization always keeps at
@@ -402,14 +555,27 @@ run `journalctl -u inveon-agent -f`.
   SHA and builds with `docker build`. Note that a Dockerfile runs as root
   inside the build container, as it would in CI.
 - **Backups:** the agent uploads with `aws s3 cp --sse AES256` using the
-  server's own credentials. Use an EC2 instance role with a write-only policy
-  on the backup prefix, and turn on bucket versioning. No AWS keys are stored
-  in Inveon Cloud.
+  server's own credentials. Use an EC2 instance role limited to the backup
+  prefix (`s3:PutObject` and `s3:GetObject`, plus `s3:DeleteObject` if you
+  use retention), and turn on bucket versioning. No AWS keys are stored in
+  Inveon Cloud. Retention deletes only exact archive keys inside the
+  environment's own folder, checked again by the agent.
+- **Alerts:** Slack and webhook URLs and webhook signing secrets are
+  envelope-encrypted and write-only. Outbound requests are https-only to
+  public addresses, checked on save and again at connect time with the
+  resolved address pinned, and never follow redirects (SSRF). Webhook
+  bodies are signed with HMAC-SHA256 over the timestamp and body.
+- **Live logs** are relayed, never stored, and stop when the viewer leaves.
+  Image removal for archived releases never forces and only names images
+  tagged with a full commit SHA.
 - **Audit log:** sign-ups, org changes, members, invites, servers, apps,
   environments, variables (keys only, never values), deploys, rollbacks,
-  domains, backups, restores, log requests, job cancels, registry
-  credentials and deploy keys (never their values), and preview creation
-  and teardown. It records the actor, the IP and the time. Admins and owners can read it under Audit log.
+  domains, backups, restores, backup pruning, log requests and live log
+  streams (with the service), job cancels, registry credentials and deploy
+  keys (never their values), preview creation and teardown, alert channels
+  (create, update, test, secret rotation, delete; never the URL or secret),
+  release archiving, and deploys queued for, discarded from or started by a
+  maintenance window. It records the actor, the IP and the time. Admins and owners can read it under Audit log.
 
 ## Tests
 
@@ -439,13 +605,29 @@ a fake GitHub API, and act as the agent. They cover:
   not deploying previews, teardown and retry;
 - compose validation, including the control plane's re-check;
 - health state changes and alerts, domains and certbot, backups and
-  restores, log jobs, and the SSE stream.
+  restores, log jobs, and the SSE stream;
+- live logs: roles, the stream lane, output relayed but not stored, the
+  per-server limit, and stopping when the last viewer leaves;
+- alerts: URL checks against private and metadata addresses, write-only
+  URLs and secrets, the HMAC signature, per-channel events, retries and
+  the delivery log, email channels, and every event source (deploys,
+  health, servers, backups, certificates);
+- backup retention: the keep rule, only the environment's own keys sent
+  for deletion, records removed after success and kept after a failure;
+- release archiving: which images are removed (never shared ones or ones
+  another environment keeps), never the live or previous release, refusing
+  rollbacks to archived releases, and un-archiving on redeploy;
+- maintenance windows: the window maths (past midnight and across the
+  week), queuing and replacing pushes, deploying when the window opens,
+  and manual deploys flagged but allowed.
 
 The agent tests cover the allow-list, parameter checks, the argument lists
 of every command (run through a fake runner), nginx rollback when `nginx -t`
 fails, health retries, backups, the release command, the clone and build
 (deploy key, token, symlinks, `HEAD` check), registry login and logout,
-preview teardown and every unsafe-compose rule.
+preview teardown, every unsafe-compose rule, the exact `logs -f`,
+`aws s3 rm` and `docker image rm` argument lists with their parameter
+checks, and cancelling a live log stream while it is quiet.
 
 ## Moving the portal, the website and the CRM onto Inveon Cloud
 
@@ -515,7 +697,6 @@ rollback.
   preview links posted on pull requests.
 - Rotate the master key, move it to AWS KMS, and use mTLS for agents.
 - 2FA for owners. SSO later.
-- Metrics (Prometheus + Grafana), central logs (Loki), live `logs -f`
-  streaming, and Slack or webhook alerts.
-- Maintenance windows, archiving old releases, and backup retention rules.
+- Metrics (Prometheus + Grafana) and central logs (Loki).
+- Maintenance windows in a chosen time zone (they are UTC today).
 - Many servers behind one proxy, and wildcard certificates (DNS-01).
