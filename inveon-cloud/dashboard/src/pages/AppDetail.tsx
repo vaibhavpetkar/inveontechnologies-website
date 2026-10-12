@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation, useParams, useSearch } from "wouter";
-import { ArrowLeft, Github, Layers, Plus, RefreshCw } from "lucide-react";
+import { ArrowLeft, Github, Layers, Plus, RefreshCw, Settings } from "lucide-react";
 import { api } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useAuth, useOrgPath } from "../context/AuthContext";
@@ -12,6 +12,7 @@ import { DomainsTab } from "./app/DomainsTab";
 import { HealthTab } from "./app/HealthTab";
 import { BackupsTab } from "./app/BackupsTab";
 import { LogsTab } from "./app/LogsTab";
+import { AppSettings } from "./app/AppSettings";
 
 const TABS = ["Deploys", "Variables", "Domains", "Health", "Backups", "Logs"] as const;
 type Tab = (typeof TABS)[number];
@@ -90,6 +91,7 @@ export default function AppDetail() {
   const detail = useApi<EnvironmentDetail>(envId ? orgPath(`/environments/${envId}`) : null, 10000);
   const [newEnvOpen, setNewEnvOpen] = useState(false);
   const [secret, setSecret] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const rotate = useAction();
 
   const selectEnv = (e: string) => navigate(`/apps/${id}?env=${e}`, { replace: true });
@@ -111,6 +113,7 @@ export default function AppDetail() {
               <Github size={14} /> {a.repoOwner}/{a.repoName}
             </a>{" "}
             · {a.branch} · {a.composePath}
+            {a.buildOnServer && <> · built on the server</>}
           </>
         }
         actions={
@@ -124,6 +127,9 @@ export default function AppDetail() {
                 }}
               >
                 <RefreshCw size={16} /> Webhook secret
+              </button>
+              <button className="btn btn-ghost" onClick={() => setSettingsOpen(true)}>
+                <Settings size={16} /> Settings
               </button>
               <button className="btn btn-primary" onClick={() => setNewEnvOpen(true)}>
                 <Plus size={16} /> Environment
@@ -200,6 +206,9 @@ export default function AppDetail() {
             selectEnv(e.id);
           }}
         />
+      </Modal>
+      <Modal open={settingsOpen} title={`${a.name} settings`} onClose={() => setSettingsOpen(false)} wide>
+        <AppSettings app={a} onSaved={() => void app.reload()} />
       </Modal>
       <Modal open={!!secret} title="New webhook secret" onClose={() => setSecret(null)} wide>
         {secret && (

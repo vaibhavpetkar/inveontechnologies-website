@@ -1,6 +1,6 @@
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync, writeFileSync, mkdirSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync, writeFileSync, mkdirSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ACTIONS, isAllowedAction, runAction } from "../dist/actions.js";
@@ -59,13 +59,14 @@ test("the action allow-list is exactly the documented set", () => {
     "compose.up",
     "compose.validate",
     "health.check",
+    "image.build",
     "nginx.reload",
     "nginx.write_site",
     "nginx.write_upstream",
     "release.prepare",
     "release.run",
   ]);
-  assert.deepEqual([...ALLOWED_BINARIES].sort(), ["aws", "certbot", "docker", "nginx", "systemctl", "tar"]);
+  assert.deepEqual([...ALLOWED_BINARIES].sort(), ["aws", "certbot", "docker", "git", "nginx", "systemctl", "tar"]);
   assert.equal(isAllowedBinary("bash"), false);
   assert.equal(isAllowedBinary("sh"), false);
 });
@@ -266,6 +267,174 @@ test("release.run runs the validated argv with compose run in the new slot", asy
   ];
   for (const params of bad) await assert.rejects(runAction("release.run", params, ctx()), undefined, JSON.stringify(params));
   assert.equal(calls.length, 0);
+});
+
+const BUILD = {
+  repoOwner: "inveon-technologies",
+  repoName: "website",
+  commitSha: SHA,
+  dockerfilePath: "deploy/Dockerfile",
+  context: ".",
+  image: `inveon-build/website-1a2b3c4d:${SHA}`,
+  gitAuth: null,
+  registryAuth: null,
+};
+const DEPLOY_KEY = "-----BEGIN OPENSSH PRIVATE KEY-----\n" + "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW".repeat(3) + "\n-----END OPENSSH PRIVATE KEY-----\n";
+
+/** A fake git/docker: git init makes the folder, checkout writes the repo, rev-parse answers. */
+function fakeBuildRunner({ head = SHA, files = { "deploy/Dockerfile": "FROM nginx:alpine\n" }, onRun } = {}) {
+  let src;
+  return async (bin, args, opts, log) => {
+    onRun?.(bin, args, opts);
+    if (bin === "git" && args[0] === "init") {
+      src = args.at(-1);
+      mkdirSync(src, { recursive: true });
+    }
+    if (bin === "git" && args.includes("checkout")) {
+      for (const [f, content] of Object.entries(files)) {
+        mkdirSync(join(src, f, ".."), { recursive: true });
+        if (content.symlink) symlinkSync(content.symlink, join(src, f));
+        else writeFileSync(join(src, f), content);
+      }
+    }
+    if (bin === "git" && args.includes("rev-parse")) return { code: 0, stdout: head + "\n" };
+    log("ok\n");
+    return { code: 0, stdout: "" };
+  };
+}
+
+test("image.build clones exactly the commit with the deploy key and builds with the app's Dockerfile", async () => {
+  let keyOnDisk = null;
+  runnerImpl = fakeBuildRunner({
+    onRun: (bin, args, opts) => {
+      const m = opts.env?.GIT_SSH_COMMAND?.match(/-i (\S+)/);
+      if (m && args.includes("fetch")) keyOnDisk = { content: readFileSync(m[1], "utf8"), mode: statSync(m[1]).mode & 0o777 };
+    },
+  });
+  const c = ctx();
+  const res = await runAction("image.build", { ...BUILD, gitAuth: { type: "deploy_key", privateKey: DEPLOY_KEY } }, c);
+  assert.deepEqual(res, { image: BUILD.image });
+  const src = calls[0].args.at(-1);
+  assert.deepEqual(calls.map((x) => [x.bin, ...x.args]), [
+    ["git", "init", "--quiet", src],
+    ["git", "-C", src, "-c", "core.hooksPath=/dev/null", "fetch", "--depth", "1", "--no-tags", "--quiet", "git@github.com:inveon-technologies/website.git", SHA],
+    ["git", "-C", src, "-c", "core.hooksPath=/dev/null", "-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", "FETCH_HEAD"],
+    ["git", "-C", src, "rev-parse", "HEAD"],
+    ["docker", "build", "--pull", "--file", join(src, "deploy/Dockerfile"), "--tag", BUILD.image, "--label", `org.opencontainers.image.revision=${SHA}`, src],
+  ]);
+  const env = calls[1].opts.env;
+  assert.equal(env.GIT_TERMINAL_PROMPT, "0");
+  assert.equal(env.GIT_CONFIG_GLOBAL, "/dev/null");
+  assert.match(env.GIT_SSH_COMMAND, /-o IdentitiesOnly=yes .*-o StrictHostKeyChecking=yes -o UserKnownHostsFile=\S+known_hosts$/);
+  assert.deepEqual(keyOnDisk, { content: DEPLOY_KEY, mode: 0o600 });
+  // The key is never in argv or the log, and the clone is removed afterwards.
+  assert.ok(!JSON.stringify(calls.map((x) => x.args)).includes("PRIVATE KEY"));
+  assert.ok(!c.logs.join("").includes("PRIVATE KEY"));
+  assert.ok(!existsSync(src));
+  assert.equal(readdirCount(join(config.workDir, "tmp")), 0);
+});
+
+test("image.build: public repos clone over https; a token goes in the environment, not argv", async () => {
+  runnerImpl = fakeBuildRunner();
+  await runAction("image.build", BUILD, ctx());
+  assert.equal(calls[1].args.at(-2), "https://github.com/inveon-technologies/website.git");
+  assert.equal(calls[1].opts.env.GIT_SSH_COMMAND, undefined);
+
+  calls = [];
+  runnerImpl = fakeBuildRunner();
+  const token = "ghs_" + "a".repeat(36);
+  await runAction("image.build", { ...BUILD, gitAuth: { type: "token", token } }, ctx());
+  assert.equal(calls[1].args.at(-2), "https://github.com/inveon-technologies/website.git");
+  assert.equal(calls[1].opts.env.GIT_CONFIG_KEY_0, "http.https://github.com/.extraheader");
+  assert.equal(calls[1].opts.env.GIT_CONFIG_VALUE_0, `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`);
+  assert.ok(!JSON.stringify(calls.map((x) => x.args)).includes(token));
+});
+
+test("image.build logs in to the registry for the build and always logs out", async () => {
+  const auth = { server: "ghcr.io", username: "inveon-bot", password: "ghp_secret$value'" };
+  let stdinPassword = null;
+  let failBuild = true;
+  const inner = fakeBuildRunner();
+  runnerImpl = async (bin, args, opts, log) => {
+    if (bin === "docker" && args[0] === "login") stdinPassword = readFileSync(opts.stdinFile, "utf8");
+    if (bin === "docker" && args[0] === "build" && failBuild) return { code: 1, stdout: "" };
+    return inner(bin, args, opts, log);
+  };
+  const c = ctx();
+  await assert.rejects(runAction("image.build", { ...BUILD, registryAuth: auth }, c), /docker build exited/);
+  const docker = calls.filter((x) => x.bin === "docker");
+  assert.deepEqual(docker.map((x) => x.args.slice(0, 2)), [["login", "ghcr.io"], ["build", "--pull"], ["logout", "ghcr.io"]]);
+  assert.deepEqual(docker[0].args, ["login", "ghcr.io", "--username", "inveon-bot", "--password-stdin"]);
+  assert.equal(stdinPassword, auth.password);
+  // One throwaway DOCKER_CONFIG for login, build and logout; never root's.
+  const dockerConfig = docker[0].opts.env.DOCKER_CONFIG;
+  assert.ok(dockerConfig.startsWith(join(config.workDir, "tmp")));
+  assert.ok(docker.every((x) => x.opts.env.DOCKER_CONFIG === dockerConfig));
+  assert.ok(!existsSync(dockerConfig));
+  assert.ok(!JSON.stringify(calls).includes("ghp_secret"));
+  assert.ok(!c.logs.join("").includes("ghp_secret"));
+  assert.equal(readdirCount(join(config.workDir, "tmp")), 0);
+});
+
+test("image.build refuses bad parameters, a different HEAD and Dockerfiles outside the repo", async () => {
+  const bad = [
+    { ...BUILD, repoOwner: "../evil" },
+    { ...BUILD, repoName: ".." },
+    { ...BUILD, repoName: "site --upload-pack=touch" },
+    { ...BUILD, commitSha: "main" },
+    { ...BUILD, dockerfilePath: "../../etc/passwd" },
+    { ...BUILD, dockerfilePath: "/etc/passwd" },
+    { ...BUILD, context: "../" },
+    { ...BUILD, image: "nginx:alpine" },
+    { ...BUILD, image: `inveon-build/x:latest` },
+    { ...BUILD, gitAuth: { type: "deploy_key", privateKey: "-----BEGIN RSA PRIVATE KEY-----\nx\n" } },
+    { ...BUILD, gitAuth: { type: "password", password: "x" } },
+    { ...BUILD, gitAuth: { type: "token", token: "short" } },
+    { ...BUILD, registryAuth: { server: "ghcr.io --password x", username: "u", password: "p" } },
+    { ...BUILD, registryAuth: { server: "ghcr.io", username: "u", password: "line1\nline2" } },
+  ];
+  for (const params of bad) await assert.rejects(runAction("image.build", params, ctx()), undefined, JSON.stringify(params));
+  assert.equal(calls.length, 0);
+
+  runnerImpl = fakeBuildRunner({ head: "f".repeat(40) });
+  await assert.rejects(runAction("image.build", BUILD, ctx()), /expected 0123456789ab/);
+  assert.ok(!calls.some((x) => x.bin === "docker"));
+
+  calls = [];
+  runnerImpl = fakeBuildRunner({ files: { "deploy/Dockerfile": { symlink: "/etc/hostname" } } });
+  await assert.rejects(runAction("image.build", BUILD, ctx()), /outside the repo/);
+  assert.ok(!calls.some((x) => x.bin === "docker"));
+
+  calls = [];
+  runnerImpl = fakeBuildRunner({ files: {} });
+  await assert.rejects(runAction("image.build", BUILD, ctx()), /not found in the repo/);
+});
+
+test("compose.pull logs in with the app's credentials and only pulls missing images for local builds", async () => {
+  const ref = { slug: "site-prod-ab12", slot: "blue", composePath: "docker-compose.yml" };
+  const dir = join(config.appsRoot, ref.slug, "blue");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "docker-compose.yml"), "services: {}\n");
+  await runAction("compose.pull", { ...ref, missingOnly: true, registryAuth: null }, ctx());
+  assert.deepEqual(calls[0].args.slice(-5), ["pull", "--quiet", "--ignore-buildable", "--policy", "missing"]);
+  assert.deepEqual(calls[0].opts.env, {}, "no DOCKER_CONFIG without credentials");
+
+  calls = [];
+  await runAction("compose.pull", { ...ref, environmentId: "e", registryAuth: { server: "123456789012.dkr.ecr.ap-south-1.amazonaws.com", username: "AWS", password: "token" } }, ctx());
+  assert.deepEqual(calls.map((x) => x.args[0] === "compose" ? x.args.at(-3) : x.args[0]), ["login", "pull", "logout"]);
+  assert.deepEqual(calls[1].args.slice(-3), ["pull", "--quiet", "--ignore-buildable"]);
+  assert.ok(calls[1].opts.env.DOCKER_CONFIG);
+  assert.equal(readdirCount(join(config.workDir, "tmp")), 0);
+  await assert.rejects(runAction("compose.pull", { ...ref, missingOnly: "yes" }, ctx()));
+});
+
+test("release.prepare points INVEON_IMAGE at the image built on the server", async () => {
+  const ref = { slug: "site-prod-ab12", slot: "main", composePath: "docker-compose.yml" };
+  const image = `inveon-build/website-1a2b3c4d:${SHA}`;
+  await runAction("release.prepare", { ...ref, composeContent: "services: {}\n", env: {}, commitSha: SHA, port: 20000, builtImage: image }, ctx());
+  const env = readFileSync(join(config.appsRoot, ref.slug, "main", ".env"), "utf8");
+  assert.match(env, new RegExp(`^INVEON_IMAGE='${image}'$`, "m"));
+  await assert.rejects(runAction("release.prepare", { ...ref, composeContent: "x", env: {}, commitSha: SHA, port: 20000, builtImage: "alpine:latest" }, ctx()));
 });
 
 function readdirCount(dir) {

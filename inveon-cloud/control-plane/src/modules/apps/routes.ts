@@ -9,6 +9,8 @@ import { decryptValue, encryptValue, randomToken } from "../../lib/crypto.js";
 import { audit } from "../../lib/audit.js";
 import { AppError, ConflictError, NotFoundError } from "../../lib/errors.js";
 import { parseGithubRepo } from "../../lib/github.js";
+import { generateDeployKey } from "../../lib/ssh-key.js";
+import { deployKeyAad, registryAad } from "../../lib/aad.js";
 import { parseReleaseCommand, RELEASE_SERVICE_RE } from "../../lib/release-command.js";
 import { slugify } from "../auth/routes.js";
 import { loadServer, publicServer } from "../servers/routes.js";
@@ -19,6 +21,10 @@ export const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const PORT_BASE = 20000;
 
 const webhookAad = (appId: string) => `webhook:${appId}`;
+export const REL_PATH_RE = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._\/-]{1,200}$/;
+export const REGISTRY_SERVER_RE = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::\d{1,5})?$/;
+export const REGISTRY_USER_RE = /^[A-Za-z0-9._@+-]{1,256}$/;
+const MASK = "••••••••";
 
 export function webhookSecretFor(app: typeof apps.$inferSelect) {
   return decryptValue(app.webhookSecretEnc, webhookAad(app.id));
@@ -39,9 +45,15 @@ export async function loadEnvironment(db: Database, orgId: string, id: string) {
   return { environment, app, server };
 }
 
+/** Secrets never leave: the webhook secret, registry password and deploy key are write-only. */
 function publicApp(app: typeof apps.$inferSelect, env: Env) {
-  const { webhookSecretEnc: _w, ...rest } = app;
-  return { ...rest, webhookUrl: `${env.INVEON_PUBLIC_URL.replace(/\/$/, "")}/api/v1/webhooks/github/${app.id}` };
+  const { webhookSecretEnc: _w, registryPasswordEnc, registryServer, registryUsername, deployKeyEnc, deployKeyPublic, ...rest } = app;
+  return {
+    ...rest,
+    webhookUrl: `${env.INVEON_PUBLIC_URL.replace(/\/$/, "")}/api/v1/webhooks/github/${app.id}`,
+    registryCredentials: registryPasswordEnc && registryServer ? { server: registryServer, username: registryUsername, password: MASK } : null,
+    deployKey: deployKeyEnc && deployKeyPublic ? { publicKey: deployKeyPublic } : null,
+  };
 }
 
 const appBody = z.object({
@@ -50,6 +62,9 @@ const appBody = z.object({
   branch: z.string().trim().min(1).max(200).regex(/^[A-Za-z0-9._\/-]+$/, "Invalid branch name").default("main"),
   composePath: z.string().trim().regex(COMPOSE_PATH_RE, "Compose path must be a relative .yml/.yaml path inside the repo").default("docker-compose.yml"),
   imageRegistry: z.string().trim().max(200).regex(/^[A-Za-z0-9.\-:\/]*$/).optional().nullable(),
+  buildOnServer: z.boolean().default(false),
+  dockerfilePath: z.string().trim().regex(REL_PATH_RE, "A relative path inside the repo, without ..").default("Dockerfile"),
+  buildContext: z.string().trim().regex(REL_PATH_RE, "A relative folder inside the repo, without ..").default("."),
 });
 
 export function appsRouter(db: Database, env: Env) {
@@ -83,6 +98,9 @@ export function appsRouter(db: Database, env: Env) {
         branch: body.branch,
         composePath: body.composePath,
         imageRegistry: body.imageRegistry || null,
+        buildOnServer: body.buildOnServer,
+        dockerfilePath: body.dockerfilePath,
+        buildContext: body.buildContext,
         webhookSecretEnc: encryptValue(secret, webhookAad(id)),
         createdBy: req.user!.sub,
       })
@@ -109,6 +127,52 @@ export function appsRouter(db: Database, env: Env) {
     const app = await loadApp(db, req.member!.orgId, req.params.id);
     const [updated] = await db.update(apps).set({ ...body, updatedAt: new Date() }).where(eq(apps.id, app.id)).returning();
     await audit(db, req, "app.update", "app", app.id, body);
+    res.json({ app: publicApp(updated, env) });
+  });
+
+  // Registry login for this app's pulls and builds. Write-only: the password is never returned.
+  router.put("/:id/registry-credentials", requireRole("admin"), async (req, res) => {
+    const body = z
+      .object({
+        server: z.string().trim().toLowerCase().regex(REGISTRY_SERVER_RE, "A registry host like ghcr.io or 123456789012.dkr.ecr.ap-south-1.amazonaws.com"),
+        username: z.string().trim().regex(REGISTRY_USER_RE, "Invalid username"),
+        password: z.string().min(1).max(8192).regex(/^[^\x00-\x1f\x7f]+$/, "The password can't contain line breaks or control characters"),
+      })
+      .parse(req.body);
+    const app = await loadApp(db, req.member!.orgId, req.params.id);
+    const [updated] = await db
+      .update(apps)
+      .set({ registryServer: body.server, registryUsername: body.username, registryPasswordEnc: encryptValue(body.password, registryAad(app.id)), updatedAt: new Date() })
+      .where(eq(apps.id, app.id))
+      .returning();
+    await audit(db, req, "app.registry_credentials_set", "app", app.id, { server: body.server, username: body.username });
+    res.json({ app: publicApp(updated, env) });
+  });
+
+  router.delete("/:id/registry-credentials", requireRole("admin"), async (req, res) => {
+    const app = await loadApp(db, req.member!.orgId, req.params.id);
+    const [updated] = await db.update(apps).set({ registryServer: null, registryUsername: null, registryPasswordEnc: null, updatedAt: new Date() }).where(eq(apps.id, app.id)).returning();
+    await audit(db, req, "app.registry_credentials_delete", "app", app.id);
+    res.json({ app: publicApp(updated, env) });
+  });
+
+  // A new read-only deploy key for cloning on the server. Only the public half is ever shown.
+  router.post("/:id/deploy-key", requireRole("admin"), async (req, res) => {
+    const app = await loadApp(db, req.member!.orgId, req.params.id);
+    const key = generateDeployKey(`inveon-cloud-${app.slug}`);
+    const [updated] = await db
+      .update(apps)
+      .set({ deployKeyEnc: encryptValue(key.privateKey, deployKeyAad(app.id)), deployKeyPublic: key.publicKey, updatedAt: new Date() })
+      .where(eq(apps.id, app.id))
+      .returning();
+    await audit(db, req, "app.deploy_key_generate", "app", app.id);
+    res.status(201).json({ app: publicApp(updated, env), publicKey: key.publicKey });
+  });
+
+  router.delete("/:id/deploy-key", requireRole("admin"), async (req, res) => {
+    const app = await loadApp(db, req.member!.orgId, req.params.id);
+    const [updated] = await db.update(apps).set({ deployKeyEnc: null, deployKeyPublic: null, updatedAt: new Date() }).where(eq(apps.id, app.id)).returning();
+    await audit(db, req, "app.deploy_key_delete", "app", app.id);
     res.json({ app: publicApp(updated, env) });
   });
 

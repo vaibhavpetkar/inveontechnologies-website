@@ -7,11 +7,16 @@ import { isInside, validateCompose } from "./compose-validate.js";
 import { formatEnvFile, renderSite, renderUpstream } from "./templates.js";
 import {
   BUCKET_RE,
+  BUILT_IMAGE_RE,
   COMPOSE_PATH_RE,
   ENV_KEY_RE,
+  GITHUB_OWNER_RE,
+  GITHUB_REPO_RE,
   HOSTNAME_RE,
   ParamError,
   REGION_RE,
+  REGISTRY_SERVER_RE,
+  REGISTRY_USER_RE,
   RELEASE_ARG_RE,
   REL_PATH_RE,
   S3_KEY_RE,
@@ -114,6 +119,137 @@ function certExpiry(config: AgentConfig, hostname: string) {
 function tempDir(config: AgentConfig) {
   mkdirSync(join(config.workDir, "tmp"), { recursive: true, mode: 0o700 });
   return mkdtempSync(join(config.workDir, "tmp", "job-"));
+}
+
+// ---------------------------------------------------------------- registry login and builds
+
+interface RegistryAuth {
+  server: string;
+  username: string;
+  password: string;
+}
+
+function parseRegistryAuth(v: unknown): RegistryAuth | null {
+  if (v === null || v === undefined) return null;
+  const a = obj(v, "registryAuth");
+  const password = a.password;
+  if (typeof password !== "string" || password.length < 1 || password.length > 8192 || /[\x00-\x1f\x7f]/.test(password)) throw new ParamError("Invalid registry password");
+  return { server: str(a, "server", REGISTRY_SERVER_RE), username: str(a, "username", REGISTRY_USER_RE), password };
+}
+
+/**
+ * Runs fn logged in to the app's registry, if it has credentials. The login
+ * goes to a throwaway DOCKER_CONFIG folder for this step only (never root's
+ * ~/.docker), the password is fed on stdin from a 0600 file, and the agent
+ * logs out and deletes the folder afterwards, whatever happened.
+ */
+async function withRegistryLogin<T>(ctx: ActionContext, auth: RegistryAuth | null, fn: (env: Record<string, string>) => Promise<T>): Promise<T> {
+  if (!auth) return fn({});
+  const tmp = tempDir(ctx.config);
+  const env = { DOCKER_CONFIG: join(tmp, "docker") };
+  mkdirSync(env.DOCKER_CONFIG, { mode: 0o700 });
+  const pwFile = join(tmp, "registry-password");
+  writeFileSync(pwFile, auth.password, { mode: 0o600 });
+  try {
+    await exec(ctx, "docker", ["login", auth.server, "--username", auth.username, "--password-stdin"], { stdinFile: pwFile, env, timeoutMs: 120_000 });
+    rmSync(pwFile, { force: true });
+    return await fn(env);
+  } finally {
+    try {
+      await exec(ctx, "docker", ["logout", auth.server], { env, timeoutMs: 60_000 });
+    } catch {
+      ctx.log("docker logout failed; the login is deleted with its temporary folder anyway\n");
+    }
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+type GitAuth = { type: "deploy_key"; privateKey: string } | { type: "token"; token: string } | null;
+
+const OPENSSH_KEY_RE = /^-----BEGIN OPENSSH PRIVATE KEY-----\n[A-Za-z0-9+/=\n]{40,16384}-----END OPENSSH PRIVATE KEY-----\n?$/;
+
+function parseGitAuth(v: unknown): GitAuth {
+  if (v === null || v === undefined) return null;
+  const a = obj(v, "gitAuth");
+  if (a.type === "deploy_key") {
+    const key = a.privateKey;
+    if (typeof key !== "string" || !OPENSSH_KEY_RE.test(key)) throw new ParamError("Invalid deploy key");
+    return { type: "deploy_key", privateKey: key };
+  }
+  if (a.type === "token") return { type: "token", token: str(a, "token", /^[A-Za-z0-9_.-]{20,255}$/) };
+  throw new ParamError("Invalid gitAuth");
+}
+
+/** GitHub's published SSH host keys, so a deploy-key clone never trusts an unknown host. */
+export const GITHUB_KNOWN_HOSTS = [
+  "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl",
+  "github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=",
+].join("\n");
+
+interface BuildParams {
+  repoOwner: string;
+  repoName: string;
+  commitSha: string;
+  dockerfilePath: string;
+  context: string;
+  image: string;
+  gitAuth: GitAuth;
+  registryAuth: RegistryAuth | null;
+}
+
+/**
+ * Clones exactly one commit into a fresh folder (no hooks, no system or
+ * global git config, no prompts), checks HEAD is that commit, then runs
+ * docker build with the app's Dockerfile and tags the image with the commit.
+ * The repo URL is built here from the owner and name: only github.com.
+ */
+async function buildImage(p: BuildParams, ctx: ActionContext) {
+  const tmp = tempDir(ctx.config);
+  const src = join(tmp, "src");
+  try {
+    const gitEnv: Record<string, string> = { GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+    let url = `https://github.com/${p.repoOwner}/${p.repoName}.git`;
+    if (p.gitAuth?.type === "deploy_key") {
+      const keyFile = join(tmp, "deploy-key");
+      const knownHosts = join(tmp, "known_hosts");
+      writeFileSync(keyFile, p.gitAuth.privateKey.endsWith("\n") ? p.gitAuth.privateKey : `${p.gitAuth.privateKey}\n`, { mode: 0o600 });
+      writeFileSync(knownHosts, GITHUB_KNOWN_HOSTS + "\n", { mode: 0o600 });
+      gitEnv.GIT_SSH_COMMAND = `ssh -i ${keyFile} -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${knownHosts}`;
+      url = `git@github.com:${p.repoOwner}/${p.repoName}.git`;
+    } else if (p.gitAuth?.type === "token") {
+      // In the environment, not argv: tokens don't show up in ps or the log.
+      gitEnv.GIT_CONFIG_COUNT = "1";
+      gitEnv.GIT_CONFIG_KEY_0 = "http.https://github.com/.extraheader";
+      gitEnv.GIT_CONFIG_VALUE_0 = `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${p.gitAuth.token}`).toString("base64")}`;
+    }
+    const git = (args: string[], opts: ExecOptions = {}) => exec(ctx, "git", args, { env: gitEnv, timeoutMs: 600_000, ...opts });
+    await git(["init", "--quiet", src]);
+    await git(["-C", src, "-c", "core.hooksPath=/dev/null", "fetch", "--depth", "1", "--no-tags", "--quiet", url, p.commitSha]);
+    await git(["-C", src, "-c", "core.hooksPath=/dev/null", "-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", "FETCH_HEAD"]);
+    const { stdout } = await git(["-C", src, "rev-parse", "HEAD"], { captureStdout: true });
+    if (stdout.trim() !== p.commitSha) throw new Error(`Checked out ${stdout.trim().slice(0, 12)}, expected ${p.commitSha.slice(0, 12)}`);
+
+    // Symlinks in the repo must not point the build at files outside it.
+    const root = realpathSync(src);
+    const inRepo = (rel: string, what: string) => {
+      const full = join(src, rel);
+      if (!existsSync(full)) throw new Error(`${what} ${rel} not found in the repo at ${p.commitSha.slice(0, 7)}`);
+      const real = realpathSync(full);
+      if (!isInside(root, real)) throw new Error(`${what} ${rel} points outside the repo`);
+      return real;
+    };
+    const dockerfile = inRepo(p.dockerfilePath, "Dockerfile");
+    const context = inRepo(p.context, "Build context");
+    if (!statSync(context).isDirectory()) throw new Error(`Build context ${p.context} is not a folder`);
+
+    await withRegistryLogin(ctx, p.registryAuth, (env) =>
+      exec(ctx, "docker", ["build", "--pull", "--file", dockerfile, "--tag", p.image, "--label", `org.opencontainers.image.revision=${p.commitSha}`, context], { env, timeoutMs: 60 * 60_000 }),
+    );
+    ctx.log(`built ${p.image}\n`);
+    return { image: p.image };
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 // ---------------------------------------------------------------- backups
@@ -247,6 +383,7 @@ export const ACTIONS: Record<string, Action<any>> = {
         commitSha: str(p, "commitSha", SHA_RE),
         port: int(p, "port", 1024, 65535),
         imageRegistry: optStr(p, "imageRegistry", /^[A-Za-z0-9.\-:\/]{1,200}$/),
+        builtImage: optStr(p, "builtImage", BUILT_IMAGE_RE),
       };
     },
     async run(p, ctx) {
@@ -265,12 +402,13 @@ export const ACTIONS: Record<string, Action<any>> = {
           INVEON_COMMIT_SHA: p.commitSha,
           IMAGE_TAG: p.env.IMAGE_TAG ?? p.commitSha,
           ...(p.imageRegistry ? { IMAGE_REGISTRY: p.imageRegistry } : {}),
+          ...(p.builtImage ? { INVEON_IMAGE: p.builtImage } : {}),
         }),
         0o600,
       );
       ctx.log(`wrote ${paths.composeFile}\nwrote ${envFile} (${Object.keys(p.env).length} app variables, values not logged)\n`);
     },
-  } satisfies Action<AppRef & { composeContent: string; env: Record<string, string>; commitSha: string; port: number; imageRegistry: string | null }>,
+  } satisfies Action<AppRef & { composeContent: string; env: Record<string, string>; commitSha: string; port: number; imageRegistry: string | null; builtImage: string | null }>,
 
   /** docker compose config --format json, then the shared validator on the resolved model. */
   "compose.validate": {
@@ -304,7 +442,43 @@ export const ACTIONS: Record<string, Action<any>> = {
     },
   },
 
-  "compose.pull": composeSimple(["pull", "--quiet", "--ignore-buildable"], "pull"),
+  /**
+   * Pulls the release's images, logged in to the app's registry when it has
+   * credentials. missingOnly (for images built on this server) skips images
+   * that are already here, so the local build isn't looked up remotely.
+   */
+  "compose.pull": {
+    parse(params: unknown) {
+      const p = obj(params);
+      const missingOnly = p.missingOnly === undefined ? false : bool(p, "missingOnly");
+      return { ...parseAppRef(p), missingOnly, registryAuth: parseRegistryAuth(p.registryAuth) };
+    },
+    async run(p: AppRef & { missingOnly: boolean; registryAuth: RegistryAuth | null }, ctx) {
+      const paths = appPaths(ctx.config, p);
+      if (!existsSync(paths.composeFile)) throw new Error(`${paths.composeFile} not found (prepare the release first)`);
+      const args = ["pull", "--quiet", "--ignore-buildable", ...(p.missingOnly ? ["--policy", "missing"] : [])];
+      await withRegistryLogin(ctx, p.registryAuth, (env) => exec(ctx, "docker", composeArgs(ctx.config, p, ...args), { env, timeoutMs: 30 * 60_000 }));
+      ctx.log("pull done\n");
+    },
+  },
+
+  /** Clone one commit and docker build it (repos without a CI image). */
+  "image.build": {
+    parse(params: unknown): BuildParams {
+      const p = obj(params);
+      return {
+        repoOwner: str(p, "repoOwner", GITHUB_OWNER_RE),
+        repoName: str(p, "repoName", GITHUB_REPO_RE),
+        commitSha: str(p, "commitSha", SHA_RE),
+        dockerfilePath: str(p, "dockerfilePath", REL_PATH_RE),
+        context: str(p, "context", REL_PATH_RE),
+        image: str(p, "image", BUILT_IMAGE_RE),
+        gitAuth: parseGitAuth(p.gitAuth),
+        registryAuth: parseRegistryAuth(p.registryAuth),
+      };
+    },
+    run: buildImage,
+  },
   "compose.up": composeSimple(["up", "-d", "--remove-orphans"], "up"),
   "compose.down": composeSimple(["down", "--remove-orphans"], "down"),
   "compose.ps": composeSimple(["ps"], "ps"),

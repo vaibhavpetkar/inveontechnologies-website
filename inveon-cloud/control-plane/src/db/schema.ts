@@ -140,6 +140,20 @@ export const apps = pgTable(
     imageRegistry: text("image_registry"),
     // Envelope-encrypted HMAC secret for the GitHub push webhook.
     webhookSecretEnc: text("webhook_secret_enc").notNull(),
+    // For repos without a CI image: the agent clones the commit and runs
+    // docker build on the server. The compose file uses ${INVEON_IMAGE}.
+    buildOnServer: boolean("build_on_server").notNull().default(false),
+    dockerfilePath: text("dockerfile_path").notNull().default("Dockerfile"),
+    buildContext: text("build_context").notNull().default("."),
+    // Registry login for pulls and builds. The password is write-only and
+    // envelope-encrypted; the agent logs in for the job and logs out after.
+    registryServer: text("registry_server"),
+    registryUsername: text("registry_username"),
+    registryPasswordEnc: text("registry_password_enc"),
+    // Read-only SSH deploy key for cloning private repos on the server
+    // (private half encrypted; the public half is added to GitHub by hand).
+    deployKeyEnc: text("deploy_key_enc"),
+    deployKeyPublic: text("deploy_key_public"),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
     updatedAt: ts("updated_at").notNull().defaultNow(),

@@ -38,6 +38,11 @@ export async function resolveRelease(
   return release ?? (await db.query.releases.findFirst({ where: and(eq(releases.appId, app.id), eq(releases.commitSha, sha)) }))!;
 }
 
+/** Images built on the server live in their own local namespace, tagged with the commit. */
+export function builtImageName(app: App, commitSha: string) {
+  return `inveon-build/${app.slug}-${app.id.slice(0, 8)}:${commitSha}`;
+}
+
 export function slotPort(environment: Environment, slot: Slot) {
   return slot === "green" ? environment.greenPort : environment.bluePort;
 }
@@ -64,11 +69,35 @@ export interface DeployExtras {
 export function deploySteps(environment: Environment, app: App, release: Release, slot: Slot, previousSlot: Slot | null, extras: DeployExtras = {}): StepInput[] {
   const base = { slug: environment.slug, slot, composePath: app.composePath };
   const port = slotPort(environment, slot);
-  const steps: StepInput[] = [
-    { name: `Prepare release ${release.commitSha.slice(0, 7)}`, action: "release.prepare", params: { ...base, releaseId: release.id, environmentId: environment.id, commitSha: release.commitSha, port } },
+  const steps: StepInput[] = [];
+  // No CI image: clone the commit and build it here first. Credentials (deploy
+  // key, registry login) are added when the agent claims the job.
+  const image = app.buildOnServer ? builtImageName(app, release.commitSha) : null;
+  if (image) {
+    steps.push({
+      name: `Build image ${release.commitSha.slice(0, 7)}`,
+      action: "image.build",
+      params: {
+        environmentId: environment.id,
+        repoOwner: app.repoOwner,
+        repoName: app.repoName,
+        commitSha: release.commitSha,
+        dockerfilePath: app.dockerfilePath,
+        context: app.buildContext,
+        image,
+      },
+    });
+  }
+  steps.push(
+    {
+      name: `Prepare release ${release.commitSha.slice(0, 7)}`,
+      action: "release.prepare",
+      params: { ...base, releaseId: release.id, environmentId: environment.id, commitSha: release.commitSha, port, ...(image ? { builtImage: image } : {}) },
+    },
     { name: "Validate compose file", action: "compose.validate", params: base },
-    { name: "Pull images", action: "compose.pull", params: base },
-  ];
+    // A built image is only local, so only pull what is missing.
+    { name: "Pull images", action: "compose.pull", params: { ...base, environmentId: environment.id, missingOnly: !!image } },
+  );
   if (environment.releaseCommand && environment.releaseService) {
     if (extras.backup) steps.push({ name: "Back up before the release command", action: "backup.create", params: extras.backup });
     steps.push({

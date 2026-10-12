@@ -43,6 +43,11 @@ export interface App {
   branch: string;
   composePath: string;
   imageRegistry: string | null;
+  buildOnServer: boolean;
+  dockerfilePath: string;
+  buildContext: string;
+  registryCredentials: { server: string; username: string | null; password: string } | null;
+  deployKey: { publicKey: string } | null;
   webhookUrl: string;
   environmentCount?: number;
   createdAt: string;

@@ -6,6 +6,7 @@ import { decryptValue } from "../../lib/crypto.js";
 import { AppError, ConflictError, NotFoundError } from "../../lib/errors.js";
 import { logger } from "../../lib/logger.js";
 import { validateCompose } from "../../lib/compose-validate.js";
+import { deployKeyAad, registryAad } from "../../lib/aad.js";
 
 export type JobStatus = "pending" | "running" | "success" | "failure" | "cancelled";
 export const TERMINAL: JobStatus[] = ["success", "failure", "cancelled"];
@@ -97,6 +98,11 @@ export async function buildAgentPayload(db: Database, job: Job, steps: Step[]) {
   const out = [];
   for (const s of steps) {
     const params: Record<string, unknown> = { ...s.params };
+    if (s.action === "image.build" || (s.action === "compose.pull" && params.environmentId)) {
+      const { app } = await ownedEnvironment(db, job, String(params.environmentId));
+      params.registryAuth = registryAuthFor(app);
+      if (s.action === "image.build") params.gitAuth = gitAuthFor(app);
+    }
     if (s.action === "release.prepare") {
       const release = await db.query.releases.findFirst({ where: eq(releases.id, String(params.releaseId)) });
       const environment = await db.query.environments.findFirst({ where: eq(environments.id, String(params.environmentId)) });
@@ -109,6 +115,32 @@ export async function buildAgentPayload(db: Database, job: Job, steps: Step[]) {
     out.push({ id: s.id, position: s.position, name: s.name, action: s.action, params });
   }
   return { id: job.id, type: job.type, title: job.title, steps: out };
+}
+
+async function ownedEnvironment(db: Database, job: Job, environmentId: string) {
+  const environment = await db.query.environments.findFirst({ where: eq(environments.id, environmentId) });
+  if (!environment || environment.serverId !== job.serverId) throw new AppError("BAD_JOB", "Environment missing", 409);
+  const app = await db.query.apps.findFirst({ where: eq(apps.id, environment.appId) });
+  if (!app) throw new AppError("BAD_JOB", "App missing", 409);
+  return { environment, app };
+}
+
+/** The app's registry login, decrypted for this job only. */
+function registryAuthFor(app: typeof apps.$inferSelect) {
+  if (!app.registryServer || !app.registryUsername || !app.registryPasswordEnc) return null;
+  return { server: app.registryServer, username: app.registryUsername, password: decryptValue(app.registryPasswordEnc, registryAad(app.id)) };
+}
+
+/**
+ * How the agent clones the repo. The only GitHub integration is the
+ * control plane's own read token (INVEON_GITHUB_TOKEN), which is long-lived
+ * and is never sent to servers, so there is no short-lived token to mint:
+ * private repos use the app's deploy key, public repos clone anonymously.
+ * The agent also accepts { type: "token" } for a future GitHub App.
+ */
+function gitAuthFor(app: typeof apps.$inferSelect) {
+  if (app.deployKeyEnc) return { type: "deploy_key", privateKey: decryptValue(app.deployKeyEnc, deployKeyAad(app.id)) };
+  return null;
 }
 
 export async function decryptEnvironmentVars(db: Database, environmentId: string): Promise<Record<string, string>> {

@@ -19,6 +19,12 @@ export const S3_KEY_RE = /^[A-Za-z0-9._\/-]{1,512}$/;
 export const REGION_RE = /^[a-z]{2}(-[a-z]+)+-\d$/;
 /** One word of a release command: nothing a shell would interpret (same rule as the control plane). */
 export const RELEASE_ARG_RE = /^[A-Za-z0-9_@%+=:,./-]{1,200}$/;
+/** Images built on the server: a fixed local namespace, tagged with the commit. */
+export const BUILT_IMAGE_RE = /^inveon-build\/[a-z0-9][a-z0-9-]{0,80}:[0-9a-f]{40}$/;
+export const GITHUB_OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+export const GITHUB_REPO_RE = /^(?!\.\.?$)[A-Za-z0-9._-]{1,100}$/;
+export const REGISTRY_SERVER_RE = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::\d{1,5})?$/;
+export const REGISTRY_USER_RE = /^[A-Za-z0-9._@+-]{1,256}$/;
 export const URL_PATH_RE = /^\/[A-Za-z0-9._~\/?=&%-]{0,200}$/;
 
 export function obj(v: unknown, what = "params"): Obj {

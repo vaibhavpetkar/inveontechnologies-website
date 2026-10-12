@@ -15,6 +15,13 @@
       "when": 1791823101776,
       "tag": "0001_release_command",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791823391196,
+      "tag": "0002_build_on_server",
+      "breakpoints": true
     }
   ]
 }
