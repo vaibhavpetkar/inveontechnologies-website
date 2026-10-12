@@ -74,6 +74,7 @@ export interface Environment {
   releaseCommand: string | null;
   releaseService: string | null;
   previewPr: number | null;
+  keepReleases: number;
   createdAt: string;
   serverName?: string;
   serverIp?: string | null;
@@ -270,4 +271,14 @@ export interface AlertDelivery {
   detail: string | null;
   createdAt: string;
   deliveredAt: string | null;
+}
+
+export interface DeployedRelease {
+  releaseId: string;
+  commitSha: string;
+  commitMessage: string | null;
+  lastDeployedAt: string;
+  archivedAt: string | null;
+  current: boolean;
+  previous: boolean;
 }

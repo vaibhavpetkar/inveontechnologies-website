@@ -315,3 +315,4 @@ textarea { resize: vertical; font-family: var(--font-mono); font-size: 0.85rem; 
 .checks legend { margin-bottom: 0.25rem; }
 .checks .check { padding: 0.3rem 0; }
 .btn-row.no-margin { margin-top: 0; }
+.row-archived td { opacity: 0.6; }

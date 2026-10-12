@@ -66,3 +66,8 @@ export function oneOf<T extends string>(p: Obj, key: string, values: readonly T[
 
 export const SLOTS = ["blue", "green", "main"] as const;
 export type Slot = (typeof SLOTS)[number];
+/**
+ * An image reference with a tag and no digest (registry/name:tag). Used only
+ * for removing archived releases' images, whose tag must carry a commit SHA.
+ */
+export const IMAGE_REF_RE = /^(?:[a-z0-9][a-z0-9.-]*(?::\d{1,5})?\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;

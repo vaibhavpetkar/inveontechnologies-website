@@ -299,6 +299,8 @@ export function environmentsRouter(db: Database, env: Env) {
         autoDeploy: z.boolean().optional(),
         releaseCommand: z.string().trim().max(2000).nullable().optional().transform((v) => (v === "" ? null : v)),
         releaseService: z.string().trim().regex(RELEASE_SERVICE_RE, "Enter the compose service name").nullable().optional().or(z.literal("").transform(() => null)),
+        // Release archiving: at least the live and the previous release are kept.
+        keepReleases: z.number().int().min(2).max(100).optional(),
       })
       .parse(req.body);
     const { environment } = await loadEnvironment(db, req.member!.orgId, req.params.envId);

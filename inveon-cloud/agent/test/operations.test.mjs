@@ -202,3 +202,37 @@ test("backup.delete tries every key and fails the step if any delete failed", as
   assert.equal(calls.length, 3);
   assert.match(c.logs.join(""), /deleted 2 of 3/);
 });
+
+// ---------------------------------------------------------------- release archiving
+
+const SHA_A = "0123456789abcdef0123456789abcdef01234567";
+
+test("image.remove runs `docker image rm` (never forced) per image and skips images in use", async () => {
+  const images = [`ghcr.io/inveon-technologies/website:${SHA_A}`, `inveon-build/site-1a2b3c4d:${SHA_A}`, `localhost:5000/team/api:sha-${SHA_A}`];
+  runnerImpl = async (_bin, args) => ({ code: args[2].startsWith("inveon-build/") ? 1 : 0, stdout: "" });
+  const c = ctx();
+  const result = await runAction("image.remove", { images }, c);
+  assert.deepEqual(calls.map((x) => [x.bin, ...x.args]), images.map((i) => ["docker", "image", "rm", i]));
+  assert.ok(calls.every((x) => !x.args.includes("-f") && !x.args.includes("--force")));
+  assert.deepEqual(result, { removed: [images[0], images[2]], skipped: [images[1]] });
+  assert.match(c.logs.join(""), /removed 2 image\(s\), skipped 1/);
+});
+
+test("image.remove only accepts tagged references that carry a commit SHA", async () => {
+  const bad = [
+    { images: [] },
+    { images: ["postgres:16"] },
+    { images: ["nginx:alpine"] },
+    { images: ["ghcr.io/inveon/site"] }, // no tag
+    { images: [`ghcr.io/inveon/site@sha256:${"a".repeat(64)}`] },
+    { images: [`-f`] },
+    { images: [`--force ghcr.io/x:${SHA_A}`] },
+    { images: [`ghcr.io/x:${SHA_A}; docker system prune -af`] },
+    { images: [`GHCR.IO/X:${SHA_A}`] },
+    { images: [`ghcr.io/${SHA_A}/site:latest`] }, // the SHA must be in the tag
+    { images: Array.from({ length: 101 }, () => `ghcr.io/x:${SHA_A}`) },
+    { images: "ghcr.io/x" },
+  ];
+  for (const p of bad) await assert.rejects(runAction("image.remove", p, ctx()), undefined, JSON.stringify(p).slice(0, 100));
+  assert.equal(calls.length, 0);
+});

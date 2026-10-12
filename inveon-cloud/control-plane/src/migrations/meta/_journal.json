@@ -43,6 +43,13 @@
       "when": 1791825377943,
       "tag": "0005_backup_retention",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791825632368,
+      "tag": "0006_release_archive",
+      "breakpoints": true
     }
   ]
 }

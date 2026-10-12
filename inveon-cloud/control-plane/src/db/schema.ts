@@ -195,6 +195,9 @@ export const environments = pgTable(
     releaseService: text("release_service"),
     // Set on preview environments: the pull request they belong to.
     previewPr: integer("preview_pr"),
+    // Release archiving: how many recently deployed releases keep their
+    // images on the server (the live and previous ones always do).
+    keepReleases: integer("keep_releases").notNull().default(10),
     createdAt: createdAt(),
   },
   (t) => ({ uniqName: unique().on(t.appId, t.name), uniqPort: unique().on(t.serverId, t.bluePort) }),
@@ -229,6 +232,22 @@ export const releases = pgTable(
     createdAt: createdAt(),
   },
   (t) => ({ uniq: unique().on(t.appId, t.commitSha) }),
+);
+
+/**
+ * A release that is archived for one environment: its images were pruned
+ * from that environment's server and it can no longer be rolled back to
+ * there. Deploying the same commit again (a fresh build or pull) un-archives it.
+ */
+export const archivedReleases = pgTable(
+  "archived_releases",
+  {
+    environmentId: uuid("environment_id").notNull().references(() => environments.id, { onDelete: "cascade" }),
+    releaseId: uuid("release_id").notNull().references(() => releases.id, { onDelete: "cascade" }),
+    jobId: uuid("job_id"),
+    archivedAt: ts("archived_at").notNull().defaultNow(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.environmentId, t.releaseId] }) }),
 );
 
 // ---------------------------------------------------------------- jobs

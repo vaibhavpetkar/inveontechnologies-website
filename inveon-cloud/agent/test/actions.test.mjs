@@ -64,6 +64,7 @@ test("the action allow-list is exactly the documented set", () => {
     "compose.validate",
     "health.check",
     "image.build",
+    "image.remove",
     "nginx.reload",
     "nginx.remove_site",
     "nginx.remove_upstream",

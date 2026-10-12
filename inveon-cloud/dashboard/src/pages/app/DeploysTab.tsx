@@ -8,6 +8,7 @@ import { dateTime, shortSha, timeAgo } from "../../lib/format";
 import { Empty, ErrorNote, Field, StatusBadge, useAction } from "../../components/ui";
 import { JobView } from "../../components/JobView";
 import { ReleaseCommandCard } from "./ReleaseCommand";
+import { ReleasesCard } from "./ReleasesCard";
 
 /** A failed deploy: why, the release command's output, and the backup taken before it. */
 function FailedDeploy({ d, onRestore, busy }: { d: Deployment; onRestore: (backupId: string) => void; busy: boolean }) {
@@ -52,6 +53,7 @@ export function DeploysTab({ detail, reload }: { detail: EnvironmentDetail; relo
   const list = useApi<{ deployments: Deployment[] }>(orgPath(`/environments/${env.id}/deployments`), 8000);
   const [jobId, setJobId] = useState<string | null>(null);
   const [sha, setSha] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
   const action = useAction();
 
   const deploy = (kind: "deploy" | "rollback") =>
@@ -131,10 +133,13 @@ export function DeploysTab({ detail, reload }: { detail: EnvironmentDetail; relo
             onFinished={() => {
               reload();
               void list.reload();
+              setRefreshKey((k) => k + 1);
             }}
           />
         </div>
       )}
+
+      <ReleasesCard detail={detail} reload={reload} onJob={setJobId} refreshKey={refreshKey} />
 
       <ReleaseCommandCard detail={detail} reload={reload} />
 

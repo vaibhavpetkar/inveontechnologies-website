@@ -13,6 +13,7 @@ import {
   GITHUB_OWNER_RE,
   GITHUB_REPO_RE,
   HOSTNAME_RE,
+  IMAGE_REF_RE,
   ParamError,
   REGION_RE,
   REGISTRY_SERVER_RE,
@@ -503,6 +504,39 @@ export const ACTIONS: Record<string, Action<any>> = {
     },
     run: buildImage,
   },
+  /**
+   * Release archiving: `docker image rm <ref>` for images of releases that
+   * are no longer kept. Never forced, so Docker refuses an image a container
+   * still uses; such images (and ones already gone) are skipped, not errors.
+   * Every reference must be tagged with a full commit SHA, so shared base
+   * images like postgres:16 can never be named here.
+   */
+  "image.remove": {
+    parse(params: unknown) {
+      const p = obj(params);
+      const images = p.images;
+      if (!Array.isArray(images) || images.length < 1 || images.length > 100) throw new ParamError("Invalid images");
+      for (const ref of images) {
+        if (typeof ref !== "string" || ref.length > 255 || !IMAGE_REF_RE.test(ref) || !/[0-9a-f]{40}/.test(ref.slice(ref.lastIndexOf(":") + 1))) {
+          throw new ParamError(`Invalid image ${String(ref).slice(0, 80)}`);
+        }
+      }
+      return { images: images as string[] };
+    },
+    async run(p: { images: string[] }, ctx) {
+      const removed: string[] = [];
+      const skipped: string[] = [];
+      for (const ref of p.images) {
+        ctx.log(`$ docker image rm ${ref}\n`);
+        const r = await ctx.runner("docker", ["image", "rm", ref], { timeoutMs: 120_000 }, ctx.log);
+        (r.code === 0 ? removed : skipped).push(ref);
+        if (r.code !== 0) ctx.log(`kept ${ref} (in use or already removed)\n`);
+      }
+      ctx.log(`removed ${removed.length} image(s), skipped ${skipped.length}\n`);
+      return { removed, skipped };
+    },
+  },
+
   "compose.up": composeSimple(["up", "-d", "--remove-orphans"], "up"),
   /** Stops a slot. removeVolumes (preview teardown) also deletes its named volumes. */
   "compose.down": {

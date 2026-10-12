@@ -12,6 +12,7 @@ import { logger } from "../../lib/logger.js";
 import { loadEnvironment, webhookSecretFor } from "../apps/routes.js";
 import { createJob, notifyServer } from "../jobs/service.js";
 import { createDeployment, resolveRelease } from "./service.js";
+import { archiveOldReleases, deployedReleases, releaseBeingArchived } from "./archive.js";
 import { LOG_FOLLOW_MAX_SEC, startLogFollow } from "../live-logs/service.js";
 import { previewName, previewsReady, startPreviewTeardown, upsertPreviewEnvironment } from "../previews/service.js";
 
@@ -27,15 +28,45 @@ export function deploysRouter(db: Database, env: Env) {
     res.status(201).json({ job, deployment, release: { id: release.id, commitSha: release.commitSha } });
   });
 
-  // Rollback = a normal deploy job targeting the previous release.
+  // Rollback = a normal deploy job targeting the previous release, or an
+  // older release that went live here and is not archived.
   router.post("/:envId/rollback", requireRole("developer"), async (req, res) => {
+    const body = z.object({ releaseId: z.string().uuid().optional() }).parse(req.body ?? {});
     const { environment, app } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
-    if (!environment.previousReleaseId) throw new AppError("NO_PREVIOUS_RELEASE", "There is no previous release to roll back to", 400);
-    const release = await db.query.releases.findFirst({ where: eq(releases.id, environment.previousReleaseId) });
-    if (!release) throw new NotFoundError("Previous release not found");
+    const targetId = body.releaseId ?? environment.previousReleaseId;
+    if (!targetId) throw new AppError("NO_PREVIOUS_RELEASE", "There is no previous release to roll back to", 400);
+    if (targetId === environment.currentReleaseId) throw new AppError("ALREADY_LIVE", "That release is already live", 400);
+    const deployedHere = (await deployedReleases(db, environment.id)).find((r) => r.releaseId === targetId);
+    if (!deployedHere) throw new AppError("NOT_DEPLOYED_HERE", "You can only roll back to a release that was live in this environment", 400);
+    if (deployedHere.archivedAt) throw new AppError("RELEASE_ARCHIVED", "That release is archived (its images were removed from the server), so it can't be rolled back to. Deploy its commit again instead.", 400);
+    if (await releaseBeingArchived(db, environment.id, targetId)) throw new ConflictError("That release is being archived right now; deploy its commit again instead");
+    const release = await db.query.releases.findFirst({ where: and(eq(releases.id, targetId), eq(releases.appId, app.id)) });
+    if (!release) throw new NotFoundError("Release not found");
     const { job, deployment } = await createDeployment(db, { environment, app, release, kind: "rollback", userId: req.user!.sub });
     await audit(db, req, "deploy.rollback", "environment", environment.id, { jobId: job.id, commitSha: release.commitSha });
     res.status(201).json({ job, deployment, release: { id: release.id, commitSha: release.commitSha } });
+  });
+
+  // Releases that went live here, newest first, with their archive state.
+  router.get("/:envId/releases", async (req, res) => {
+    const { environment } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
+    const list = await deployedReleases(db, environment.id);
+    res.json({
+      keepReleases: environment.keepReleases,
+      releases: list.slice(0, 100).map((r) => ({
+        ...r,
+        current: r.releaseId === environment.currentReleaseId,
+        previous: r.releaseId === environment.previousReleaseId,
+      })),
+    });
+  });
+
+  // Archives what is past the environment's keepReleases now.
+  router.post("/:envId/releases/archive", requireRole("admin"), async (req, res) => {
+    const { environment } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
+    const result = await archiveOldReleases(db, environment, req.user!.sub);
+    await audit(db, req, "release.archive_request", "environment", environment.id, { jobId: result.job?.id ?? null, archived: result.archived });
+    res.status(result.job ? 201 : 200).json(result);
   });
 
   router.get("/:envId/deployments", async (req, res) => {

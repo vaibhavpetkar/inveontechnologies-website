@@ -9,6 +9,7 @@ import { alertExpiringCertificates, queueRenewals } from "./modules/domains/rout
 import { processDueDeliveries, pruneDeliveries } from "./modules/alerts/service.js";
 import { queueNightlyBackups } from "./modules/backups/routes.js";
 import { pruneAllBackups } from "./modules/backups/retention.js";
+import { archiveAllReleases } from "./modules/deploys/archive.js";
 import { expireLogFollows } from "./modules/live-logs/service.js";
 
 /**
@@ -35,6 +36,7 @@ export async function tick(db: Database, env: Env) {
     ["health checks", () => runDueChecks(db, env.INVEON_PUBLIC_URL)],
     ["nightly backups", () => queueNightlyBackups(db)],
     ["backup retention", async () => ((await claimDaily(db, "backup_prune")) ? pruneAllBackups(db) : 0)],
+    ["release archiving", async () => ((await claimDaily(db, "release_archive")) ? archiveAllReleases(db) : 0)],
     ["certificate renewals", async () => ((await claimDaily(db, "cert_renew")) ? queueRenewals(db) : 0)],
     ["certificate expiry alerts", async () => ((await claimDaily(db, "cert_expiry_alerts")) ? alertExpiringCertificates(db) : 0)],
     ["alert retries", () => processDueDeliveries(db)],
