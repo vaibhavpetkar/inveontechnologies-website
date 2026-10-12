@@ -5,9 +5,9 @@ export default function LegalDetails() {
   return (
     <>
       <h2>Business details</h2>
-      <p>Inveon Technologies is operated by its proprietor:</p>
+      <p>{LEGAL_NAME ? 'Inveon Technologies is operated by its proprietor:' : 'Registered contact details for Inveon Technologies:'}</p>
       <ul>
-        <li><strong>Legal name:</strong> {LEGAL_NAME}</li>
+        {LEGAL_NAME && <li><strong>Legal name:</strong> {LEGAL_NAME}</li>}
         <li><strong>Email:</strong> <a href={`mailto:${LEGAL_EMAIL}`}>{LEGAL_EMAIL}</a></li>
         <li><strong>Phone:</strong> <a href={`tel:${LEGAL_PHONE_INTL}`}>{LEGAL_PHONE}</a></li>
       </ul>

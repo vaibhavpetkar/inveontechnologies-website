@@ -264,15 +264,17 @@ export default function Contact() {
               <div className="rounded-2xl border border-border bg-white p-6 card-hover">
                 <h3 className="font-semibold mb-4">Business Details</h3>
                 <div className="flex flex-col gap-4 text-sm text-muted-foreground">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-                      <User className="w-4 h-4 text-primary" />
+                  {LEGAL_NAME && (
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                        <User className="w-4 h-4 text-primary" />
+                      </div>
+                      <div>
+                        <p className="text-xs uppercase tracking-wider">Legal name (proprietor)</p>
+                        <p className="font-semibold text-foreground">{LEGAL_NAME}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-xs uppercase tracking-wider">Legal name (proprietor)</p>
-                      <p className="font-semibold text-foreground">{LEGAL_NAME}</p>
-                    </div>
-                  </div>
+                  )}
                   <a href={`mailto:${LEGAL_EMAIL}`} className="flex items-center gap-3 hover:text-primary transition-colors break-all">
                     <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
                       <Mail className="w-4 h-4 text-primary" />

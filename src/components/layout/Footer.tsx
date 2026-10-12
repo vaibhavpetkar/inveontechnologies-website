@@ -182,8 +182,12 @@ export default function Footer() {
                 <span className="flex items-center gap-3">
                   <User className="w-5 h-5 text-primary shrink-0" />
                   <span>
-                    Proprietor: {LEGAL_NAME}
-                    <br />
+                    {LEGAL_NAME && (
+                      <>
+                        Proprietor: {LEGAL_NAME}
+                        <br />
+                      </>
+                    )}
                     <a href={`mailto:${LEGAL_EMAIL}`} className="hover:text-primary transition-colors break-all">{LEGAL_EMAIL}</a>
                   </span>
                 </span>
@@ -229,8 +233,12 @@ export default function Footer() {
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <p className="text-sm text-muted-foreground">
               &copy; {new Date().getFullYear()} Inveon Technologies. All rights reserved.
-              <br />
-              <span className="text-xs">Inveon Technologies is operated by {LEGAL_NAME}.</span>
+              {LEGAL_NAME && (
+                <>
+                  <br />
+                  <span className="text-xs">Inveon Technologies is operated by {LEGAL_NAME}.</span>
+                </>
+              )}
             </p>
             <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-muted-foreground">
               {links.legal.map((l) => (
