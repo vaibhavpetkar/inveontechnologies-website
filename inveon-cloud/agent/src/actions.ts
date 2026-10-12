@@ -34,6 +34,8 @@ import {
   type Slot,
 } from "./params.js";
 
+export const LOG_FOLLOW_MAX_SEC = 600;
+
 export interface ActionContext {
   config: AgentConfig;
   runner: Runner;
@@ -41,6 +43,8 @@ export interface ActionContext {
   /** Health checks; injectable for tests. */
   httpGet?: (url: string) => Promise<number>;
   sleep?: (ms: number) => Promise<void>;
+  /** Aborted when the control plane cancels the job (a live log viewer left). */
+  signal?: AbortSignal;
 }
 
 export type ActionResult = Record<string, unknown> | void;
@@ -550,6 +554,38 @@ export const ACTIONS: Record<string, Action<any>> = {
     },
   },
 
+  /**
+   * Live logs: `docker compose logs -f --tail N <service>` for at most
+   * durationSec (10 minutes). Output goes straight to the step log, which the
+   * control plane relays to the viewer without storing it. The process is
+   * stopped when the job is cancelled (the viewer left) or the time is up;
+   * both end the step normally.
+   */
+  "compose.logs_follow": {
+    parse(params: unknown) {
+      const p = obj(params);
+      return { ...parseAppRef(p), service: str(p, "service", SERVICE_RE), tail: int(p, "tail", 0, 5000), durationSec: int(p, "durationSec", 10, LOG_FOLLOW_MAX_SEC) };
+    },
+    async run(p: AppRef & { service: string; tail: number; durationSec: number }, ctx) {
+      const paths = appPaths(ctx.config, p);
+      if (!existsSync(paths.composeFile)) throw new Error(`${paths.composeFile} not found (deploy this environment first)`);
+      const args = composeArgs(ctx.config, p, "logs", "-f", "--no-color", "--timestamps", "--tail", String(p.tail), p.service);
+      ctx.log(`$ docker ${args.join(" ")}\n`);
+      const started = Date.now();
+      const r = await ctx.runner("docker", args, { timeoutMs: p.durationSec * 1000, signal: ctx.signal }, ctx.log);
+      if (ctx.signal?.aborted) {
+        ctx.log("\n[stopped: the viewer left]\n");
+        return { stopped: "viewer" };
+      }
+      if (Date.now() - started >= p.durationSec * 1000 - 500) {
+        ctx.log(`\n[stopped after ${Math.round(p.durationSec / 60)} minutes; follow again to keep watching]\n`);
+        return { stopped: "time_limit" };
+      }
+      if (r.code !== 0) throw new Error(`docker compose logs exited with code ${r.code}`);
+      return { stopped: "exited" };
+    },
+  },
+
   /** HTTP GET to the new slot on 127.0.0.1 until it answers 2xx/3xx. */
   "health.check": {
     parse(params: unknown) {
@@ -692,6 +728,9 @@ export const ACTIONS: Record<string, Action<any>> = {
   "backup.create": { parse: parseBackup, run: createBackup },
   "backup.restore": { parse: parseBackup, run: restoreBackup },
 };
+
+/** Long-running actions: the agent checks in every few seconds, so a cancel stops them promptly. */
+export const STREAMING_ACTIONS: ReadonlySet<string> = new Set(["compose.logs_follow"]);
 
 export function isAllowedAction(name: string) {
   return Object.prototype.hasOwnProperty.call(ACTIONS, name);

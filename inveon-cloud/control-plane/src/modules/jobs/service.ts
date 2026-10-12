@@ -73,12 +73,23 @@ export async function getJob(db: Database, jobId: string, orgId?: string) {
   return { job, steps };
 }
 
-/** Atomically claims the oldest pending job for this server (skip-locked, so two pollers never get the same job). */
-export async function claimNextJob(db: Database, serverId: string): Promise<Job | null> {
+/** Live log streams: long-running, never stored, and claimed on their own lane. */
+export const STREAM_JOB_TYPES = ["logs_follow"];
+export type Lane = "main" | "stream";
+
+/**
+ * Atomically claims the oldest pending job for this server (skip-locked, so
+ * two pollers never get the same job). The agent polls two lanes: "stream"
+ * gets only live log streams, so a 10-minute `logs -f` never holds up a
+ * deploy; "main" gets everything else, one job at a time.
+ */
+export async function claimNextJob(db: Database, serverId: string, lane: Lane = "main"): Promise<Job | null> {
+  const types = sql.join(STREAM_JOB_TYPES.map((t) => sql`${t}`), sql`, `);
+  const laneFilter = lane === "stream" ? sql`AND type IN (${types})` : sql`AND type NOT IN (${types})`;
   const result = await db.execute(sql`
     UPDATE jobs SET status = 'running', claimed_at = now()
     WHERE id = (
-      SELECT id FROM jobs WHERE server_id = ${serverId} AND status = 'pending'
+      SELECT id FROM jobs WHERE server_id = ${serverId} AND status = 'pending' ${laneFilter}
       ORDER BY created_at ASC FOR UPDATE SKIP LOCKED LIMIT 1
     )
     RETURNING id`);
@@ -168,7 +179,7 @@ export interface StepReport {
 }
 
 export async function reportStep(db: Database, serverId: string, jobId: string, stepId: string, report: StepReport) {
-  await ownedRunningJob(db, serverId, jobId);
+  const job = await ownedRunningJob(db, serverId, jobId);
   const step = await db.query.jobSteps.findFirst({ where: and(eq(jobSteps.id, stepId), eq(jobSteps.jobId, jobId)) });
   if (!step) throw new NotFoundError("Step not found");
   if (TERMINAL.includes(step.status)) throw new ConflictError(`Step is already ${step.status}`);
@@ -185,7 +196,10 @@ export async function reportStep(db: Database, serverId: string, jobId: string, 
   }
 
   const set: Partial<Step> = {};
-  if (report.append) {
+  if (report.append && STREAM_JOB_TYPES.includes(job.type)) {
+    // Live container logs are relayed to whoever is watching, never stored.
+    emit(jobId, { type: "log", stepId, chunk: report.append });
+  } else if (report.append) {
     const room = MAX_LOG_BYTES - Buffer.byteLength(step.log);
     if (room > 0) {
       const chunk = report.append.length > room ? report.append.slice(0, room) + "\n[log truncated]\n" : report.append;

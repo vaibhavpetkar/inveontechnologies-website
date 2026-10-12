@@ -12,6 +12,7 @@ import { logger } from "../../lib/logger.js";
 import { loadEnvironment, webhookSecretFor } from "../apps/routes.js";
 import { createJob, notifyServer } from "../jobs/service.js";
 import { createDeployment, resolveRelease } from "./service.js";
+import { LOG_FOLLOW_MAX_SEC, startLogFollow } from "../live-logs/service.js";
 import { previewName, previewsReady, startPreviewTeardown, upsertPreviewEnvironment } from "../previews/service.js";
 
 export function deploysRouter(db: Database, env: Env) {
@@ -90,6 +91,21 @@ export function deploysRouter(db: Database, env: Env) {
     notifyServer(environment.serverId);
     await audit(db, req, "logs.request", "environment", environment.id, { jobId: job.id, lines: body.lines });
     res.status(201).json({ job });
+  });
+
+  // Live logs: `docker compose logs -f` for one service, streamed over the job's SSE stream.
+  router.post("/:envId/logs/follow", requireRole("developer"), async (req, res) => {
+    const body = z
+      .object({
+        service: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/, "Enter the compose service name"),
+        tail: z.number().int().min(0).max(5000).default(100),
+        durationSec: z.number().int().min(30).max(LOG_FOLLOW_MAX_SEC).default(LOG_FOLLOW_MAX_SEC),
+      })
+      .parse(req.body ?? {});
+    const { environment, app } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
+    const job = await startLogFollow(db, { environment, app, ...body, userId: req.user!.sub });
+    await audit(db, req, "logs.follow", "environment", environment.id, { jobId: job.id, service: body.service, tail: body.tail, durationSec: body.durationSec });
+    res.status(201).json({ job, streamUrl: `/orgs/${environment.orgId}/jobs/${job.id}/stream` });
   });
 
   return router;

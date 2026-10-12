@@ -192,3 +192,69 @@ export async function startServer(extraEnv = {}) {
 
   return { origin, base, call, createUser, createOrg, registerServer, createAppWithEnvironment, runClaimedJob, tokenFor, github, pool, stop, logs: () => logs };
 }
+
+/**
+ * Opens an SSE stream with fetch (like the dashboard) and collects its
+ * events. waitFor(pred) resolves with the first event matching pred.
+ */
+export async function openStream(base, path, token) {
+  const controller = new AbortController();
+  const res = await fetch(base + path, { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal });
+  const events = [];
+  let ended = false;
+  if (res.ok && res.body) {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    (async () => {
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let i;
+          while ((i = buf.indexOf("\n\n")) >= 0) {
+            const block = buf.slice(0, i);
+            buf = buf.slice(i + 2);
+            let event = "message";
+            let data = "";
+            for (const line of block.split("\n")) {
+              if (line.startsWith("event: ")) event = line.slice(7);
+              else if (line.startsWith("data: ")) data += line.slice(6);
+            }
+            if (data) events.push({ event, data: JSON.parse(data) });
+          }
+        }
+      } catch {
+        // aborted
+      } finally {
+        ended = true;
+      }
+    })();
+  }
+  return {
+    status: res.status,
+    events,
+    ended: () => ended,
+    close: () => controller.abort(),
+    async waitFor(pred, ms = 4000) {
+      const until = Date.now() + ms;
+      while (Date.now() < until) {
+        const hit = events.find(pred);
+        if (hit) return hit;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      throw new Error(`event not seen; got ${JSON.stringify(events.map((e) => e.event))}`);
+    },
+  };
+}
+
+export const waitUntil = async (fn, ms = 6000, every = 100) => {
+  const until = Date.now() + ms;
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() > until) throw new Error("condition not met in time");
+    await new Promise((r) => setTimeout(r, every));
+  }
+};

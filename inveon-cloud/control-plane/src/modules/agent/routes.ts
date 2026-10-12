@@ -84,18 +84,20 @@ export function agentRouter(db: Database, env: Env) {
   router.post("/heartbeat", async (req, res) => {
     const { facts } = z.object({ facts: factsSchema }).parse(req.body ?? {});
     await db.update(servers).set({ ...facts, status: "online", lastSeenAt: new Date() }).where(eq(servers.id, req.server!.id));
-    res.json({ ok: true });
+    // Tells the agent it may poll the separate lane for live log streams.
+    res.json({ ok: true, features: ["stream_lane"] });
   });
 
   // Long poll: waits up to INVEON_AGENT_POLL_TIMEOUT_MS for a job, else 204.
   router.post("/jobs/claim", async (req, res) => {
     const serverId = req.server!.id;
+    const { lane } = z.object({ lane: z.enum(["main", "stream"]).default("main") }).parse(req.body ?? {});
     await db.update(servers).set({ lastSeenAt: new Date(), status: "online" }).where(eq(servers.id, serverId));
     const deadline = Date.now() + env.INVEON_AGENT_POLL_TIMEOUT_MS;
     let closed = false;
     req.on("close", () => (closed = true));
     for (;;) {
-      const job = await claimNextJob(db, serverId);
+      const job = await claimNextJob(db, serverId, lane);
       if (job) {
         const steps = await db.select().from(jobSteps).where(eq(jobSteps.jobId, job.id)).orderBy(asc(jobSteps.position));
         res.json({ job: await buildAgentPayload(db, job, steps) });

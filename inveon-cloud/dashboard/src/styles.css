@@ -270,6 +270,7 @@ textarea { resize: vertical; font-family: var(--font-mono); font-size: 0.85rem; 
 .step-running .step-head { background: rgba(37, 99, 235, 0.05); }
 .step-failure .step-head { background: var(--danger-surface); }
 .log { margin: 0; padding: 0.75rem 0.9rem; background: #0b1220; color: #e2e8f0; font-size: 0.78rem; line-height: 1.5; max-height: 420px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+.log-live { min-height: 220px; max-height: 60vh; border-radius: 8px; margin-top: 0.5rem; }
 
 .dns-box { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 0.6rem 0.75rem; margin: 0.6rem 0; overflow-x: auto; }
 

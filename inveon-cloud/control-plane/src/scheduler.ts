@@ -7,6 +7,7 @@ import { failStaleJobs } from "./modules/jobs/service.js";
 import { runDueChecks } from "./modules/health/service.js";
 import { queueRenewals } from "./modules/domains/routes.js";
 import { queueNightlyBackups } from "./modules/backups/routes.js";
+import { expireLogFollows } from "./modules/live-logs/service.js";
 
 /**
  * In-process scheduler. Every tick: heartbeat timeouts, stale jobs and due
@@ -28,6 +29,7 @@ export async function tick(db: Database, env: Env) {
   const tasks: [string, () => Promise<unknown>][] = [
     ["offline servers", () => markOfflineServers(db, env.INVEON_HEARTBEAT_TIMEOUT_SEC)],
     ["stale jobs", () => failStaleJobs(db, env.INVEON_JOB_TIMEOUT_MIN)],
+    ["live log time limits", () => expireLogFollows(db)],
     ["health checks", () => runDueChecks(db, env.INVEON_PUBLIC_URL)],
     ["nightly backups", () => queueNightlyBackups(db)],
     ["certificate renewals", async () => ((await claimDaily(db, "cert_renew")) ? queueRenewals(db) : 0)],

@@ -19,6 +19,8 @@ export interface ExecOptions {
   timeoutMs?: number;
   /** Extra environment (DOCKER_CONFIG, GIT_SSH_COMMAND, ...). Never logged. */
   env?: Record<string, string>;
+  /** Stops the program (SIGTERM) when aborted: live log streams end when the viewer leaves. */
+  signal?: AbortSignal;
 }
 
 export interface ExecResult {
@@ -43,6 +45,15 @@ export const spawnRunner: Runner = (bin, args, opts, log) =>
           child.kill("SIGTERM");
         }, opts.timeoutMs)
       : null;
+    const onAbort = () => child.kill("SIGTERM");
+    if (opts.signal) {
+      if (opts.signal.aborted) onAbort();
+      else opts.signal.addEventListener("abort", onAbort, { once: true });
+    }
+    const done = () => {
+      if (timer) clearTimeout(timer);
+      opts.signal?.removeEventListener("abort", onAbort);
+    };
     if (opts.stdinFile && child.stdin) createReadStream(opts.stdinFile).pipe(child.stdin);
     let fileDone: Promise<void> = Promise.resolve();
     if (opts.stdoutFile) {
@@ -56,11 +67,11 @@ export const spawnRunner: Runner = (bin, args, opts, log) =>
       });
     child.stderr!.on("data", (d: Buffer) => log(d.toString("utf8")));
     child.on("error", (err) => {
-      if (timer) clearTimeout(timer);
+      done();
       reject(err);
     });
     child.on("close", (code) => {
-      if (timer) clearTimeout(timer);
+      done();
       void fileDone.then(() => resolve({ code: code ?? 1, stdout }));
     });
   });
