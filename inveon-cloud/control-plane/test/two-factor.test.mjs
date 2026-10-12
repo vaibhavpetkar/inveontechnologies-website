@@ -25,9 +25,10 @@ async function enrol(token, cookie) {
   const setup = await api.call("POST", "/auth/2fa/setup", { token, cookie });
   assert.equal(setup.status, 200);
   const secret = base32Decode(setup.json.secret);
-  const enable = await api.call("POST", "/auth/2fa/enable", { token, cookie, body: { code: totp(secret, now()) } });
+  const enableCode = totp(secret, now());
+  const enable = await api.call("POST", "/auth/2fa/enable", { token, cookie, body: { code: enableCode } });
   assert.equal(enable.status, 200, JSON.stringify(enable.json));
-  return { secret, recoveryCodes: enable.json.recoveryCodes, setup: setup.json };
+  return { secret, enableCode, recoveryCodes: enable.json.recoveryCodes, setup: setup.json };
 }
 
 test("owners must enrol before anything else; enrolment gives a QR URI and ten recovery codes shown once", async () => {
@@ -75,7 +76,7 @@ test("owners must enrol before anything else; enrolment gives a QR URI and ten r
 
 test("sign-in becomes two steps; codes can't be replayed; recovery codes work once", async () => {
   const o = await signUp();
-  const { secret, recoveryCodes } = await enrol(o.token, o.cookie);
+  const { secret, enableCode, recoveryCodes } = await enrol(o.token, o.cookie);
 
   const step1 = await api.call("POST", "/auth/login", { body: { email: o.email, password: o.password } });
   assert.equal(step1.status, 200);
@@ -89,8 +90,8 @@ test("sign-in becomes two steps; codes can't be replayed; recovery codes work on
   // And an access token is not a challenge.
   assert.equal((await api.call("POST", "/auth/login/2fa", { body: { challengeToken: o.token, code: totp(secret, now() + 30) } })).status, 401);
 
-  // The code used to enrol (same 30-second step) is refused: replay.
-  const replay = await api.call("POST", "/auth/login/2fa", { body: { challengeToken: challenge, code: totp(secret, now()) } });
+  // The code used to enrol is refused: replay.
+  const replay = await api.call("POST", "/auth/login/2fa", { body: { challengeToken: challenge, code: enableCode } });
   assert.equal(replay.status, 401);
   assert.equal(replay.json.error.code, "INVALID_CODE");
 
