@@ -154,6 +154,7 @@ test("deploy events go only to channels that chose them; Slack gets a text messa
   await api.call("POST", `${base}/deploy`, { token: owner.token, body: { commitSha: sha() } });
   await api.runClaimedJob(srv.agentToken, { failAt: "health.check" });
   await waitUntil(async () => (await deliveriesFor(failedOnly.id)).some((d) => d.status === "success"));
+  await waitUntil(async () => (await deliveriesFor(both.id)).filter((d) => d.status === "success").length === 2);
   const slack = received.find((r) => r.path === "/slack");
   assert.match(slack.body.text, /Deploy failed: App .* \/ production/);
   assert.match(slack.body.text, /Open in Inveon Cloud/);
