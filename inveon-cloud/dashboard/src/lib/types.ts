@@ -75,6 +75,9 @@ export interface Environment {
   releaseService: string | null;
   previewPr: number | null;
   keepReleases: number;
+  maintenanceWindows: MaintenanceWindow[];
+  queuedReleaseId: string | null;
+  queuedAt: string | null;
   createdAt: string;
   serverName?: string;
   serverIp?: string | null;
@@ -192,7 +195,28 @@ export interface Backup {
   finishedAt: string | null;
 }
 
+export interface MaintenanceWindow {
+  /** 0 = Sunday. */
+  day: number;
+  /** HH:MM, UTC. */
+  start: string;
+  durationMin: number;
+}
+
+export interface MaintenanceState {
+  windows: MaintenanceWindow[];
+  restricted: boolean;
+  open: boolean;
+  current: { start: string; end: string } | null;
+  next: { start: string; end: string } | null;
+  nextLabel: string | null;
+  queuedReleaseId: string | null;
+  queuedAt: string | null;
+  queuedRelease: Release | null;
+}
+
 export interface EnvironmentDetail {
+  maintenance: MaintenanceState;
   environment: Environment;
   app: App;
   server: Server;

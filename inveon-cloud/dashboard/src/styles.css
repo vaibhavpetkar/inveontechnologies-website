@@ -316,3 +316,5 @@ textarea { resize: vertical; font-family: var(--font-mono); font-size: 0.85rem; 
 .checks .check { padding: 0.3rem 0; }
 .btn-row.no-margin { margin-top: 0; }
 .row-archived td { opacity: 0.6; }
+.window-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) auto; gap: 0.5rem; align-items: center; }
+.queued { justify-content: space-between; align-items: center; flex-wrap: wrap; }

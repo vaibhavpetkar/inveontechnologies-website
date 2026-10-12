@@ -14,6 +14,7 @@ import { BackupsTab } from "./app/BackupsTab";
 import { LogsTab } from "./app/LogsTab";
 import { AppSettings } from "./app/AppSettings";
 import { JobView } from "../components/JobView";
+import { windowSummary } from "./app/MaintenanceCard";
 
 const TABS = ["Deploys", "Variables", "Domains", "Health", "Backups", "Logs"] as const;
 type Tab = (typeof TABS)[number];
@@ -174,6 +175,7 @@ export default function AppDetail() {
                   Live: <strong>{detail.data.currentRelease ? detail.data.currentRelease.commitSha.slice(0, 7) : "not deployed"}</strong>
                   {detail.data.environment.activeSlot && detail.data.environment.activeSlot !== "main" && <span className={`slot slot-${detail.data.environment.activeSlot}`}>{detail.data.environment.activeSlot}</span>}
                 </span>
+                {windowSummary(detail.data.maintenance) && <span className="muted small">{windowSummary(detail.data.maintenance)}</span>}
                 <span className="muted small">
                   {detail.data.environment.strategy === "blue_green" ? "Blue/green" : "Recreate"} · ports {detail.data.environment.bluePort}/{detail.data.environment.greenPort} · folder{" "}
                   <code>{detail.data.environment.slug}</code>

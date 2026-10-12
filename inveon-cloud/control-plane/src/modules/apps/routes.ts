@@ -14,6 +14,8 @@ import { deployKeyAad, registryAad } from "../../lib/aad.js";
 import { HOSTNAME_RE } from "../domains/routes.js";
 import { startPreviewTeardown } from "../previews/service.js";
 import { parseReleaseCommand, RELEASE_SERVICE_RE } from "../../lib/release-command.js";
+import { windowsSchema } from "../../lib/maintenance.js";
+import { maintenanceView } from "../deploys/maintenance.js";
 import { slugify } from "../auth/routes.js";
 import { loadServer, publicServer } from "../servers/routes.js";
 import { envVarAad, createJob, notifyServer, type Tx } from "../jobs/service.js";
@@ -280,7 +282,12 @@ export function environmentsRouter(db: Database, env: Env) {
     const domainRows = await db.select().from(domains).where(eq(domains.environmentId, environment.id)).orderBy(asc(domains.createdAt));
     const health = await db.query.healthChecks.findFirst({ where: eq(healthChecks.environmentId, environment.id) });
     const backup = await db.query.backupConfigs.findFirst({ where: eq(backupConfigs.environmentId, environment.id) });
+    const maintenance = maintenanceView(environment);
+    const queuedRelease = environment.queuedReleaseId
+      ? await db.query.releases.findFirst({ where: eq(releases.id, environment.queuedReleaseId), columns: { composeContent: false } })
+      : null;
     res.json({
+      maintenance: { ...maintenance, queuedRelease: queuedRelease ?? null },
       environment,
       app: publicApp(app, env),
       server: publicServer(server, env.INVEON_HEARTBEAT_TIMEOUT_SEC),
@@ -301,6 +308,7 @@ export function environmentsRouter(db: Database, env: Env) {
         releaseService: z.string().trim().regex(RELEASE_SERVICE_RE, "Enter the compose service name").nullable().optional().or(z.literal("").transform(() => null)),
         // Release archiving: at least the live and the previous release are kept.
         keepReleases: z.number().int().min(2).max(100).optional(),
+        maintenanceWindows: windowsSchema.optional(),
       })
       .parse(req.body);
     const { environment } = await loadEnvironment(db, req.member!.orgId, req.params.envId);

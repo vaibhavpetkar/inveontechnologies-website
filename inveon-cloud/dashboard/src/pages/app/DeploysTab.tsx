@@ -9,6 +9,7 @@ import { Empty, ErrorNote, Field, StatusBadge, useAction } from "../../component
 import { JobView } from "../../components/JobView";
 import { ReleaseCommandCard } from "./ReleaseCommand";
 import { ReleasesCard } from "./ReleasesCard";
+import { MaintenanceCard, windowSummary } from "./MaintenanceCard";
 
 /** A failed deploy: why, the release command's output, and the backup taken before it. */
 function FailedDeploy({ d, onRestore, busy }: { d: Deployment; onRestore: (backupId: string) => void; busy: boolean }) {
@@ -56,13 +57,17 @@ export function DeploysTab({ detail, reload }: { detail: EnvironmentDetail; relo
   const [refreshKey, setRefreshKey] = useState(0);
   const action = useAction();
 
-  const deploy = (kind: "deploy" | "rollback") =>
+  const deploy = (kind: "deploy" | "rollback") => {
+    // Manual deploys may run outside a maintenance window, after a warning.
+    const m = detail.maintenance;
+    if (kind === "deploy" && m.restricted && !m.open && !confirm(`This is outside the maintenance window. ${windowSummary(m) ?? ""}.\n\nDeploy now anyway?`)) return;
     void action.run(async () => {
       const r = await api<{ job: Job }>(orgPath(`/environments/${env.id}/${kind}`), { method: "POST", body: kind === "deploy" && sha ? { commitSha: sha.trim() } : {} });
       setJobId(r.job.id);
       setSha("");
       void list.reload();
     });
+  };
 
   const shown = jobId ?? list.data?.deployments[0]?.jobId ?? null;
   const shownDeploy = list.data?.deployments.find((d) => d.jobId === shown) ?? null;
@@ -119,6 +124,9 @@ export function DeploysTab({ detail, reload }: { detail: EnvironmentDetail; relo
             </div>
           </div>
         )}
+        {detail.maintenance.restricted && !detail.maintenance.open && can("developer") && (
+          <p className="note note-warn">Outside the maintenance window: pushes are waiting for it. A manual deploy runs now. {windowSummary(detail.maintenance)}.</p>
+        )}
         <ErrorNote error={action.error} />
       </div>
 
@@ -140,6 +148,8 @@ export function DeploysTab({ detail, reload }: { detail: EnvironmentDetail; relo
       )}
 
       <ReleasesCard detail={detail} reload={reload} onJob={setJobId} refreshKey={refreshKey} />
+
+      <MaintenanceCard detail={detail} reload={reload} />
 
       <ReleaseCommandCard detail={detail} reload={reload} />
 

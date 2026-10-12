@@ -198,6 +198,11 @@ export const environments = pgTable(
     // Release archiving: how many recently deployed releases keep their
     // images on the server (the live and previous ones always do).
     keepReleases: integer("keep_releases").notNull().default(10),
+    // Weekly maintenance windows (UTC). When set, deploys from webhooks wait
+    // for the next window: the newest pushed release is queued here.
+    maintenanceWindows: jsonb("maintenance_windows").$type<{ day: number; start: string; durationMin: number }[]>().notNull().default([]),
+    queuedReleaseId: uuid("queued_release_id"),
+    queuedAt: ts("queued_at"),
     createdAt: createdAt(),
   },
   (t) => ({ uniqName: unique().on(t.appId, t.name), uniqPort: unique().on(t.serverId, t.bluePort) }),

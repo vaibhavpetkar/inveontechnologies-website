@@ -13,6 +13,7 @@ import { loadEnvironment, webhookSecretFor } from "../apps/routes.js";
 import { createJob, notifyServer } from "../jobs/service.js";
 import { createDeployment, resolveRelease } from "./service.js";
 import { archiveOldReleases, deployedReleases, releaseBeingArchived } from "./archive.js";
+import { maintenanceView, outsideWindow, queueForWindow } from "./maintenance.js";
 import { LOG_FOLLOW_MAX_SEC, startLogFollow } from "../live-logs/service.js";
 import { previewName, previewsReady, startPreviewTeardown, upsertPreviewEnvironment } from "../previews/service.js";
 
@@ -23,9 +24,14 @@ export function deploysRouter(db: Database, env: Env) {
     const body = z.object({ commitSha: z.string().regex(/^[0-9a-f]{40}$/, "Full 40-character commit SHA").optional() }).parse(req.body ?? {});
     const { environment, app } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
     const release = await resolveRelease(db, env, app, { commitSha: body.commitSha, source: "manual", userId: req.user!.sub });
+    // Manual deploys run at any time; outside a maintenance window the dashboard has already warned.
+    const outside = outsideWindow(environment);
     const { job, deployment } = await createDeployment(db, { environment, app, release, kind: "deploy", userId: req.user!.sub });
-    await audit(db, req, "deploy.create", "environment", environment.id, { jobId: job.id, commitSha: release.commitSha });
-    res.status(201).json({ job, deployment, release: { id: release.id, commitSha: release.commitSha } });
+    if (environment.queuedReleaseId === release.id) {
+      await db.update(environments).set({ queuedReleaseId: null, queuedAt: null }).where(and(eq(environments.id, environment.id), eq(environments.queuedReleaseId, release.id)));
+    }
+    await audit(db, req, "deploy.create", "environment", environment.id, { jobId: job.id, commitSha: release.commitSha, ...(outside ? { outsideMaintenanceWindow: true } : {}) });
+    res.status(201).json({ job, deployment, release: { id: release.id, commitSha: release.commitSha }, outsideMaintenanceWindow: outside, maintenance: maintenanceView({ ...environment, queuedReleaseId: null }) });
   });
 
   // Rollback = a normal deploy job targeting the previous release, or an
@@ -45,6 +51,15 @@ export function deploysRouter(db: Database, env: Env) {
     const { job, deployment } = await createDeployment(db, { environment, app, release, kind: "rollback", userId: req.user!.sub });
     await audit(db, req, "deploy.rollback", "environment", environment.id, { jobId: job.id, commitSha: release.commitSha });
     res.status(201).json({ job, deployment, release: { id: release.id, commitSha: release.commitSha } });
+  });
+
+  // Drops a deploy that is waiting for the next maintenance window.
+  router.delete("/:envId/queued-deploy", requireRole("developer"), async (req, res) => {
+    const { environment } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
+    if (!environment.queuedReleaseId) throw new NotFoundError("No deploy is waiting for a maintenance window");
+    await db.update(environments).set({ queuedReleaseId: null, queuedAt: null }).where(eq(environments.id, environment.id));
+    await audit(db, req, "deploy.queue_discard", "environment", environment.id, { releaseId: environment.queuedReleaseId });
+    res.json({ ok: true });
   });
 
   // Releases that went live here, newest first, with their archive state.
@@ -188,8 +203,16 @@ export function webhookRouter(db: Database, env: Env) {
 
     const targets = await db.select().from(environments).where(eq(environments.appId, app.id));
     const started: string[] = [];
+    const queued: string[] = [];
     // Previews are deployed only by their own pull request.
     for (const environment of targets.filter((e) => e.autoDeploy && e.previewPr === null)) {
+      // Outside its maintenance window the release waits; a newer push replaces it.
+      if (outsideWindow(environment)) {
+        await queueForWindow(db, environment, release.id);
+        queued.push(environment.id);
+        await writeAudit(db, { orgId: app.orgId, action: "deploy.queued", entityType: "environment", entityId: environment.id, metadata: { commitSha: release.commitSha, source: "webhook", until: maintenanceView(environment).next?.start ?? null } });
+        continue;
+      }
       try {
         const { job } = await createDeployment(db, { environment, app, release, kind: "deploy" });
         started.push(job.id);
@@ -198,7 +221,7 @@ export function webhookRouter(db: Database, env: Env) {
         logger.warn({ err, environmentId: environment.id }, "Webhook deploy skipped");
       }
     }
-    res.status(202).json({ ok: true, releaseId: release.id, jobIds: started });
+    res.status(202).json({ ok: true, releaseId: release.id, jobIds: started, queuedEnvironmentIds: queued });
   });
   return router;
 }
