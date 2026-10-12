@@ -232,6 +232,20 @@
       "when": 1791524248845,
       "tag": "0032_keen_korath",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1791545526601,
+      "tag": "0033_marvelous_excalibur",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1791649891496,
+      "tag": "0034_black_mindworm",
+      "breakpoints": true
     }
   ]
 }

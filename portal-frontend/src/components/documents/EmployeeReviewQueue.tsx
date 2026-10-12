@@ -70,7 +70,7 @@ export function EmployeeReviewQueue({ tabs }: { tabs?: ReactNode }) {
     <>
       <div className="page-head">
         <div>
-          <h1>Documents</h1>
+          <h1>Verify documents</h1>
           <p>
             {isManager ? "Documents from people on your team. " : "Documents from employees and interns. "}
             Verify them or send them back with a note; they get an email if something needs fixing.

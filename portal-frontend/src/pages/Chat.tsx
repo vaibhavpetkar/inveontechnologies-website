@@ -42,8 +42,14 @@ export default function Chat() {
     if (!accessToken) return;
     loadInbox();
     apiFetch<{ people: ChatPerson[] }>("/api/v1/chat/people", { accessToken }).then((r) => setPeople(r.people)).catch(() => undefined);
-    const t = setInterval(loadInbox, 8000);
-    return () => clearInterval(t);
+    // Only while the tab is visible; catch up as soon as it comes back.
+    const t = setInterval(() => !document.hidden && loadInbox(), 8000);
+    const onVisible = () => !document.hidden && loadInbox();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [accessToken, loadInbox]);
 
   const peopleById = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);

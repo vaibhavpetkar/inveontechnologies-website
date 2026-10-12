@@ -1018,6 +1018,7 @@ button {
 .checklist li { display: flex; align-items: flex-start; gap: 0.7rem; padding: 0.55rem 0.4rem; border-radius: 10px; }
 .checklist li:hover { background: var(--surface); }
 .checklist li.done .check-text > span:first-child { color: var(--muted); text-decoration: line-through; text-decoration-color: rgba(100, 116, 139, 0.5); }
+.checklist .check-upload { margin-left: auto; flex-shrink: 0; align-self: center; }
 .check-text { display: flex; flex-direction: column; gap: 0.15rem; flex: 1; min-width: 0; font-size: 0.9rem; }
 .check-icon, .check-toggle {
   flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center;

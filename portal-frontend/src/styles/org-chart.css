@@ -1,0 +1,38 @@
+.org-skeleton { display: grid; gap: 0.6rem; }
+.org-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.org-stats { display: flex; gap: 1.1rem; flex-wrap: wrap; color: var(--muted); font-size: 0.9rem; }
+.org-stats strong { color: var(--ink, #0f172a); font-size: 1.05rem; }
+.org-search { display: flex; align-items: center; gap: 0.45rem; border: 1px solid var(--line); border-radius: 10px; padding: 0.45rem 0.7rem; background: var(--paper); color: var(--muted); min-width: 240px; }
+.org-search input { border: 0; outline: 0; background: transparent; font: inherit; color: inherit; width: 100%; }
+.org-tree, .org-children { list-style: none; margin: 0; padding: 0; }
+.org-tree { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
+.org, .org-branch, .org-node { min-width: 0; }
+.org-children { position: relative; margin-left: 1.55rem; padding-left: 1.35rem; border-left: 2px solid #e2e8f0; overflow: hidden; }
+.org-children > .org-branch { position: relative; padding-top: 0.5rem; }
+.org-children > .org-branch::before { content: ""; position: absolute; left: -1.35rem; top: calc(0.5rem + 30px); width: 1.15rem; border-top: 2px solid #e2e8f0; }
+.org-node { display: flex; align-items: center; gap: 0.7rem; padding: 0.6rem 0.8rem; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04); }
+.org-node:hover { border-color: #c7d2fe; }
+.org-toggle, .org-toggle-gap { flex: none; width: 26px; height: 26px; }
+.org-toggle { display: grid; place-items: center; border: 0; border-radius: 8px; background: var(--surface); color: var(--muted); cursor: pointer; padding: 0; }
+.org-toggle:hover { color: var(--primary); }
+.org-who { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.org-name { font-weight: 600; }
+.org-meta { color: var(--muted); font-size: 0.82rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.org-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.76rem; }
+.org-role { flex: none; font-size: 0.72rem; font-weight: 600; padding: 0.15rem 0.5rem; border-radius: 999px; background: #f1f5f9; color: #475569; }
+.org-role.role-super_admin, .org-role.role-admin { background: #ede9fe; color: #6d28d9; }
+.org-role.role-hr { background: #fce7f3; color: #be185d; }
+.org-role.role-manager { background: #dbeafe; color: #1d4ed8; }
+.org-role.role-intern { background: #fef3c7; color: #b45309; }
+.org-count { flex: none; font-size: 0.76rem; color: var(--muted); }
+.org-edit { flex: none; }
+.org-unassigned { margin-top: 1.6rem; }
+.org-unassigned h3 { display: flex; align-items: center; gap: 0.4rem; font-size: 0.98rem; margin: 0 0 0.2rem; }
+.org-unassigned .org-tree { margin-top: 0.7rem; }
+@media (max-width: 640px) {
+  .org-search { min-width: 0; width: 100%; }
+  .org-children { margin-left: 0.7rem; padding-left: 0.8rem; }
+  .org-children > .org-branch::before { left: -0.8rem; width: 0.6rem; }
+  .org-role, .org-count, .org-id { display: none; }
+  .org-node { gap: 0.5rem; padding: 0.55rem 0.6rem; }
+}

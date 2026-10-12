@@ -13,7 +13,7 @@ import { activePolicies, policyFilename, queueAppointmentEmail, renderPolicyPdf 
 import { displayNameFor } from "../employees/onboarding.js";
 import { queueOfferEmail, syncProgramFees } from "../internships/service.js";
 import { brandPreviews, companyProfile, companyProfileSchema, saveCompanyProfile } from "./company.js";
-import { emailSettingsInput, getEmailSettings, saveEmailSettings } from "./email.js";
+import { emailAutomationInput, emailSettingsInput, getEmailAutomation, getEmailSettings, saveEmailAutomation, saveEmailSettings } from "./email.js";
 import { getOfferTerms, offerTermsSchema, saveOfferTerms } from "./offer-terms.js";
 
 // Company details and email settings bind the company, so only admins
@@ -84,6 +84,17 @@ export function settingsRouter(db: Database, env: Env) {
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "settings.email.update", entityType: "portal_setting", metadata: { key: "email_settings", enabled: body.enabled, host: body.host, port: body.port, user: body.user, passwordChanged: body.password !== undefined && body.password !== "" }, ipAddress: req.ip });
     const check = await verifyMailer();
     res.json({ settings: await getEmailSettings(db, env), status: mailerStatus(), check });
+  });
+
+  router.get("/settings/email/automation", requireAuth(env), requireRole(...STAFF_ROLES), async (req, res) => {
+    res.json({ ...(await getEmailAutomation(db)), canEdit: isAdmin(req.user!.role) });
+  });
+
+  router.put("/settings/email/automation", requireAuth(env), requireRole(...ADMIN_ROLES), async (req, res) => {
+    const { paused } = emailAutomationInput.parse(req.body);
+    const result = await saveEmailAutomation(db, paused, req.user!.sub);
+    await writeAuditLog(db, { actorUserId: req.user!.sub, action: "settings.email_automation.update", entityType: "portal_setting", metadata: { key: "email_automation", paused }, ipAddress: req.ip });
+    res.json(result);
   });
 
   router.post("/settings/email/test", requireAuth(env), requireRole(...ADMIN_ROLES), async (req, res) => {

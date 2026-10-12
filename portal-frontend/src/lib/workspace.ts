@@ -169,7 +169,7 @@ export const NOTE_KINDS: Record<NoteKind, { label: string; plural: string; tone:
 
 export interface CandidateDocument {
   id: string;
-  applicationId: string;
+  applicationId: string | null;
   documentName: string;
   documentType: string | null;
   status: "requested" | "uploaded" | "verified" | "rejected";
@@ -177,8 +177,8 @@ export interface CandidateDocument {
   note: string | null;
   createdAt: string;
   updatedAt: string;
-  opportunity: { id: string; title: string };
-  applicationStatus: string;
+  opportunity: { id: string; title: string } | null; // null: sent for the candidate's profile, not one opening
+  applicationStatus: string | null;
   candidate: { id: string; name: string; email: string };
 }
 

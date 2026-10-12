@@ -287,3 +287,38 @@ describe("email verification gate", () => {
     }
   });
 });
+
+describe("refreshing a session from several tabs", () => {
+  const cookieOf = (res) => res.headers.get("set-cookie")?.split(";")[0];
+
+  async function signIn() {
+    const password = "password1234";
+    const user = await api.createUser("employee", { password });
+    const res = await api.call("POST", "/auth/login", { body: { email: user.email, password } });
+    assert.equal(res.status, 200);
+    return { user, cookie: cookieOf(res) };
+  }
+  const activeSessions = async (userId) => (await api.pool.query("SELECT count(*)::int AS n FROM refresh_tokens WHERE user_id = $1 AND revoked_at IS NULL", [userId])).rows[0].n;
+
+  test("tabs refreshing together all stay signed in, with one session", async () => {
+    const { user, cookie } = await signIn();
+    const results = await Promise.all([0, 1, 2, 3].map(() => api.call("POST", "/auth/refresh", { cookie })));
+    assert.deepEqual(results.map((r) => r.status), [200, 200, 200, 200], JSON.stringify(results.map((r) => r.json)));
+    assert.ok(results.every((r) => r.json.accessToken));
+    assert.equal(results.filter((r) => cookieOf(r)?.startsWith("portal_refresh_token=") && cookieOf(r) !== "portal_refresh_token=").length, 1, "one new cookie");
+    assert.equal(await activeSessions(user.id), 1);
+  });
+
+  test("an old token used after the session moved on, or after logging out, is refused", async () => {
+    const { user, cookie: first } = await signIn();
+    const second = cookieOf(await api.call("POST", "/auth/refresh", { cookie: first }));
+    assert.equal((await api.call("POST", "/auth/refresh", { cookie: second })).status, 200);
+    // `first` was replaced by a token that is itself used up: treated as theft.
+    assert.equal((await api.call("POST", "/auth/refresh", { cookie: first })).status, 401);
+    assert.equal(await activeSessions(user.id), 0);
+
+    const again = await signIn();
+    await api.call("POST", "/auth/logout", { cookie: again.cookie });
+    assert.equal((await api.call("POST", "/auth/refresh", { cookie: again.cookie })).status, 401);
+  });
+});

@@ -29,6 +29,7 @@ export interface SignerLine {
   title: string;
   subtitle?: string; // "Inveon Technologies"
   note?: string;
+  signature?: string | null; // the signer's own signature image (PNG/JPEG data URL), drawn above the name
 }
 
 export interface SignatureSide {
@@ -149,6 +150,10 @@ export async function renderLetterPdf(doc: LetterDocument): Promise<Uint8Array> 
     } catch {
       return null; // a broken upload shouldn't stop the letter
     }
+  };
+  const embedDataUrl = (url: string) => {
+    const m = url.match(/^data:image\/(png|jpeg);base64,(.+)$/);
+    return m ? embed({ type: m[1] as "png" | "jpeg", bytes: Buffer.from(m[2], "base64") }) : Promise.resolve(null);
   };
   const logo = await embed(images.logo);
   const seal = await embed(images.seal);
@@ -374,7 +379,8 @@ export async function renderLetterPdf(doc: LetterDocument): Promise<Uint8Array> 
       case "signatories": {
         const people = block.left.people;
         const leftH = (block.left.seal && seal ? 62 : 0) + 22 + people.length * 40;
-        const rightH = block.right.reduce((n, r) => n + (r.caption ? 13 : 0) + 26 + (r.subtitle ? 13 : 0) + (r.note ? 24 : 0) + 18, 0);
+        const signs = await Promise.all(block.right.map((r) => (r.signature ? embedDataUrl(r.signature) : null)));
+        const rightH = block.right.reduce((n, r, i) => n + (r.caption ? 13 : 0) + (signs[i] ? 40 : 0) + 26 + (r.subtitle ? 13 : 0) + (r.note ? 24 : 0) + 18, 0);
         room(Math.max(leftH, rightH) + 20);
         y -= 10;
         const top = y;
@@ -393,10 +399,17 @@ export async function renderLetterPdf(doc: LetterDocument): Promise<Uint8Array> 
           ly -= 27;
         }
         let ry = top - (block.left.seal && seal ? 64 : 0);
-        for (const r of block.right) {
+        for (const [i, r] of block.right.entries()) {
           if (r.caption) {
             right(r.caption, R, ry, bold, 9.5, NAVY);
             ry -= 13;
+          }
+          const sign = signs[i];
+          if (sign) {
+            const sh = 34;
+            const sw = Math.min(150, (sign.width / sign.height) * sh);
+            page.drawImage(sign, { x: R - sw, y: ry - sh + 6, width: sw, height: (sign.height / sign.width) * sw });
+            ry -= 40;
           }
           right(r.name, R, ry, bold, 10, NAVY);
           ry -= 13;

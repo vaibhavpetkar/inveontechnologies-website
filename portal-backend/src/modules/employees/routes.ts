@@ -24,6 +24,7 @@ const PRIVILEGED_ROLES = ["hr", "admin", "super_admin"] as const;
 // Employee records and letters are restricted to the employee themselves +
 // HR/Admin/Super Admin. Personal documents are also open to the employee's
 // own manager (employees.managerId), who reviews them.
+const STAFF_VIEW_ROLES = ["manager", "hr", "admin", "super_admin"] as const;
 const isPrivileged = (role: string) => (PRIVILEGED_ROLES as readonly string[]).includes(role);
 const isManagerOf = (req: import("express").Request, employee: { managerId: string | null }) => req.user!.role === "manager" && employee.managerId === req.user!.sub;
 
@@ -40,12 +41,19 @@ const createEmployeeSchema = z.object({
 const updateEmployeeSchema = z.object({
   departmentId: z.string().uuid().optional(),
   designationId: z.string().uuid().optional(),
-  managerId: z.string().uuid().optional(),
+  // null removes the manager; the org chart's "Reports to" uses this.
+  managerId: z.string().uuid().nullable().optional(),
   hrManagerId: z.string().uuid().optional(),
   status: z.enum(["preboarding", "active", "on_leave", "offboarded"]).optional(),
 });
 
-const uploadDocumentSchema = z.object({ documentType: z.string().trim().min(2).max(200), fileUrl: z.string().min(1).max(2000), description: z.string().trim().max(1000).optional() });
+const uploadDocumentSchema = z.object({
+  documentType: z.string().trim().min(2).max(200),
+  fileUrl: z.string().min(1).max(2000),
+  description: z.string().trim().max(1000).optional(),
+  // The onboarding step this upload answers ("Upload a government ID"); it's ticked off.
+  onboardingTaskId: z.string().uuid().optional(),
+});
 const verifyDocumentSchema = z.object({ approve: z.boolean(), note: z.string().max(1000).optional() });
 const createTaskSchema = z.object({
   taskType: z.enum(["policy_consent", "access_activation", "document", "custom"]),
@@ -57,6 +65,54 @@ const createTaskSchema = z.object({
 async function isSelfOrPrivileged(req: import("express").Request, employeeUserId: string) {
   if (employeeUserId === req.user!.sub) return true;
   return PRIVILEGED_ROLES.includes(req.user!.role as (typeof PRIVILEGED_ROLES)[number]);
+}
+
+export type OrgPerson = {
+  userId: string;
+  employeeId: string | null;
+  businessId: string | null;
+  name: string;
+  email: string;
+  role: string;
+  designation: string | null;
+  department: string | null;
+  managerId: string | null;
+  status: string | null;
+};
+
+/** Everyone with a staff account (interns up), and who they report to. */
+export async function orgChart(db: Database): Promise<OrgPerson[]> {
+  const rows = await db.execute<OrgPerson>(sql`
+    SELECT u.id AS "userId", e.id AS "employeeId", e.business_id AS "businessId",
+      coalesce(u.full_name, cp.full_name, initcap(replace(split_part(u.email, '@', 1), '.', ' '))) AS name,
+      u.email, u.role::text AS role, d.title AS designation, dep.name AS department,
+      e.manager_id AS "managerId", e.status::text AS status
+    FROM users u
+    LEFT JOIN employees e ON e.user_id = u.id
+    LEFT JOIN candidate_profiles cp ON cp.user_id = u.id
+    LEFT JOIN designations d ON d.id = e.designation_id
+    LEFT JOIN departments dep ON dep.id = e.department_id
+    WHERE u.role IN ('intern', 'employee', 'manager', 'hr', 'admin', 'super_admin')
+      AND (e.status IS NULL OR e.status <> 'offboarded')
+    ORDER BY name
+  `);
+  return rows.rows;
+}
+
+/** A person can't report to themselves or to someone who (indirectly) reports to them. */
+async function assertNoReportingLoop(db: Database, userId: string, managerId: string) {
+  if (managerId === userId) throw new AppError("REPORTING_LOOP", "Someone can't report to themselves", 400);
+  const manager = await db.query.users.findFirst({ where: eq(users.id, managerId) });
+  if (!manager || !["employee", "manager", "hr", "admin", "super_admin"].includes(manager.role)) throw new AppError("INVALID_MANAGER", "Pick a staff member as the manager", 400);
+  const rows = await db.execute<{ found: boolean }>(sql`
+    WITH RECURSIVE chain(id, depth) AS (
+      SELECT manager_id, 1 FROM employees WHERE user_id = ${managerId}
+      UNION ALL
+      SELECT e.manager_id, c.depth + 1 FROM employees e JOIN chain c ON e.user_id = c.id WHERE c.depth < 50
+    )
+    SELECT EXISTS (SELECT 1 FROM chain WHERE id = ${userId}) AS found
+  `);
+  if (rows.rows[0]?.found) throw new AppError("REPORTING_LOOP", "That would make a loop: this manager already reports to them", 400);
 }
 
 export function employeesRouter(db: Database, env: Env) {
@@ -117,6 +173,12 @@ export function employeesRouter(db: Database, env: Env) {
     res.status(201).json({ employee });
   });
 
+  // Who reports to whom: every active staff account, with its manager. Open to
+  // all staff so people can see the structure; only HR/admins change it.
+  router.get("/org-chart", requireAuth(env), requireRole("intern", "employee", ...STAFF_VIEW_ROLES), async (req, res) => {
+    res.json({ people: await orgChart(db), canEdit: isPrivileged(req.user!.role) });
+  });
+
   router.get("/me", requireAuth(env), async (req, res) => {
     const employee = await db.query.employees.findFirst({ where: eq(employees.userId, req.user!.sub) });
     if (!employee) throw new NotFoundError("No employee record for this user");
@@ -139,6 +201,8 @@ export function employeesRouter(db: Database, env: Env) {
     const body = updateEmployeeSchema.parse(req.body);
     const employee = await db.query.employees.findFirst({ where: eq(employees.id, req.params.id) });
     if (!employee) throw new NotFoundError("Employee not found");
+
+    if (body.managerId) await assertNoReportingLoop(db, employee.userId, body.managerId);
 
     const [updated] = await db.update(employees).set({ ...body, updatedAt: new Date() }).where(eq(employees.id, employee.id)).returning();
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "employee.update", entityType: "employee", entityId: employee.id, ipAddress: req.ip });
@@ -262,7 +326,14 @@ export function employeesRouter(db: Database, env: Env) {
     if (employee.userId !== req.user!.sub) throw new ForbiddenError("Only the employee themselves can upload their own documents");
     await claimFile(db, body.fileUrl, req.user!.sub, "employee_document");
 
+    const step = body.onboardingTaskId ? await db.query.employeeOnboardingTasks.findFirst({ where: eq(employeeOnboardingTasks.id, body.onboardingTaskId) }) : null;
+    if (body.onboardingTaskId && (!step || step.employeeId !== employee.id || step.taskType !== "document")) throw new AppError("INVALID_STEP", "That onboarding step isn't yours", 400);
+
     const [created] = await db.insert(employeeDocuments).values({ employeeId: employee.id, documentType: body.documentType, fileUrl: body.fileUrl, description: body.description || null }).returning();
+    if (step?.status === "pending") {
+      await db.update(employeeOnboardingTasks).set({ status: "completed", completedAt: new Date() }).where(eq(employeeOnboardingTasks.id, step.id));
+      await notifyIfOnboardingComplete(db, employee.id);
+    }
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "employee_document.upload", entityType: "employee_document", entityId: created.id, ipAddress: req.ip });
     const who = await displayNameFor(db, employee.userId);
     const reviewers = [employee.managerId, employee.hrManagerId].filter((id): id is string => !!id);

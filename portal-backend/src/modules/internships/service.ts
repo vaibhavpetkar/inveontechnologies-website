@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { signatureFor } from "../signature/routes.js";
 import type { Database } from "../shared/db/client.js";
 import {
   applicationEvents,
@@ -373,6 +374,10 @@ export async function offerDocument(db: Database, offer: ParticipantOffer): Prom
   const end = offer.endDate ?? internshipEndDate(joining, months);
   const fee = `${money(offer.fee)}${offer.feeCategory ? ` - ${FEE_LABEL[offer.feeCategory]}` : ""}`;
   const bullets = (...items: string[]): LetterBlock => ({ kind: "bullets", items });
+  // Once the offer is accepted (paid or waived), the intern's saved signature goes on it.
+  const enrollment = await db.query.programEnrollments.findFirst({ where: eq(programEnrollments.id, offer.enrollmentId) });
+  const accepted = !!enrollment && ["paid", "waived"].includes(enrollment.status);
+  const signature = accepted ? await signatureFor(db, offer.userId) : null;
 
   return {
     title: `Internship Offer - ${name}`,
@@ -433,7 +438,7 @@ export async function offerDocument(db: Database, offer: ParticipantOffer): Prom
         right: [
           // Left as a line to sign on until a project manager is set in Settings.
           { name: company.projectManager?.name ?? "____________________", title: company.projectManager?.title ?? "Project Manager", subtitle: company.name },
-          { caption: "Accepted by:", name, title: "Intern" },
+          { caption: "Accepted by:", name, title: "Intern", signature },
         ],
       },
     ],

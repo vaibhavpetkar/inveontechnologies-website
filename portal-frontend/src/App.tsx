@@ -41,6 +41,7 @@ import Team from "./pages/Team";
 import Documents from "./pages/Documents";
 import Settings from "./pages/Settings";
 import Performance from "./pages/Performance";
+import OrgChartPage from "./pages/OrgChart";
 import { MotionConfig } from "framer-motion";
 import { ToastProvider } from "./components/Toast";
 import { NotificationsProvider } from "./context/NotificationsContext";
@@ -107,6 +108,7 @@ function AppRoutes() {
       <Route path="/documents"><Protected><Documents /></Protected></Route>
       <Route path="/settings/:tab?"><Protected><Settings /></Protected></Route>
       <Route path="/performance"><Protected><Performance /></Protected></Route>
+      <Route path="/org-chart"><Protected><OrgChartPage /></Protected></Route>
 
       <Route><div className="page-loading">Page not found.</div></Route>
     </Switch>

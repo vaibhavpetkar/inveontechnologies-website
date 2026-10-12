@@ -7,6 +7,7 @@ import { useToast } from "../Toast";
 import { useAuth } from "../../context/AuthContext";
 import { ApiError } from "../../lib/api";
 import type { StoredFile } from "../../lib/files";
+import { SignatureCard } from "../signature/SignatureCard";
 import { EMP_DOC_TYPES, OTHER_TYPE, addEmployeeDoc, fetchEmployeeDocs, fetchMyEmployeeId, removeEmployeeDoc, type EmployeeDocument } from "../../lib/employeeDocs";
 import { EmployeeDocRow } from "./EmployeeDocRow";
 import "../../styles/employee-docs.css";
@@ -74,6 +75,7 @@ export function MyEmployeeDocuments() {
         )}
       </div>
 
+      <SignatureCard />
       {list.length > 0 && <Progress docs={list} />}
       {error && <div className="error-banner">{error}</div>}
       {!docs && !error && !noRecord && <div className="doc-list">{[0, 1, 2].map((i) => <div key={i} className="skeleton" style={{ height: 76 }} />)}</div>}
@@ -164,11 +166,29 @@ function Progress({ docs }: { docs: EmployeeDocument[] }) {
   );
 }
 
-function UploadDialog({ employeeId, replacing, onClose, onDone }: { employeeId: string; replacing?: EmployeeDocument; onClose: () => void; onDone: () => void }) {
+/**
+ * Uploads one document for review. From an onboarding step ("Upload a
+ * government ID") it offers just the types that step asks for and ticks the
+ * step off once sent.
+ */
+export function UploadDialog({
+  employeeId,
+  replacing,
+  step,
+  onClose,
+  onDone,
+}: {
+  employeeId: string;
+  replacing?: EmployeeDocument;
+  step?: { id: string; title: string; types: string[] };
+  onClose: () => void;
+  onDone: () => void;
+}) {
   const { accessToken } = useAuth();
   const toast = useToast();
-  const known = replacing && EMP_DOC_TYPES.includes(replacing.documentType);
-  const [type, setType] = useState(replacing ? (known ? replacing.documentType : OTHER_TYPE) : "");
+  const types = step?.types.length ? step.types : EMP_DOC_TYPES;
+  const known = replacing && types.includes(replacing.documentType);
+  const [type, setType] = useState(replacing ? (known ? replacing.documentType : OTHER_TYPE) : step?.types.length === 1 ? step.types[0] : "");
   const [otherName, setOtherName] = useState(replacing && !known ? replacing.documentType : "");
   const [description, setDescription] = useState(replacing?.description ?? "");
   const [file, setFile] = useState<StoredFile | null>(null);
@@ -184,7 +204,7 @@ function UploadDialog({ employeeId, replacing, onClose, onDone }: { employeeId: 
     setSaving(true);
     setError(null);
     try {
-      await addEmployeeDoc(employeeId, { documentType, fileUrl: file.url, description: description.trim() || undefined }, accessToken);
+      await addEmployeeDoc(employeeId, { documentType, fileUrl: file.url, description: description.trim() || undefined, onboardingTaskId: step?.id }, accessToken);
       // The new upload takes the place of the one that was sent back.
       if (replacing) await removeEmployeeDoc(replacing.id, accessToken).catch(() => undefined);
       toast(`${documentType} sent for review`);
@@ -210,19 +230,22 @@ function UploadDialog({ employeeId, replacing, onClose, onDone }: { employeeId: 
         transition={{ type: "spring", stiffness: 420, damping: 34 }}
       >
         <div className="modal-head">
-          <h2 id="edoc-upload-title">{replacing ? "Upload again" : "Upload a document"}</h2>
+          <h2 id="edoc-upload-title">{replacing ? "Upload again" : step ? step.title : "Upload a document"}</h2>
           <button type="button" className="icon-button" aria-label="Close" onClick={onClose}><X size={18} /></button>
         </div>
         <p className="edoc-hint">
           <Info size={15} />
-          <span>Your manager and HR check it. If anything needs fixing, you'll get an email.{replacing ? " This replaces the one that was sent back." : ""}</span>
+          <span>
+            Your manager and HR check it. If anything needs fixing, you'll get an email.{replacing ? " This replaces the one that was sent back." : ""}
+            {step ? " This step on your onboarding list is ticked off once you send it." : ""}
+          </span>
         </p>
         {error && <div className="error-banner">{error}</div>}
         <div className="field">
           <label htmlFor="edoc-type">Document type</label>
           <select id="edoc-type" required value={type} onChange={(e) => setType(e.target.value)}>
             <option value="" disabled>Choose one</option>
-            {EMP_DOC_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            {types.map((t) => <option key={t} value={t}>{t}</option>)}
           </select>
         </div>
         {type === OTHER_TYPE && (
