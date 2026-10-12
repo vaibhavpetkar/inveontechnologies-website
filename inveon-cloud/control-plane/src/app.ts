@@ -26,6 +26,7 @@ import { registerPreviewHooks } from "./modules/previews/service.js";
 import { alertsRouter } from "./modules/alerts/routes.js";
 import { configureAlerts } from "./modules/alerts/service.js";
 import { configureOutbound } from "./lib/outbound.js";
+import { platformRouter } from "./modules/keys/routes.js";
 
 export function createApp(db: Database, pool: pg.Pool, env: Env) {
   registerPreviewHooks(env);
@@ -74,6 +75,7 @@ export function createApp(db: Database, pool: pg.Pool, env: Env) {
 
   app.use("/api/v1/auth", authRouter(db, env));
   app.use("/api/v1/orgs", requireAuth(env), orgCreateRouter(db));
+  app.use("/api/v1/platform", requireAuth(env), platformRouter(db, env));
 
   const org = Router({ mergeParams: true });
   org.use(requireAuth(env), requireMember(db));

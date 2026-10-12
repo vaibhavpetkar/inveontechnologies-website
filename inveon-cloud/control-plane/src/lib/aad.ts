@@ -4,3 +4,4 @@
  */
 export const registryAad = (appId: string) => `registry:${appId}`;
 export const deployKeyAad = (appId: string) => `deploy-key:${appId}`;
+export const webhookAad = (appId: string) => `webhook:${appId}`;

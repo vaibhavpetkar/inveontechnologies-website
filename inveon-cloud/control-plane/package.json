@@ -10,7 +10,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node dist/migrate.js",
-    "test": "npm run build && node --test --test-concurrency=1 test/*.test.mjs"
+    "test": "npm run build && node --test --test-concurrency=1 test/*.test.mjs",
+    "keys:status": "node dist/keys.js status",
+    "keys:rotate": "node dist/keys.js rotate"
   },
   "dependencies": {
     "argon2": "^0.41.1",

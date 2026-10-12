@@ -481,7 +481,9 @@ Then:
 |---|---|---|
 | `INVEON_DATABASE_URL` | required | Postgres URL. |
 | `INVEON_JWT_SECRET` | required | At least 32 characters. Signs 15-minute access tokens. |
-| `INVEON_MASTER_KEY` | required | 32 bytes, base64 or hex. Wraps every data key. Never stored in the database. |
+| `INVEON_MASTER_KEY` | required (or `INVEON_MASTER_KEYS`) | 32 bytes, base64 or hex. Wraps every data key. Never stored in the database. |
+| `INVEON_MASTER_KEYS`, `INVEON_MASTER_KEY_CURRENT` | unset | More master keys and the current one; see [Rotating the master key](#rotating-the-master-key). |
+| `INVEON_PLATFORM_ADMINS` | first account | Comma-separated emails allowed to see key status and start a rotation. |
 | `INVEON_PUBLIC_URL` | `http://localhost:4100` | Used in install commands, webhook URLs and email links. |
 | `INVEON_PORT` | `4100` | |
 | `INVEON_OPEN_SIGNUP` | `true` | `false` means invite-only (after the first account). |
@@ -536,8 +538,9 @@ run `journalctl -u inveon-agent -f`.
   release's `0600` `.env`. Webhook secrets are encrypted the same way and
   shown once. Registry passwords and deploy keys are encrypted the same
   way, bound to their app, write-only, and decrypted only into the claiming
-  agent's copy of a job; the stored job steps never hold them. To rotate the master key, re-wrap every data key (planned for
-  phase 2). If the master key is lost, every secret has to be entered again.
+  agent's copy of a job; the stored job steps never hold them. Master keys
+  can be [rotated](#rotating-the-master-key). If every copy of a master key
+  is lost, the secrets wrapped with it have to be entered again.
 - **Agents:**
   - the install token is single-use and expires after 15 minutes;
   - each server's agent token is random and stored hashed;
@@ -577,6 +580,7 @@ run `journalctl -u inveon-agent -f`.
   streams (with the service), job cancels, registry credentials and deploy
   keys (never their values), preview creation and teardown, alert channels
   (create, update, test, secret rotation, delete; never the URL or secret),
+  master key rotations started from the dashboard,
   release archiving, and deploys queued for, discarded from or started by a
   maintenance window. It records the actor, the IP and the time. Admins and owners can read it under Audit log.
 
@@ -614,6 +618,51 @@ admins too** on the Team page to extend this to admins.
   audit-logged (`member.2fa_reset`); enabling, disabling, new recovery codes
   and failed codes are logged on the user.
 
+### Rotating the master key
+
+Every encrypted value records which master key wrapped its data key:
+`v1.…` is the original format and means the key in `INVEON_MASTER_KEY`
+(key id `legacy`); `v2.<key id>.…` names any other key, and the id is also
+authenticated with the value. Encrypted values: variables, app webhook
+secrets, registry passwords, deploy keys, alert channel URLs and signing
+secrets, two-factor secrets.
+
+| Variable | Meaning |
+|---|---|
+| `INVEON_MASTER_KEY` | The original single key, id `legacy`. Optional once nothing uses it. |
+| `INVEON_MASTER_KEYS` | More keys: `id:key,id:key` (ids are letters, digits, `-`, `_`; keys are 32 bytes, base64 or hex). |
+| `INVEON_MASTER_KEY_CURRENT` | The id new values are encrypted with. Default: the last key in `INVEON_MASTER_KEYS`, else `legacy`. |
+| `INVEON_PLATFORM_ADMINS` | Emails that may see key status and start a rotation in the dashboard. Default: the first account on this installation. They need two-factor on. |
+
+To rotate:
+
+1. Generate a key (`openssl rand -base64 32`) and store a copy outside the
+   server. Add it next to the old one and make it current, for example
+   `INVEON_MASTER_KEYS=2026-10:<new key>` (with `INVEON_MASTER_KEY` still
+   set), and restart. New values now use `2026-10`; old ones still decrypt.
+2. Re-wrap the old values: **Encryption keys**, **Re-wrap onto the current
+   key** (platform admins), or `npm run keys:rotate` in `control-plane/`
+   (`docker compose exec control-plane node dist/keys.js rotate` in the
+   container). It works through each encrypted column in batches
+   (`--batch 200`), re-wrapping only each value's data key with the current
+   master key (the value's own ciphertext is untouched, and is checked
+   before anything is written). A row is updated only if it still holds the
+   ciphertext that was read, so it is safe while the control plane runs.
+   It's idempotent and resumable: values already on the current key are
+   never touched, so a run that stops (or `--max N`) continues next time.
+   A value whose key isn't configured is reported and skipped.
+3. Check **Encryption keys** (or `npm run keys:status`): it shows how many
+   values each key id wraps, per column. When the old key shows **unused,
+   safe to remove** (0 values), remove it from the environment and restart.
+   Start-up logs an error if any stored value needs a key that isn't
+   configured.
+
+To go back, make the old id current again and re-wrap. Keys stay in the
+environment only. A KMS-backed key can be added to the keyring as another
+key id (`registerKeyEncryptionKey` in `lib/crypto.ts` takes anything that
+wraps and unwraps a data key with a context), so moving to AWS KMS is the
+same rotation.
+
 ## Tests
 
 ```bash
@@ -636,6 +685,11 @@ a fake GitHub API, and act as the agent. They cover:
 - agent authentication, and that one server can't claim, report on or finish
   another server's job;
 - secret encryption round trip, masking and write-only reads;
+- master key rotation: old `v1` values still decrypt next to a new key, the
+  key id is authenticated, every `*_enc` column in the schema is covered, a
+  partial run resumes, a second run changes nothing, values decrypt with
+  the old key removed, a value under a missing key is reported, and
+  rotating back;
 - webhook signatures;
 - blue/green step order, rollback targets and failed-deploy clean-up;
 - release commands: validation, the backup first, keeping the old release
@@ -736,7 +790,8 @@ rollback.
 - Build on a separate build host (builds run on each environment's server
   today), and a GitHub App integration for short-lived clone tokens and
   preview links posted on pull requests.
-- Rotate the master key, move it to AWS KMS, and use mTLS for agents.
+- A KMS-backed master key (the keyring already takes one), and mTLS for
+  agents.
 - SSO, and WebAuthn security keys next to TOTP.
 - Metrics (Prometheus + Grafana) and central logs (Loki).
 - Maintenance windows in a chosen time zone (they are UTC today).

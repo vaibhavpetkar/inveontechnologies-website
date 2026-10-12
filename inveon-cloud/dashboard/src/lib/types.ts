@@ -22,6 +22,8 @@ export interface User {
   name: string | null;
   organizations: OrgSummary[];
   twoFactor: TwoFactorStatus;
+  /** Runs the installation itself (encryption keys). */
+  platformAdmin: boolean;
 }
 
 export interface Server {

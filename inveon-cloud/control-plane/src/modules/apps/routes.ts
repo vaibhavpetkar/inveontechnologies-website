@@ -10,7 +10,7 @@ import { audit } from "../../lib/audit.js";
 import { AppError, ConflictError, NotFoundError } from "../../lib/errors.js";
 import { parseGithubRepo } from "../../lib/github.js";
 import { generateDeployKey } from "../../lib/ssh-key.js";
-import { deployKeyAad, registryAad } from "../../lib/aad.js";
+import { deployKeyAad, registryAad, webhookAad } from "../../lib/aad.js";
 import { HOSTNAME_RE } from "../domains/routes.js";
 import { startPreviewTeardown } from "../previews/service.js";
 import { parseReleaseCommand, RELEASE_SERVICE_RE } from "../../lib/release-command.js";
@@ -24,7 +24,6 @@ export const COMPOSE_PATH_RE = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._\/-
 export const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 const PORT_BASE = 20000;
 
-const webhookAad = (appId: string) => `webhook:${appId}`;
 export const REL_PATH_RE = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._\/-]{1,200}$/;
 export const REGISTRY_SERVER_RE = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::\d{1,5})?$/;
 export const REGISTRY_USER_RE = /^[A-Za-z0-9._@+-]{1,256}$/;

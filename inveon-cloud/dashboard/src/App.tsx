@@ -14,6 +14,7 @@ import Audit from "./pages/Audit";
 import Alerts from "./pages/Alerts";
 import NoOrganization from "./pages/NoOrganization";
 import Account from "./pages/Account";
+import EncryptionKeys from "./pages/EncryptionKeys";
 import TwoFactorGate from "./pages/TwoFactorGate";
 
 function Private({ children }: { children: ReactNode }) {
@@ -77,6 +78,11 @@ export default function App() {
           <Route path="/alerts">
             <Private>
               <Alerts />
+            </Private>
+          </Route>
+          <Route path="/platform/keys">
+            <Private>
+              <EncryptionKeys />
             </Private>
           </Route>
           <Route path="/account">

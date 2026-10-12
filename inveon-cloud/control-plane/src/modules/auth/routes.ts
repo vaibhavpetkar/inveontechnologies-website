@@ -9,6 +9,7 @@ import { authRateLimiter, requireAuth, signAccessToken } from "./middleware.js";
 import { randomToken, sha256Hex } from "../../lib/crypto.js";
 import { writeAudit } from "../../lib/audit.js";
 import { AppError, ConflictError, UnauthorizedError } from "../../lib/errors.js";
+import { isPlatformAdmin } from "../keys/routes.js";
 import { checkSecondFactor, secondFactorSchema, signChallenge, twoFactorRouter, twoFactorSummary, verifyChallenge } from "./two-factor.js";
 
 const REFRESH_COOKIE = "inveon_refresh_token";
@@ -88,7 +89,7 @@ async function issueSession(db: Database, env: Env, res: Response, userId: strin
   return signAccessToken(userId, env);
 }
 
-async function profile(db: Database, userId: string) {
+async function profile(db: Database, env: Env, userId: string) {
   const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
   if (!user) throw new UnauthorizedError();
   const orgs = await db
@@ -97,7 +98,7 @@ async function profile(db: Database, userId: string) {
     .innerJoin(organizations, eq(organizations.id, memberships.orgId))
     .where(eq(memberships.userId, userId))
     .orderBy(organizations.name);
-  return { id: user.id, email: user.email, name: user.name, organizations: orgs, twoFactor: await twoFactorSummary(db, user) };
+  return { id: user.id, email: user.email, name: user.name, organizations: orgs, twoFactor: await twoFactorSummary(db, user), platformAdmin: await isPlatformAdmin(db, env, user) };
 }
 
 const refreshHashOf = (cookies: unknown) => {
@@ -142,7 +143,7 @@ export function authRouter(db: Database, env: Env) {
       await writeAudit(db, { orgId: org.id, actorUserId: user.id, action: "org.create", entityType: "organization", entityId: org.id, metadata: { name: org.name }, ipAddress: req.ip });
     }
     const accessToken = await issueSession(db, env, res, user.id, { ua: req.headers["user-agent"], ip: req.ip });
-    res.status(201).json({ accessToken, user: await profile(db, user.id) });
+    res.status(201).json({ accessToken, user: await profile(db, env, user.id) });
   });
 
   router.post("/login", loginLimit, async (req, res) => {
@@ -167,7 +168,7 @@ export function authRouter(db: Database, env: Env) {
     await db.update(users).set({ failedLoginAttempts: 0, lockedUntil: null }).where(eq(users.id, user.id));
     const accessToken = await issueSession(db, env, res, user.id, { ua: req.headers["user-agent"], ip: req.ip });
     await writeAudit(db, { orgId: null, actorUserId: user.id, action: "user.login", entityType: "user", entityId: user.id, ipAddress: req.ip });
-    res.json({ accessToken, user: await profile(db, user.id) });
+    res.json({ accessToken, user: await profile(db, env, user.id) });
   });
 
   router.post("/login/2fa", secondFactorLimit, async (req, res) => {
@@ -184,7 +185,7 @@ export function authRouter(db: Database, env: Env) {
     await db.update(users).set({ failedLoginAttempts: 0, lockedUntil: null }).where(eq(users.id, user.id));
     const accessToken = await issueSession(db, env, res, user.id, { ua: req.headers["user-agent"], ip: req.ip });
     await writeAudit(db, { orgId: null, actorUserId: user.id, action: "user.login", entityType: "user", entityId: user.id, metadata: { secondFactor: method }, ipAddress: req.ip });
-    res.json({ accessToken, user: await profile(db, user.id) });
+    res.json({ accessToken, user: await profile(db, env, user.id) });
   });
 
   router.use("/2fa", twoFactorRouter(db, env, refreshHashOf));
@@ -228,7 +229,7 @@ export function authRouter(db: Database, env: Env) {
   });
 
   router.get("/me", requireAuth(env), async (req, res) => {
-    res.json({ user: await profile(db, req.user!.sub) });
+    res.json({ user: await profile(db, env, req.user!.sub) });
   });
 
   // Accept an invite as an already signed-in user.
@@ -236,7 +237,7 @@ export function authRouter(db: Database, env: Env) {
     const { token } = z.object({ token: z.string().min(10).max(200) }).parse(req.body);
     const invite = await findUsableInvite(db, token);
     await acceptInvite(db, invite.id, invite.orgId, invite.role, req.user!.sub, req.ip);
-    res.json({ orgId: invite.orgId, user: await profile(db, req.user!.sub) });
+    res.json({ orgId: invite.orgId, user: await profile(db, env, req.user!.sub) });
   });
 
   // Invite preview for the accept page (no secrets: org name, role, email).
