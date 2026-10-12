@@ -364,3 +364,55 @@ export const schedulerRuns = pgTable(
   },
   (t) => ({ pk: primaryKey({ columns: [t.name, t.key] }) }),
 );
+
+// ---------------------------------------------------------------- alerts
+
+/**
+ * Where an organization's alerts go. Slack and webhook URLs are secrets (a
+ * Slack URL is its own credential), so they are envelope-encrypted like
+ * variables; only the scheme and host are shown (urlHint). A webhook's
+ * signing secret is generated here, shown once and encrypted.
+ */
+export const alertChannels = pgTable(
+  "alert_channels",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    type: text("type").$type<"slack" | "webhook" | "email">().notNull(),
+    urlEnc: text("url_enc"),
+    urlHint: text("url_hint"),
+    signingSecretEnc: text("signing_secret_enc"),
+    // Email: recipients; empty means the organization's owners and admins.
+    emails: jsonb("emails").$type<string[]>().notNull().default([]),
+    events: jsonb("events").$type<string[]>().notNull().default([]),
+    enabled: boolean("enabled").notNull().default(true),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: ts("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({ byOrg: index("alert_channels_org_idx").on(t.orgId) }),
+);
+
+/** One alert to one channel: a small durable queue with retries, and the delivery log. */
+export const alertDeliveries = pgTable(
+  "alert_deliveries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    channelId: uuid("channel_id").notNull().references(() => alertChannels.id, { onDelete: "cascade" }),
+    event: text("event").notNull(),
+    // Title, text, link and details. Never holds secrets.
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+    status: text("status").$type<"pending" | "success" | "failure">().notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(5),
+    nextAttemptAt: ts("next_attempt_at").notNull().defaultNow(),
+    responseStatus: integer("response_status"),
+    lastError: text("last_error"),
+    detail: text("detail"),
+    createdAt: createdAt(),
+    deliveredAt: ts("delivered_at"),
+  },
+  (t) => ({ due: index("alert_deliveries_due_idx").on(t.status, t.nextAttemptAt), byOrg: index("alert_deliveries_org_created_idx").on(t.orgId, t.createdAt) }),
+);

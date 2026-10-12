@@ -29,6 +29,13 @@
       "when": 1791823799186,
       "tag": "0003_preview_environments",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791824998963,
+      "tag": "0004_alerts",
+      "breakpoints": true
     }
   ]
 }

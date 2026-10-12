@@ -47,6 +47,9 @@ const envSchema = z.object({
   INVEON_SMTP_USER: z.string().optional(),
   INVEON_SMTP_PASSWORD: z.string().optional(),
   INVEON_MAIL_FROM: z.string().default("Inveon Cloud <no-reply@inveontechnologies.in>"),
+  // Alert webhooks: comma-separated hosts that may be private addresses or
+  // plain http (internal endpoints on a trusted network). Empty = none.
+  INVEON_ALERT_PRIVATE_HOSTS: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

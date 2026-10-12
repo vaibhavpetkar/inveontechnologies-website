@@ -1,15 +1,16 @@
 import { Router } from "express";
 import { z } from "zod";
 import { promises as dns } from "node:dns";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, lte, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
 import type { Env } from "../../env.js";
-import { domains, environments, jobs, servers } from "../../db/schema.js";
+import { apps, domains, environments, jobs, servers } from "../../db/schema.js";
 import { requireRole } from "../auth/middleware.js";
 import { audit } from "../../lib/audit.js";
 import { AppError, ConflictError, NotFoundError } from "../../lib/errors.js";
 import { loadEnvironment } from "../apps/routes.js";
 import { createJob, notifyServer, registerJobEffect } from "../jobs/service.js";
+import { dashboardLink, emitAlert } from "../alerts/service.js";
 
 export const HOSTNAME_RE = /^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
@@ -181,4 +182,38 @@ export async function queueRenewals(db: Database) {
     notifyServer(serverId);
   }
   return byServer.size;
+}
+
+export const CERT_EXPIRY_WARN_DAYS = 14;
+
+/**
+ * Daily: one alert per certificate that expires within 14 days (renewals
+ * normally happen at 30 days, so this means renewal is failing). Each
+ * certificate is reported once per expiry date.
+ */
+export async function alertExpiringCertificates(db: Database, now = new Date()) {
+  const rows = await db
+    .select({ domain: domains, environment: environments, appName: apps.name, appId: apps.id })
+    .from(domains)
+    .innerJoin(environments, eq(environments.id, domains.environmentId))
+    .innerJoin(apps, eq(apps.id, environments.appId))
+    .where(and(eq(domains.status, "active"), isNotNull(domains.certExpiresAt), lte(domains.certExpiresAt, new Date(now.getTime() + CERT_EXPIRY_WARN_DAYS * 86400_000))));
+  let sent = 0;
+  for (const { domain, environment, appName, appId } of rows) {
+    const expires = domain.certExpiresAt!;
+    const claimed = await db.execute(
+      sql`INSERT INTO scheduler_runs (name, key, last_run_at) VALUES ('cert_expiry_alert', ${`${domain.id}:${expires.toISOString().slice(0, 10)}`}, ${now}) ON CONFLICT DO NOTHING RETURNING name`,
+    );
+    if (!claimed.rows.length) continue;
+    const days = Math.max(0, Math.floor((expires.getTime() - now.getTime()) / 86400_000));
+    await emitAlert(db, domain.orgId, "cert.expiring", {
+      title: `Certificate for ${domain.hostname} expires ${days === 0 ? "today" : `in ${days} day${days === 1 ? "" : "s"}`}`,
+      text: `The Let's Encrypt certificate for ${domain.hostname} (${appName} / ${environment.name}) expires on ${expires.toISOString().slice(0, 10)}. Renewal is normally automatic, so check the latest "Renew certificates" job for its server.`,
+      severity: days <= 3 ? "critical" : "warning",
+      url: dashboardLink(`/apps/${appId}?env=${environment.id}`),
+      details: { hostname: domain.hostname, expiresAt: expires.toISOString() },
+    });
+    sent++;
+  }
+  return sent;
 }

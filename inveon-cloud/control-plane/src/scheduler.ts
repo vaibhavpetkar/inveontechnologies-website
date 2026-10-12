@@ -5,7 +5,8 @@ import { logger } from "./lib/logger.js";
 import { markOfflineServers } from "./modules/agent/routes.js";
 import { failStaleJobs } from "./modules/jobs/service.js";
 import { runDueChecks } from "./modules/health/service.js";
-import { queueRenewals } from "./modules/domains/routes.js";
+import { alertExpiringCertificates, queueRenewals } from "./modules/domains/routes.js";
+import { processDueDeliveries, pruneDeliveries } from "./modules/alerts/service.js";
 import { queueNightlyBackups } from "./modules/backups/routes.js";
 import { expireLogFollows } from "./modules/live-logs/service.js";
 
@@ -33,6 +34,9 @@ export async function tick(db: Database, env: Env) {
     ["health checks", () => runDueChecks(db, env.INVEON_PUBLIC_URL)],
     ["nightly backups", () => queueNightlyBackups(db)],
     ["certificate renewals", async () => ((await claimDaily(db, "cert_renew")) ? queueRenewals(db) : 0)],
+    ["certificate expiry alerts", async () => ((await claimDaily(db, "cert_expiry_alerts")) ? alertExpiringCertificates(db) : 0)],
+    ["alert retries", () => processDueDeliveries(db)],
+    ["alert log clean-up", async () => ((await claimDaily(db, "alert_delivery_prune")) ? pruneDeliveries(db) : 0)],
   ];
   for (const [name, fn] of tasks) {
     try {

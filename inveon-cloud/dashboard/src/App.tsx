@@ -11,6 +11,7 @@ import AppDetail from "./pages/AppDetail";
 import Jobs from "./pages/Jobs";
 import Team from "./pages/Team";
 import Audit from "./pages/Audit";
+import Alerts from "./pages/Alerts";
 import NoOrganization from "./pages/NoOrganization";
 
 function Private({ children }: { children: ReactNode }) {
@@ -68,6 +69,11 @@ export default function App() {
           <Route path="/team">
             <Private>
               <Team />
+            </Private>
+          </Route>
+          <Route path="/alerts">
+            <Private>
+              <Alerts />
             </Private>
           </Route>
           <Route path="/audit">

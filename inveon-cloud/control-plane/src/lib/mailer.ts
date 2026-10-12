@@ -30,3 +30,17 @@ export async function sendMail(to: string[], subject: string, text: string) {
     logger.error({ err, to, subject }, "Email failed");
   }
 }
+
+/**
+ * For alert deliveries, which retry: throws when SMTP refuses the message.
+ * Returns false when SMTP isn't configured (the message is logged instead).
+ */
+export async function sendMailOrThrow(to: string[], subject: string, text: string): Promise<boolean> {
+  if (to.length === 0) throw new Error("No recipients");
+  if (!transporter) {
+    logger.warn({ to, subject, text }, "Email not sent (SMTP not configured), logged instead");
+    return false;
+  }
+  await transporter.sendMail({ from, to, subject, text });
+  return true;
+}

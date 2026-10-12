@@ -8,6 +8,7 @@ import { audit, writeAudit } from "../../lib/audit.js";
 import { AppError, ConflictError, NotFoundError } from "../../lib/errors.js";
 import { loadEnvironment } from "../apps/routes.js";
 import { createJob, notifyServer, registerJobEffect, type StepInput, type Tx } from "../jobs/service.js";
+import { dashboardLink, emitAlert } from "../alerts/service.js";
 
 type Environment = typeof environments.$inferSelect;
 type App = typeof apps.$inferSelect;
@@ -159,7 +160,23 @@ type StepRow = { action: string; status: string; result: Record<string, unknown>
 export async function recordBackupStep(db: Database, backupId: string, step: StepRow) {
   const size = typeof step.result?.sizeBytes === "number" && step.result.sizeBytes >= 0 ? step.result.sizeBytes : null;
   const status = step.status === "success" ? "success" : step.status === "cancelled" ? "cancelled" : "failure";
-  await db.update(backups).set({ status, sizeBytes: size, finishedAt: new Date() }).where(eq(backups.id, backupId));
+  const [row] = await db.update(backups).set({ status, sizeBytes: size, finishedAt: new Date() }).where(eq(backups.id, backupId)).returning();
+  if (row && status === "failure") await alertBackupFailed(db, row);
+}
+
+async function alertBackupFailed(db: Database, backup: Backup) {
+  const environment = await db.query.environments.findFirst({ where: eq(environments.id, backup.environmentId) });
+  const app = environment ? await db.query.apps.findFirst({ where: eq(apps.id, environment.appId) }) : null;
+  if (!environment || !app) return;
+  const job = backup.jobId ? await db.query.jobs.findFirst({ where: eq(jobs.id, backup.jobId), columns: { error: true } }) : null;
+  const label = `${app.name} / ${environment.name}`;
+  await emitAlert(db, environment.orgId, "backup.failed", {
+    title: `Backup failed: ${label}`,
+    text: `The ${backup.kind.replace("_", " ")} backup of ${label} failed.${job?.error ? `\n${job.error.slice(0, 500)}` : ""}`,
+    severity: "critical",
+    url: dashboardLink(`/apps/${app.id}?env=${environment.id}`),
+    details: { app: app.name, environment: environment.name, kind: backup.kind, key: backup.s3Key },
+  });
 }
 
 async function onBackupJobFinished(db: Database, job: typeof jobs.$inferSelect, steps: StepRow[]) {

@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { Boxes, Cloud, History, ListChecks, LogOut, Menu, Server, Users, X } from "lucide-react";
+import { Bell, Boxes, Cloud, History, ListChecks, LogOut, Menu, Server, Users, X } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
 const NAV = [
@@ -9,6 +9,7 @@ const NAV = [
   { href: "/apps", label: "Apps", icon: Boxes },
   { href: "/jobs", label: "Jobs", icon: ListChecks },
   { href: "/team", label: "Team", icon: Users },
+  { href: "/alerts", label: "Alerts", icon: Bell, min: "admin" as const },
   { href: "/audit", label: "Audit log", icon: History, min: "admin" as const },
 ];
 

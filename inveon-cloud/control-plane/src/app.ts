@@ -23,9 +23,14 @@ import { domainsRouter } from "./modules/domains/routes.js";
 import { healthRouter } from "./modules/health/routes.js";
 import { backupsRouter } from "./modules/backups/routes.js";
 import { registerPreviewHooks } from "./modules/previews/service.js";
+import { alertsRouter } from "./modules/alerts/routes.js";
+import { configureAlerts } from "./modules/alerts/service.js";
+import { configureOutbound } from "./lib/outbound.js";
 
 export function createApp(db: Database, pool: pg.Pool, env: Env) {
   registerPreviewHooks(env);
+  configureOutbound(env.INVEON_ALERT_PRIVATE_HOSTS);
+  configureAlerts(env.INVEON_PUBLIC_URL);
   const app = express();
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
@@ -80,6 +85,7 @@ export function createApp(db: Database, pool: pg.Pool, env: Env) {
   org.use("/jobs", jobsRouter(db));
   org.use("/", domainsRouter(db, env));
   org.use("/", backupsRouter(db));
+  org.use("/", alertsRouter(db));
   org.use("/", orgRouter(db, env));
   app.use("/api/v1/orgs/:orgId", org);
 

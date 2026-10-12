@@ -228,3 +228,43 @@ export interface AuditEntry {
 }
 
 export const ROLE_RANK: Record<Role, number> = { viewer: 0, developer: 1, admin: 2, owner: 3 };
+
+export type AlertChannelType = "slack" | "webhook" | "email";
+
+export interface AlertChannel {
+  id: string;
+  name: string;
+  type: AlertChannelType;
+  /** Scheme and host only; the rest of the URL is write-only. */
+  url: string | null;
+  signingSecret: string | null;
+  emails: string[];
+  events: string[];
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AlertEventInfo {
+  id: string;
+  label: string;
+  default: boolean;
+}
+
+export interface AlertDelivery {
+  id: string;
+  channelId: string;
+  channelName: string;
+  channelType: AlertChannelType;
+  event: string;
+  payload: { title?: string; text?: string };
+  status: "pending" | "success" | "failure";
+  attempts: number;
+  maxAttempts: number;
+  nextAttemptAt: string;
+  responseStatus: number | null;
+  lastError: string | null;
+  detail: string | null;
+  createdAt: string;
+  deliveredAt: string | null;
+}

@@ -8,6 +8,7 @@ import { parseReleaseCommand } from "../../lib/release-command.js";
 import { logger } from "../../lib/logger.js";
 import { createJob, notifyServer, registerJobEffect, type StepInput } from "../jobs/service.js";
 import { backupConfigured, backupParams, newBackupRow, recordBackupStep } from "../backups/routes.js";
+import { dashboardLink, emitAlert } from "../alerts/service.js";
 
 type App = typeof apps.$inferSelect;
 type Environment = typeof environments.$inferSelect;
@@ -186,6 +187,7 @@ async function onDeployFinished(db: Database, job: typeof jobs.$inferSelect, ste
   if (deployment.backupId && backupStep) await recordBackupStep(db, deployment.backupId, backupStep);
   const environment = await db.query.environments.findFirst({ where: eq(environments.id, deployment.environmentId) });
   if (!environment) return;
+  await alertDeployOutcome(db, job, environment, deployment);
   if (job.status !== "success") {
     await cleanUpFailedDeploy(db, job, steps, environment, deployment);
     return;
@@ -202,6 +204,29 @@ async function onDeployFinished(db: Database, job: typeof jobs.$inferSelect, ste
     } catch (err) {
       logger.error({ err, hook: name, environmentId: environment.id }, "Deploy hook failed");
     }
+  }
+}
+
+async function alertDeployOutcome(db: Database, job: typeof jobs.$inferSelect, environment: Environment, deployment: typeof deployments.$inferSelect) {
+  if (job.status !== "success" && job.status !== "failure") return;
+  const app = await db.query.apps.findFirst({ where: eq(apps.id, environment.appId) });
+  const release = await db.query.releases.findFirst({ where: eq(releases.id, deployment.releaseId), columns: { commitSha: true, commitMessage: true } });
+  if (!app || !release) return;
+  const label = `${app.name} / ${environment.name}`;
+  const verb = deployment.kind === "rollback" ? "Rollback" : "Deploy";
+  const sha = release.commitSha.slice(0, 7);
+  const details = { app: app.name, environment: environment.name, commit: sha, message: release.commitMessage?.split("\n")[0]?.slice(0, 120) ?? null };
+  const url = dashboardLink(`/apps/${app.id}?env=${environment.id}`);
+  if (job.status === "failure") {
+    await emitAlert(db, environment.orgId, "deploy.failed", {
+      title: `${verb} failed: ${label}`,
+      text: `${verb} of ${sha} to ${label} failed. The live release was not changed.${job.error ? `\n${job.error.slice(0, 500)}` : ""}`,
+      severity: "critical",
+      url,
+      details,
+    });
+  } else {
+    await emitAlert(db, environment.orgId, "deploy.succeeded", { title: `${verb} succeeded: ${label}`, text: `${sha} is live on ${label}.`, severity: "info", url, details });
   }
 }
 
