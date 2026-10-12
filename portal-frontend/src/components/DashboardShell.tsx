@@ -6,6 +6,7 @@ import { useAuth } from "../context/AuthContext";
 import { navForRole, ROLE_LABELS, displayName } from "../lib/nav";
 import { Avatar } from "./Avatar";
 import { NotificationBell } from "./NotificationBell";
+import { Shortcuts } from "./tasks/Shortcuts";
 
 /**
  * The signed-in app frame: a sidebar with each role's links, a top bar,
@@ -120,6 +121,7 @@ export function DashboardShell({ children, wide = false }: { children: ReactNode
         >
           {children}
         </motion.main>
+        <Shortcuts />
       </div>
     </div>
   );

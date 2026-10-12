@@ -56,6 +56,7 @@ export function IssueList({ tasks, total, page, pageSize, sort, order, onSort, o
             return (
               <tr
                 key={t.id}
+                data-issue-row
                 tabIndex={0}
                 onClick={() => onOpen(t)}
                 onKeyDown={(e) => {

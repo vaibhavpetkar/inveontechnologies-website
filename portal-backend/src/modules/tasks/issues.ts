@@ -101,6 +101,7 @@ export async function recordChanges(
   after: TaskRow,
   actorUserId: string,
   names: { person: (id: string) => Promise<string>; phase: (id: string) => Promise<string>; task: (id: string) => Promise<string>; sprint?: (id: string) => Promise<string>; version?: (id: string) => Promise<string> },
+  note?: string,
 ) {
   const rows = [];
   for (const { field, label } of TRACKED) {
@@ -129,7 +130,7 @@ export async function recordChanges(
     }
     rows.push({ taskId: after.id, actorUserId, action: "field_change", field: label, fromValue: from, toValue: to });
   }
-  if (rows.length) await db.insert(taskEvents).values(rows);
+  if (rows.length) await db.insert(taskEvents).values(note ? rows.map((r) => ({ ...r, note })) : rows);
 }
 
 // ---- Search ----
@@ -174,8 +175,8 @@ export interface SearchRow extends Record<string, unknown> {
   total: number;
 }
 
-/** Issues the person can see, filtered, sorted and paged on the server. */
-export async function searchTasks(db: Database, me: { sub: string; role: string }, f: TaskSearch) {
+/** The WHERE parts for issues the person can see that match the filter (tasks t, projects p). */
+function searchWhere(me: { sub: string; role: string }, f: Partial<TaskSearch>): SQL[] {
   const privileged = ["hr", "admin", "super_admin"].includes(me.role);
   const where: SQL[] = [];
   if (!privileged) {
@@ -214,6 +215,12 @@ export async function searchTasks(db: Database, me: { sub: string; role: string 
         : sql`(t.title ILIKE ${like} OR t.description ILIKE ${like} OR (p.key || '-' || t.number) ILIKE ${like} OR array_to_string(t.labels, ' ') ILIKE ${like})`,
     );
   }
+  return where;
+}
+
+/** Issues the person can see, filtered, sorted and paged on the server. */
+export async function searchTasks(db: Database, me: { sub: string; role: string }, f: TaskSearch) {
+  const where = searchWhere(me, f);
   const dir = f.order === "asc" ? sql`ASC` : sql`DESC`;
   const orderBy = {
     updated: sql`t.updated_at ${dir}`,
@@ -234,6 +241,45 @@ export async function searchTasks(db: Database, me: { sub: string; role: string 
     LIMIT ${f.pageSize} OFFSET ${(f.page - 1) * f.pageSize}
   `);
   return { ids: r.rows.map((x) => x.id), total: r.rows[0]?.total ?? 0 };
+}
+
+export const STAT_GROUPS = ["status", "priority", "type", "assignee", "label", "sprint", "project"] as const;
+
+/** Counts and story points of matching issues grouped by one field, for dashboard charts. */
+export async function taskStats(db: Database, me: { sub: string; role: string }, f: Partial<TaskSearch>, groupBy: (typeof STAT_GROUPS)[number]) {
+  const where = searchWhere(me, f);
+  const whereSql = where.length ? sql`WHERE ${sql.join(where, sql` AND `)}` : sql``;
+  const col = {
+    status: sql`t.status::text`,
+    priority: sql`t.priority::text`,
+    type: sql`t.type::text`,
+    assignee: sql`t.assignee_id::text`,
+    label: sql`lbl`,
+    sprint: sql`t.sprint_id::text`,
+    project: sql`t.project_id::text`,
+  }[groupBy];
+  const from = groupBy === "label" ? sql`tasks t LEFT JOIN projects p ON p.id = t.project_id LEFT JOIN LATERAL unnest(t.labels) lbl ON true` : sql`tasks t LEFT JOIN projects p ON p.id = t.project_id`;
+  const r = await db.execute<{ value: string | null; count: number; points: number }>(sql`
+    SELECT ${col} AS value, count(*)::int AS count, coalesce(sum(t.story_points), 0)::int AS points
+    FROM ${from}
+    ${whereSql}
+    GROUP BY 1 ORDER BY 2 DESC LIMIT 50
+  `);
+  return r.rows;
+}
+
+/** Issues created and resolved per day over the last `days` days. */
+export async function createdVsResolved(db: Database, me: { sub: string; role: string }, f: Partial<TaskSearch>, days: number) {
+  const where = searchWhere(me, f);
+  const extra = where.length ? sql`AND ${sql.join(where, sql` AND `)}` : sql``;
+  const r = await db.execute<{ day: string; created: number; resolved: number }>(sql`
+    WITH d AS (SELECT generate_series(current_date - ${days - 1}::int, current_date, interval '1 day')::date AS day)
+    SELECT to_char(d.day, 'YYYY-MM-DD') AS day,
+      (SELECT count(*)::int FROM tasks t LEFT JOIN projects p ON p.id = t.project_id WHERE t.created_at::date = d.day ${extra}) AS created,
+      (SELECT count(*)::int FROM tasks t LEFT JOIN projects p ON p.id = t.project_id WHERE t.status = 'done' AND t.completed_at::date = d.day ${extra}) AS resolved
+    FROM d ORDER BY d.day
+  `);
+  return r.rows;
 }
 
 /** Adds each task's key (INV-42) for display; personal tasks get null. */

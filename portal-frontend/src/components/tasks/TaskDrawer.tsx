@@ -10,6 +10,7 @@ import { IssueKey, IssueTypeIcon, LabelChips } from "./IssueBits";
 import type { Colleague } from "../../lib/calendar";
 import type { DirectoryUser } from "../../lib/useDirectory";
 import { Avatar } from "../Avatar";
+import { statusLabel, useProjectSettings } from "../../lib/projectSettings";
 import { useToast } from "../Toast";
 import { GithubPanel } from "./GithubPanel";
 import { AttachmentsPanel } from "./AttachmentsPanel";
@@ -232,7 +233,8 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged, onOpenTas
     setBusy(false);
   }
 
-  const moves = task && user ? allowedMoves(task, user) : [];
+  const settings = useProjectSettings(task?.projectId, accessToken);
+  const moves = task && user ? allowedMoves(task, user, { requireReview: settings.workflow.requireReview }) : [];
   // Reviewers (per the server) rate done work; nobody rates their own.
   const canRate = !!task && !!user && task.status === "done" && canDecide && !!task.assigneeId && task.assigneeId !== user.id;
 
@@ -266,7 +268,7 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged, onOpenTas
               )}
               <IssueTypeIcon type={task.type} size={18} />
               <IssueKey value={task.key} />
-              <span className={`pill pill-${STATUS_META[task.status].tone}`}>{STATUS_META[task.status].label}</span>
+              <span className={`pill pill-${STATUS_META[task.status].tone}`}>{statusLabel(task.status, settings)}</span>
             </span>
           )}
           {task && (
@@ -455,7 +457,7 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged, onOpenTas
               <div className="drawer-actions">
                 {moves.map((to) => (
                   <button key={to} className={`btn ${to === "cancelled" ? "btn-danger" : to === "changes_requested" ? "btn-secondary" : ""}`} disabled={busy} onClick={() => move(to)}>
-                    {MOVE_LABELS[to]}
+                    {to === "done" && !settings.workflow.requireReview && task.assigneeId === user?.id ? "Mark done" : to === "in_review" && settings.workflow.labels.in_review ? `Move to ${statusLabel("in_review", settings)}` : MOVE_LABELS[to]}
                   </button>
                 ))}
               </div>

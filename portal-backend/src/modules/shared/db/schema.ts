@@ -928,6 +928,8 @@ export const projects = pgTable("projects", {
   nextIssueNumber: integer("next_issue_number").notNull().default(1),
   // Board column limits, e.g. { in_progress: 4, in_review: 2 }. Columns over their limit are flagged.
   wipLimits: jsonb("wip_limits").$type<Partial<Record<string, number>>>().notNull().default({}),
+  // Workflow, permission and notification schemes; missing keys fall back to defaults (see tasks/project-settings.ts).
+  settings: jsonb("settings").$type<Record<string, unknown>>().notNull().default({}),
   createdBy: uuid("created_by").notNull().references(() => users.id),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -1140,6 +1142,48 @@ export const taskDevLinks = pgTable(
   },
   (t) => ({ uniq: unique("task_dev_links_unique").on(t.taskId, t.kind, t.repo, t.ref) }),
 );
+
+export const automationTriggerEnum = pgEnum("automation_trigger", ["issue_created", "status_changed", "issue_assigned", "comment_added", "due_soon", "sprint_started"]);
+
+/** "When X happens to an issue, if Y, then do Z": a project's automation rules. */
+export const automationRules = pgTable("automation_rules", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  enabled: boolean("enabled").notNull().default(true),
+  trigger: automationTriggerEnum("trigger").notNull(),
+  conditions: jsonb("conditions").$type<Record<string, unknown>>().notNull().default({}),
+  actions: jsonb("actions").$type<Record<string, unknown>[]>().notNull().default([]),
+  runCount: integer("run_count").notNull().default(0),
+  lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+  createdBy: uuid("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** The audit trail of automation: each rule run on an issue and what it did. */
+export const automationRuns = pgTable(
+  "automation_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ruleId: uuid("rule_id").notNull().references(() => automationRules.id, { onDelete: "cascade" }),
+    taskId: uuid("task_id").references(() => tasks.id, { onDelete: "cascade" }),
+    status: text("status", { enum: ["success", "failed", "skipped"] }).notNull(),
+    message: text("message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({ byRule: index("automation_runs_rule_idx").on(t.ruleId, t.createdAt) }),
+);
+
+/** A person's dashboard: gadgets (charts and issue lists) in order. Shared ones are visible to all staff. */
+export const dashboards = pgTable("dashboards", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  ownerId: uuid("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  shared: boolean("shared").notNull().default(false),
+  gadgets: jsonb("gadgets").$type<{ id: string; kind: string; config: Record<string, unknown> }[]>().notNull().default([]),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 /** People following a task: they hear about comments and status changes. */
 export const taskWatchers = pgTable(

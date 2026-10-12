@@ -37,6 +37,7 @@ export const TaskCard = forwardRef<HTMLDivElement, Props>(function TaskCard({ ta
       <div
         className={`task-card${overdue ? " overdue" : ""}`}
         role="button"
+        data-issue-row
         tabIndex={0}
         draggable={draggable}
         onDragStart={(e) => {

@@ -23,6 +23,7 @@ import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import CertificateVerify from "./pages/CertificateVerify";
 import Tasks from "./pages/Tasks";
+import Dashboards from "./pages/Dashboards";
 import People from "./pages/People";
 import Calendar from "./pages/Calendar";
 import Chat from "./pages/Chat";
@@ -101,6 +102,7 @@ function AppRoutes() {
       <Route path="/internships/:slug"><Protected><InternshipTrack /></Protected></Route>
       <Route path="/reviews"><Protected><Reviews /></Protected></Route>
       <Route path="/calendar"><Protected><Calendar /></Protected></Route>
+      <Route path="/dashboards"><Protected><Dashboards /></Protected></Route>
       <Route path="/projects"><Protected><Projects /></Protected></Route>
       <Route path="/projects/:id"><Protected><ProjectDetail /></Protected></Route>
       <Route path="/notes"><Protected><Notes /></Protected></Route>

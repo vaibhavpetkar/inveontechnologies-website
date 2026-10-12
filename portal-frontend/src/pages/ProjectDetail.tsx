@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useLocation, useRoute, useSearch } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, CalendarRange, Check, Crown, FileSpreadsheet, Flag, GanttChartSquare, Github, KanbanSquare, ListOrdered, NotebookPen, Package, Pencil, Plus, Timer, Trash2, TrendingDown, UserMinus, Users, X } from "lucide-react";
+import { ArrowLeft, CalendarRange, Check, Crown, FileSpreadsheet, Flag, GanttChartSquare, Github, KanbanSquare, ListOrdered, NotebookPen, Package, Pencil, Plus, Timer, Settings2, Trash2, TrendingDown, UserMinus, Users, X } from "lucide-react";
 import { DashboardShell } from "../components/DashboardShell";
 import { Avatar } from "../components/Avatar";
 import { TaskCard } from "../components/tasks/TaskCard";
@@ -15,6 +15,8 @@ import { Timeline } from "../components/tasks/Timeline";
 import { Releases } from "../components/tasks/Releases";
 import { Timesheet } from "../components/tasks/Timesheet";
 import { ImportCsvDialog } from "../components/tasks/ImportCsvDialog";
+import { ProjectSettingsPanel } from "../components/tasks/ProjectSettingsPanel";
+import { statusLabel, useProjectSettings } from "../lib/projectSettings";
 import { IssueTypeIcon } from "../components/tasks/IssueBits";
 import "../styles/sprints.css";
 import { PeoplePicker, type Picked } from "../components/PeoplePicker";
@@ -29,7 +31,7 @@ import type { DirectoryUser } from "../lib/useDirectory";
 import { fmtDate, PROJECT_STATUS, useColleagues, type Milestone, type ProjectOverview, type ProjectStatus } from "../lib/workspace";
 import { ProgressRing } from "./Projects";
 
-type Tab = "board" | "backlog" | "timeline" | "releases" | "reports" | "roadmap" | "team" | "notes";
+type Tab = "board" | "backlog" | "timeline" | "releases" | "reports" | "roadmap" | "team" | "notes" | "settings";
 const TABS: { id: Tab; label: string; icon: typeof KanbanSquare }[] = [
   { id: "board", label: "Board", icon: KanbanSquare },
   { id: "backlog", label: "Backlog", icon: ListOrdered },
@@ -39,6 +41,7 @@ const TABS: { id: Tab; label: string; icon: typeof KanbanSquare }[] = [
   { id: "roadmap", label: "Roadmap", icon: CalendarRange },
   { id: "team", label: "Team", icon: Users },
   { id: "notes", label: "Notes", icon: NotebookPen },
+  { id: "settings", label: "Settings", icon: Settings2 },
 ];
 
 /** One project: its task board, roadmap phases, team and shared notes. */
@@ -66,6 +69,8 @@ export default function ProjectDetail() {
   const [dragging, setDragging] = useState<Task | null>(null);
   const [starting, setStarting] = useState<{ task: Task; resolve: (k: Kickoff | undefined | false) => void } | null>(null);
   const { status: github } = useGithubStatus(accessToken);
+  const settings = useProjectSettings(projectId, accessToken);
+  const reviewOpt = { requireReview: settings.workflow.requireReview };
 
   const load = useCallback(async () => {
     try {
@@ -150,7 +155,7 @@ export default function ProjectDetail() {
       setData((d) => (d ? { ...d, tasks: d.tasks.map((t) => (t.id === task.id ? { ...t, status: to } : t)) } : d));
       try {
         await apiFetch(`/api/v1/tasks/${task.id}/transition`, { method: "POST", body: { toStatus: to, note, kickoff }, accessToken });
-        toast(`Moved to ${STATUS_META[to].label.toLowerCase()}`);
+        toast(`Moved to ${statusLabel(to, settings).toLowerCase()}`);
         load();
         return true;
       } catch (err) {
@@ -278,12 +283,12 @@ export default function ProjectDetail() {
                         </h3>
                       )}
                   <div className="board">
-                    {BOARD_COLUMNS.map((col) => {
+                    {BOARD_COLUMNS.filter((col) => col !== "changes_requested" || settings.workflow.showChangesRequested || tasks.some((t) => t.status === col)).map((col) => {
                       const items = lane.tasks.filter((t) => t.status === col);
                       const total = tasks.filter((t) => t.status === col).length;
                       const limit = wip[col];
                       const over = !!limit && total > limit;
-                      const canDrop = !!dragging && !!user && allowedMoves(dragging, user).includes(col);
+                      const canDrop = !!dragging && !!user && allowedMoves(dragging, user, reviewOpt).includes(col);
                       return (
                         <section
                           key={col}
@@ -303,10 +308,10 @@ export default function ProjectDetail() {
                         >
                           <header className="column-head">
                             <span className={`status-dot tone-${STATUS_META[col].tone}`} />
-                            <span>{STATUS_META[col].label}</span>
+                            <span>{statusLabel(col, settings)}</span>
                             <span className={`column-count${over ? " over" : ""}`} title={limit ? `${total} of at most ${limit}` : undefined}>{limit ? `${total}/${limit}` : items.length}</span>
                             {data.canManage && lane === laneGroups[0] && (
-                              <button type="button" className="wip-button" onClick={() => setWipLimit(col)} aria-label={`Set the limit for ${STATUS_META[col].label}`}>
+                              <button type="button" className="wip-button" onClick={() => setWipLimit(col)} aria-label={`Set the limit for ${statusLabel(col, settings)}`}>
                                 Limit
                               </button>
                             )}
@@ -318,7 +323,7 @@ export default function ProjectDetail() {
                                   key={t.id}
                                   task={t}
                                   assignee={t.assigneeId ? byId.get(t.assigneeId) : undefined}
-                                  draggable={!!user && allowedMoves(t, user).length > 0}
+                                  draggable={!!user && allowedMoves(t, user, reviewOpt).length > 0}
                                   onOpen={() => navigate(`/projects/${projectId}?task=${t.key ?? t.id}`)}
                                   onDragStart={() => setDragging(t)}
                                   onDragEnd={() => setDragging(null)}
@@ -362,6 +367,7 @@ export default function ProjectDetail() {
               {tab === "team" && <Team data={data} onChanged={load} />}
 
               {tab === "notes" && <NotesList projectId={projectId} compact />}
+              {tab === "settings" && <ProjectSettingsPanel projectId={projectId} canManage={data.canManage} people={data.members.map((m) => ({ id: m.userId, name: m.name }))} />}
             </motion.div>
           </AnimatePresence>
         </>

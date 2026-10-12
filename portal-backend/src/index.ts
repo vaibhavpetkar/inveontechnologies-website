@@ -44,6 +44,9 @@ import { projectsRouter } from "./modules/projects/routes.js";
 import { tasksRouter } from "./modules/tasks/routes.js";
 import { sprintsRouter } from "./modules/tasks/sprints.js";
 import { engineeringRouter } from "./modules/tasks/engineering.js";
+import { projectSettingsRouter } from "./modules/tasks/project-settings.js";
+import { automationRouter, registerAutomation } from "./modules/tasks/automation.js";
+import { dashboardsRouter } from "./modules/tasks/dashboards.js";
 import { communitiesRouter } from "./modules/chat/communities-routes.js";
 import { conversationsRouter } from "./modules/chat/conversations-routes.js";
 import { messagesRouter } from "./modules/chat/messages-routes.js";
@@ -81,6 +84,7 @@ registerInternshipJobs(db, env.PORTAL_APP_URL.replace(/\/$/, ""));
 registerCalendarSchedules(db);
 registerProgramSchedules(db);
 registerGithubSchedules(db, env);
+registerAutomation(db);
 registerPayrollSchedules(db, env);
 const app = express();
 // Behind nginx (and Cloudflare in front of that) — trust exactly one hop
@@ -177,6 +181,9 @@ app.use("/api/v1", appointmentRouter(db, env));
 app.use("/api/v1/internships", internshipsRouter(db, env));
 app.use("/api/v1", sprintsRouter(db, env)); // /projects/:id/backlog, /sprints/:id…
 app.use("/api/v1", engineeringRouter(db, env)); // issue links, GitHub dev links, versions, timeline, import
+app.use("/api/v1", projectSettingsRouter(db, env)); // /projects/:id/settings
+app.use("/api/v1", automationRouter(db, env)); // /projects/:id/automation, /automation/:id
+app.use("/api/v1", dashboardsRouter(db, env)); // /dashboards
 app.use("/api/v1/projects", projectsRouter(db, env));
 app.use("/api/v1/tasks", tasksRouter(db, env));
 app.use("/api/v1/team", teamRouter(db, env));

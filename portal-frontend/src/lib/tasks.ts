@@ -198,9 +198,11 @@ const REVIEWER: Record<TaskStatus, TaskStatus[]> = {
 const PRIVILEGED: UserRole[] = ["hr", "admin", "super_admin"];
 export const CAN_ASSIGN_OTHERS: UserRole[] = ["manager", "hr", "admin", "super_admin"];
 
-export function allowedMoves(task: Task, me: { id: string; role: UserRole }): TaskStatus[] {
+export function allowedMoves(task: Task, me: { id: string; role: UserRole }, opts: { requireReview?: boolean } = {}): TaskStatus[] {
   const moves = new Set<TaskStatus>();
   if (task.assigneeId === me.id) ASSIGNEE[task.status].forEach((s) => moves.add(s));
+  // Projects without a review step let the assignee close their own work.
+  if (opts.requireReview === false && task.assigneeId === me.id && (task.status === "in_progress" || task.status === "changes_requested")) moves.add("done");
   // A project lead is also a reviewer server-side; a manager may be one, so
   // offer the moves and let the API decide.
   const maybeReviewer = PRIVILEGED.includes(me.role) || task.createdBy === me.id || (!!task.projectId && me.role === "manager");

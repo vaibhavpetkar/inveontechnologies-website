@@ -39,7 +39,7 @@ export function IssueFiltersBar({ filters, onChange, people, projects, labels, f
     <div className="issue-filters">
       <label className="search-box">
         <Search size={16} />
-        <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Search, or type a key like INV-12" aria-label="Search issues" />
+        <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Search, or type a key like INV-12" aria-label="Search issues" data-shortcut-search />
         {text && (
           <button type="button" className="icon-button" aria-label="Clear search" onClick={() => setText("")} style={{ width: 22, height: 22 }}>
             <X size={14} />

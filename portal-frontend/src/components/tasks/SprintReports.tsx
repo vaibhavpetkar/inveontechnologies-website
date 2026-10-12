@@ -128,7 +128,7 @@ const W = 640;
 const H = 240;
 const PAD = { l: 36, r: 12, t: 12, b: 28 };
 
-function BurndownChart({ data }: { data: SprintReport["burndown"] }) {
+export function BurndownChart({ data }: { data: SprintReport["burndown"] }) {
   const { days, committed, endsAt } = data;
   const geo = useMemo(() => {
     if (!days.length) return null;

@@ -33,6 +33,8 @@ import { writeAuditLog } from "../shared/audit.js";
 import { notify } from "../notifications/service.js";
 import { formatWhen } from "../shared/format.js";
 import { isAssigneeTransitionAllowed, isReviewerTransitionAllowed, type TaskStatus } from "./state-machine.js";
+import { allowedOnProject, projectSettings } from "./project-settings.js";
+import { emitAutomation } from "./automation.js";
 import { canAccessProject, canManageProject } from "../projects/routes.js";
 import type { Env } from "../shared/env.js";
 import { claimFile, fileForUrl, publicFile } from "../files/service.js";
@@ -191,7 +193,7 @@ const TASK_ROLES = ["intern", "employee", ...MANAGER_LIKE_ROLES] as const;
 export async function canEditTask(db: Database, userId: string, role: string, task: typeof tasks.$inferSelect): Promise<boolean> {
   if (PRIVILEGED_ROLES.includes(role as (typeof PRIVILEGED_ROLES)[number])) return true;
   if (task.createdBy === userId) return true;
-  return task.projectId ? canManageProject(db, userId, role, task.projectId) : false;
+  return task.projectId ? allowedOnProject(db, { sub: userId, role }, task.projectId, "editAnyIssue") : false;
 }
 
 /**
@@ -237,6 +239,7 @@ export function tasksRouter(db: Database, env: Env) {
   router.post("/", requireAuth(env), requireRole(...TASK_ROLES), async (req, res) => {
     const body = createTaskSchema.parse(req.body);
     if (body.projectId && !(await canAccessProject(db, req.user!.sub, req.user!.role, body.projectId))) throw new ForbiddenError();
+    if (body.projectId && !(await allowedOnProject(db, req.user!, body.projectId, "createIssues"))) throw new ForbiddenError("On this project only the owner and leads create issues");
     await assertCanAssign(db, req.user!, body.assigneeId, body.projectId);
 
     await assertMilestoneFits(db, body.milestoneId, body.projectId);
@@ -277,6 +280,7 @@ export function tasksRouter(db: Database, env: Env) {
     await addWatchers(db, task.id, [req.user!.sub, task.assigneeId]);
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "task.create", entityType: "task", entityId: task.id, ipAddress: req.ip });
     await notifyAssigned(db, task, req.user!.sub);
+    await emitAutomation(db, "issue_created", task, { actorUserId: req.user!.sub });
     res.status(201).json({ task: (await withKeys(db, [task]))[0] });
   });
 
@@ -368,7 +372,10 @@ export function tasksRouter(db: Database, env: Env) {
     const isAssignee = task.assigneeId === req.user!.sub;
     const isReviewer = await isTaskReviewer(db, req.user!, task);
 
-    const allowed = (isAssignee && isAssigneeTransitionAllowed(from, body.toStatus)) || (isReviewer && isReviewerTransitionAllowed(from, body.toStatus));
+    // A project can drop the review step: the assignee then closes their own work.
+    const noReview = !!task.projectId && !(await projectSettings(db, task.projectId)).workflow.requireReview;
+    const selfClose = noReview && isAssignee && body.toStatus === "done" && (from === "in_progress" || from === "changes_requested");
+    const allowed = selfClose || (isAssignee && isAssigneeTransitionAllowed(from, body.toStatus)) || (isReviewer && isReviewerTransitionAllowed(from, body.toStatus));
     if (!allowed) {
       throw new AppError("INVALID_TRANSITION", `Cannot move task from "${from}" to "${body.toStatus}" as this user`, 400);
     }
@@ -396,8 +403,11 @@ export function tasksRouter(db: Database, env: Env) {
       }
     });
 
-    await notifyTransition(db, task, body.toStatus, req.user!.sub, body.note, rating);
-    await notifyWatchersOfMove(db, task, body.toStatus, req.user!.sub);
+    if ((await projectSettings(db, task.projectId)).notifications.statusChange) {
+      await notifyTransition(db, task, body.toStatus, req.user!.sub, body.note, rating);
+      await notifyWatchersOfMove(db, task, body.toStatus, req.user!.sub);
+    }
+    await emitAutomation(db, "status_changed", task, { actorUserId: req.user!.sub, fromStatus: from, toStatus: body.toStatus });
     if (kickoff && task.createdBy !== req.user!.sub) {
       await notify(db, {
         userIds: [task.createdBy],
@@ -636,7 +646,10 @@ export function tasksRouter(db: Database, env: Env) {
     if (mentioned.length) {
       await notify(db, { userIds: mentioned, actorUserId: req.user!.sub, kind: "task.mention", title: `${who} mentioned you on ${ref}`, body: excerpt, link: `/tasks/${task.id}`, email: true });
     }
-    const followers = (await watcherIds(db, task.id)).concat([task.assigneeId, task.createdBy].filter((x): x is string => !!x));
+    const followers = (await projectSettings(db, task.projectId)).notifications.comment
+      ? (await watcherIds(db, task.id)).concat([task.assigneeId, task.createdBy].filter((x): x is string => !!x))
+      : [];
+    await emitAutomation(db, "comment_added", task, { actorUserId: req.user!.sub });
     await notify(db, {
       userIds: [...new Set(followers)].filter((id) => !mentioned.includes(id)),
       actorUserId: req.user!.sub,
@@ -748,6 +761,7 @@ export function tasksRouter(db: Database, env: Env) {
   router.post("/from-template", requireAuth(env), requireRole(...MANAGER_LIKE_ROLES), async (req, res) => {
     const body = fromTemplateSchema.parse(req.body);
     if (body.projectId && !(await canAccessProject(db, req.user!.sub, req.user!.role, body.projectId))) throw new ForbiddenError();
+    if (body.projectId && !(await allowedOnProject(db, req.user!, body.projectId, "createIssues"))) throw new ForbiddenError("On this project only the owner and leads create issues");
     await assertCanAssign(db, req.user!, body.assigneeId, body.projectId);
     const template = await db.query.taskTemplates.findFirst({ where: eq(taskTemplates.id, body.templateId) });
     if (!template) throw new NotFoundError("Task template not found");
@@ -1054,6 +1068,7 @@ export function tasksRouter(db: Database, env: Env) {
       await addWatchers(db, task.id, [updated.assigneeId]);
       await notifyAssigned(db, updated, req.user!.sub);
     }
+    if (updated.assigneeId !== task.assigneeId) await emitAutomation(db, "issue_assigned", updated, { actorUserId: req.user!.sub });
     res.json({ task: (await withKeys(db, [updated]))[0] });
   });
 
@@ -1075,6 +1090,7 @@ async function taskReviewerIds(db: Database, task: TaskRow) {
 }
 
 async function notifyAssigned(db: Database, task: TaskRow, actorUserId: string) {
+  if (!(await projectSettings(db, task.projectId)).notifications.assigned) return;
   const due = task.dueDate ? ` It's due ${formatWhen(task.dueDate)}.` : "";
   await notify(db, {
     userIds: [task.assigneeId],

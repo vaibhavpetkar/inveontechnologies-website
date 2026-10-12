@@ -11,6 +11,8 @@ import type { Env } from "../shared/env.js";
 import { canAccessProject, canManageProject } from "../projects/routes.js";
 import { displayNameFor } from "../employees/onboarding.js";
 import { recordChanges, withKeys } from "./issues.js";
+import { allowedOnProject, projectSettings } from "./project-settings.js";
+import { emitSprintStarted } from "./automation.js";
 
 /**
  * Scrum planning on a project: sprints, the ranked backlog, sprint start and
@@ -177,7 +179,7 @@ export function sprintsRouter(db: Database, env: Env) {
     return sprint;
   }
   async function mustManage(req: { user?: { sub: string; role: string } }, projectId: string) {
-    if (!(await canManageProject(db, req.user!.sub, req.user!.role, projectId))) throw new ForbiddenError("Only the project's owner or leads can plan sprints");
+    if (!(await allowedOnProject(db, req.user!, projectId, "planSprints"))) throw new ForbiddenError("Only the project's owner or leads can plan sprints");
   }
   async function mustAccess(req: { user?: { sub: string; role: string } }, projectId: string) {
     if (!(await canAccessProject(db, req.user!.sub, req.user!.role, projectId))) throw new ForbiddenError();
@@ -295,7 +297,7 @@ export function sprintsRouter(db: Database, env: Env) {
     if (!started) throw new AppError("SPRINT_STARTED", "This sprint has already started", 409);
     await writeAuditLog(db, { actorUserId: req.user!.sub, action: "sprint.start", entityType: "sprint", entityId: sprint.id, ipAddress: req.ip });
     const people = [...new Set(open.map((t) => t.assigneeId).filter((id): id is string => !!id && id !== req.user!.sub))];
-    if (people.length) {
+    if (people.length && (await projectSettings(db, sprint.projectId)).notifications.sprintStarted) {
       await notify(db, {
         userIds: people,
         actorUserId: req.user!.sub,
@@ -305,6 +307,7 @@ export function sprintsRouter(db: Database, env: Env) {
         link: `/projects/${sprint.projectId}?view=sprint`,
       });
     }
+    await emitSprintStarted(db, sprint.projectId, sprint.id, req.user!.sub);
     res.json({ sprint: started });
   });
 
