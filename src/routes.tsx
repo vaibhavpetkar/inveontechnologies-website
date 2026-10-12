@@ -33,6 +33,8 @@ export const ROUTES: { path: string; page: LazyPage }[] = [
   { path: '/careers', page: page(() => import('@/pages/Careers')) },
   { path: '/privacy', page: page(() => import('@/pages/Privacy')) },
   { path: '/terms', page: page(() => import('@/pages/Terms')) },
+  { path: '/refund-policy', page: page(() => import('@/pages/Refund')) },
+  { path: '/shipping-policy', page: page(() => import('@/pages/Shipping')) },
   // Retired: this flow was a localStorage-only mock (plaintext passwords, no
   // real backend). Real candidate accounts live on the portal; nginx also
   // redirects these paths there directly.
@@ -64,4 +66,6 @@ export const PUBLIC_PATHS = [
   '/careers',
   '/privacy',
   '/terms',
+  '/refund-policy',
+  '/shipping-policy',
 ];

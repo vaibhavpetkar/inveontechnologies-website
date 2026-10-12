@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 import { Helmet } from 'react-helmet-async';
+import LegalDetails from '@/components/layout/LegalDetails';
 
-/** Shared shell for the Privacy Policy and Terms pages. */
+/** Shared shell for the policy pages; each ends with the registered business details. */
 export default function LegalPage({ title, path, description, updated, children }: { title: string; path: string; description: string; updated: string; children: ReactNode }) {
   return (
     <>
@@ -18,6 +19,7 @@ export default function LegalPage({ title, path, description, updated, children 
             <h1 style={{ fontFamily: 'Outfit, sans-serif' }}>{title}</h1>
             <p className="text-sm text-muted-foreground">Last updated: {updated}</p>
             {children}
+            <LegalDetails />
           </article>
         </div>
       </section>

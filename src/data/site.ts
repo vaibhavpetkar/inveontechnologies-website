@@ -10,3 +10,13 @@ export const SOCIAL_LINKS: { linkedin: string; twitter: string; github: string }
   twitter: '',
   github: '',
 };
+
+// The registered legal details of the business behind Inveon Technologies, as
+// held by our payment gateway (Cashfree). These must appear on the website —
+// keep them in sync with the gateway account if they ever change.
+// Left empty until the legal name is confirmed; everything that shows it is
+// hidden while it is empty.
+export const LEGAL_NAME = '';
+export const LEGAL_EMAIL = 'rajvaibhavpetkar007@gmail.com';
+export const LEGAL_PHONE = '9922565938';
+export const LEGAL_PHONE_INTL = '+919922565938';
