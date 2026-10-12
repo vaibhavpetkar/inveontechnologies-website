@@ -17,6 +17,9 @@ export interface Task {
   sprintId?: string | null;
   storyPoints?: number | null;
   rank?: number | null;
+  fixVersionId?: string | null;
+  startDate?: string | null;
+  remainingHours?: string | null;
   title: string;
   description: string | null;
   assigneeId: string | null;

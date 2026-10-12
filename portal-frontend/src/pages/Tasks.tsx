@@ -19,6 +19,7 @@ import { allowedMoves, BOARD_COLUMNS, CAN_ASSIGN_OTHERS, EMPTY_FILTERS, filtersT
 import { useDirectory } from "../lib/useDirectory";
 import { IssueFiltersBar } from "../components/tasks/IssueFilters";
 import { IssueList } from "../components/tasks/IssueList";
+import { BulkEditBar } from "../components/tasks/BulkEditBar";
 import { useColleagues } from "../components/tasks/useColleagues";
 import "../styles/issues.css";
 
@@ -50,6 +51,9 @@ export default function Tasks() {
   const [page, setPage] = useState(1);
   const [projects, setProjects] = useState<{ id: string; key: string; title: string }[]>([]);
   const [labels, setLabels] = useState<string[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // A new search starts a new selection.
+  useEffect(() => setSelected(new Set()), [filters, view]);
   const colleagues = useColleagues();
   const [showCancelled, setShowCancelled] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -247,8 +251,27 @@ export default function Tasks() {
           onPage={setPage}
           onOpen={openTask}
           onLabel={(label) => changeFilters({ ...filters, label })}
+          selected={selected}
+          onSelect={(ids, on) =>
+            setSelected((cur) => {
+              const next = new Set(cur);
+              ids.forEach((id) => (on ? next.add(id) : next.delete(id)));
+              return next;
+            })
+          }
         />
       )}
+      <AnimatePresence>
+        {view === "list" && selected.size > 0 && (
+          <BulkEditBar
+            ids={[...selected]}
+            people={colleagues.people.map((p) => ({ id: p.id, name: p.name }))}
+            labels={labels}
+            onClear={() => setSelected(new Set())}
+            onDone={() => load()}
+          />
+        )}
+      </AnimatePresence>
 
       {!tasks && !error && view === "board" && (
         <div className="board">

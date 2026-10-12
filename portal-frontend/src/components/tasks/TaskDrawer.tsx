@@ -18,6 +18,7 @@ import { CAN_ASSIGN_OTHERS } from "../../lib/tasks";
 import { RatingDialog } from "./RatingDialog";
 import { Stars } from "./StarRating";
 import { TaskRequestsPanel } from "./TaskRequestsPanel";
+import { DevelopmentPanel, LinkedIssues, useVersions, WorkLog } from "./EngineeringPanels";
 import { useColleagues } from "./useColleagues";
 
 interface Props {
@@ -30,7 +31,7 @@ interface Props {
   onOpenTask?: (ref: string) => void;
 }
 
-type Tab = "updates" | "comments" | "activity";
+type Tab = "updates" | "comments" | "worklog" | "activity";
 
 export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged, onOpenTask }: Props) {
   const { user, accessToken } = useAuth();
@@ -189,7 +190,8 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged, onOpenTas
 
   // ---- Editing details, watching, subtasks ----
   const canEditDetails = !!task && !!user && (task.createdBy === user.id || task.assigneeId === user.id || CAN_ASSIGN_OTHERS.includes(user.role));
-  async function saveDetails(patch: Partial<{ type: IssueType; priority: TaskPriority; labels: string[]; dueDate: string | null; storyPoints: number | null }>) {
+  const versions = useVersions(task?.projectId);
+  async function saveDetails(patch: Partial<{ type: IssueType; priority: TaskPriority; labels: string[]; dueDate: string | null; storyPoints: number | null; startDate: string | null; fixVersionId: string | null; remainingHours: number | null }>) {
     if (!task) return;
     const before = task;
     setTask({ ...task, ...patch } as Task);
@@ -335,9 +337,42 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged, onOpenTas
                     ))}
                   </select>
                 </div>
+                {task.projectId && (
+                  <div className="field">
+                    <label htmlFor="iss-start">Starts</label>
+                    <input id="iss-start" type="date" value={task.startDate ? toDateInput(task.startDate) : ""} onChange={(e) => saveDetails({ startDate: e.target.value ? new Date(`${e.target.value}T09:00:00`).toISOString() : null })} />
+                  </div>
+                )}
                 <div className="field">
                   <label htmlFor="iss-due">Due</label>
                   <input id="iss-due" type="date" value={task.dueDate ? toDateInput(task.dueDate) : ""} onChange={(e) => saveDetails({ dueDate: e.target.value ? new Date(`${e.target.value}T23:59:00`).toISOString() : null })} />
+                </div>
+                {task.projectId && versions.length > 0 && (
+                  <div className="field">
+                    <label htmlFor="iss-version">Fix version</label>
+                    <select id="iss-version" value={task.fixVersionId ?? ""} onChange={(e) => saveDetails({ fixVersionId: e.target.value || null })}>
+                      <option value="">None</option>
+                      {versions.filter((v) => v.status === "unreleased" || v.id === task.fixVersionId).map((v) => (
+                        <option key={v.id} value={v.id}>{v.name}{v.status === "released" ? " (released)" : ""}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div className="field">
+                  <label htmlFor="iss-remaining">Remaining (h)</label>
+                  <input
+                    id="iss-remaining"
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    key={`rem-${task.remainingHours ?? ""}`}
+                    defaultValue={task.remainingHours != null ? Number(task.remainingHours) : ""}
+                    placeholder="–"
+                    onBlur={(e) => {
+                      const v = e.target.value === "" ? null : Math.max(0, Number(e.target.value));
+                      if (v !== (task.remainingHours != null ? Number(task.remainingHours) : null) && !Number.isNaN(v)) saveDetails({ remainingHours: v });
+                    }}
+                  />
                 </div>
                 {task.projectId && task.type !== "epic" && (
                   <div className="field">
@@ -383,6 +418,10 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged, onOpenTas
                 onChanged();
               }}
             />
+
+            <LinkedIssues task={task} canEdit={canEditDetails} onOpen={openTask} />
+
+            <DevelopmentPanel task={task} />
 
             <AttachmentsPanel taskId={task.id} onChanged={() => load()} />
 
@@ -454,10 +493,10 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged, onOpenTas
             )}
 
             <div className="tabs" role="tablist">
-              {(["updates", "comments", "activity"] as Tab[]).map((t) => (
+              {(["updates", "comments", "worklog", "activity"] as Tab[]).map((t) => (
                 <button key={t} role="tab" aria-selected={tab === t} className={`tab${tab === t ? " active" : ""}`} onClick={() => setTab(t)}>
                   {tab === t && <motion.span layoutId="drawer-tab" className="tab-underline" />}
-                  {t === "updates" ? "Work updates" : t === "comments" ? `Comments (${comments.length})` : "Activity"}
+                  {t === "updates" ? "Work updates" : t === "comments" ? `Comments (${comments.length})` : t === "worklog" ? "Work log" : "Activity"}
                 </button>
               ))}
             </div>
@@ -509,13 +548,17 @@ export function TaskDrawer({ taskId, byId, onClose, onMove, onChanged, onOpenTas
                     </button>
                   </form>
                 </motion.div>
+              ) : tab === "worklog" ? (
+                <motion.div key="worklog" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }}>
+                  <WorkLog task={task} onChanged={() => { load(); onChanged(); }} />
+                </motion.div>
               ) : (
                 <motion.ol key="activity" className="activity" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.15 }}>
                   {timeline.map((ev) => (
                     <li key={ev.id}>
                       <span className="activity-dot" />
                       <div>
-                        <strong>{ev.action === "github_sync" ? "GitHub" : name(ev.actorUserId)}</strong> {describeEvent(ev)}
+                        <strong>{ev.action === "github_sync" || ev.action === "github_pr" || (!ev.actorUserId && ev.note?.includes("GitHub")) ? "GitHub" : name(ev.actorUserId)}</strong> {describeEvent(ev)}
                         {ev.note && <div className="activity-note">“{ev.note}”</div>}
                         <div className="muted-small">{timeAgo(ev.createdAt)}</div>
                       </div>
@@ -601,6 +644,10 @@ function describeEvent(ev: TaskEvent): string {
     case "status_change":
     case "github_sync":
       return `moved it to ${ev.toStatus ? STATUS_META[ev.toStatus].label.toLowerCase() : "a new status"}`;
+    case "link_added":
+      return `linked it: ${ev.note ?? "another issue"}`;
+    case "github_pr":
+      return ev.note ? ev.note.replace(/^PR/, "pull request").replace(/^./, (c) => c.toLowerCase()) : "updated a pull request";
     case "comment":
       return "commented";
     case "attachment_added":

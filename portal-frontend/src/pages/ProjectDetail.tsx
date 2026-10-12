@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useLocation, useRoute, useSearch } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, CalendarRange, Check, Crown, Flag, Github, KanbanSquare, ListOrdered, NotebookPen, Pencil, Plus, Timer, Trash2, TrendingDown, UserMinus, Users, X } from "lucide-react";
+import { ArrowLeft, CalendarRange, Check, Crown, FileSpreadsheet, Flag, GanttChartSquare, Github, KanbanSquare, ListOrdered, NotebookPen, Package, Pencil, Plus, Timer, Trash2, TrendingDown, UserMinus, Users, X } from "lucide-react";
 import { DashboardShell } from "../components/DashboardShell";
 import { Avatar } from "../components/Avatar";
 import { TaskCard } from "../components/tasks/TaskCard";
@@ -11,6 +11,10 @@ import { StartWorkDialog, type Kickoff } from "../components/tasks/StartWorkDial
 import { ImportIssuesDialog } from "../components/tasks/ImportIssuesDialog";
 import { Backlog } from "../components/tasks/Backlog";
 import { SprintReports } from "../components/tasks/SprintReports";
+import { Timeline } from "../components/tasks/Timeline";
+import { Releases } from "../components/tasks/Releases";
+import { Timesheet } from "../components/tasks/Timesheet";
+import { ImportCsvDialog } from "../components/tasks/ImportCsvDialog";
 import { IssueTypeIcon } from "../components/tasks/IssueBits";
 import "../styles/sprints.css";
 import { PeoplePicker, type Picked } from "../components/PeoplePicker";
@@ -25,10 +29,12 @@ import type { DirectoryUser } from "../lib/useDirectory";
 import { fmtDate, PROJECT_STATUS, useColleagues, type Milestone, type ProjectOverview, type ProjectStatus } from "../lib/workspace";
 import { ProgressRing } from "./Projects";
 
-type Tab = "board" | "backlog" | "reports" | "roadmap" | "team" | "notes";
+type Tab = "board" | "backlog" | "timeline" | "releases" | "reports" | "roadmap" | "team" | "notes";
 const TABS: { id: Tab; label: string; icon: typeof KanbanSquare }[] = [
   { id: "board", label: "Board", icon: KanbanSquare },
   { id: "backlog", label: "Backlog", icon: ListOrdered },
+  { id: "timeline", label: "Timeline", icon: GanttChartSquare },
+  { id: "releases", label: "Releases", icon: Package },
   { id: "reports", label: "Reports", icon: TrendingDown },
   { id: "roadmap", label: "Roadmap", icon: CalendarRange },
   { id: "team", label: "Team", icon: Users },
@@ -56,6 +62,7 @@ export default function ProjectDetail() {
   const [adding, setAdding] = useState<{ milestoneId?: string } | null>(null);
   const [editingPhase, setEditingPhase] = useState<Milestone | "new" | null>(null);
   const [importing, setImporting] = useState(false);
+  const [importingCsv, setImportingCsv] = useState(false);
   const [dragging, setDragging] = useState<Task | null>(null);
   const [starting, setStarting] = useState<{ task: Task; resolve: (k: Kickoff | undefined | false) => void } | null>(null);
   const { status: github } = useGithubStatus(accessToken);
@@ -214,6 +221,7 @@ export default function ProjectDetail() {
             </div>
             <div className="page-head-actions">
               {data.canManage && github?.enabled && <button className="btn btn-secondary" onClick={() => setImporting(true)}><Github size={16} /> Import issues</button>}
+              {data.canManage && <button className="btn btn-secondary" onClick={() => setImportingCsv(true)}><FileSpreadsheet size={16} /> Import CSV</button>}
               <motion.button className="btn" whileTap={{ scale: 0.96 }} onClick={() => setAdding({ milestoneId: phase !== "all" && phase !== "none" ? phase : undefined })}><Plus size={17} /> Add task</motion.button>
             </div>
           </motion.header>
@@ -330,7 +338,16 @@ export default function ProjectDetail() {
 
               {tab === "backlog" && <Backlog projectId={projectId} version={version} onOpenTask={(ref) => navigate(`/projects/${projectId}?task=${ref}`)} onChanged={load} />}
 
-              {tab === "reports" && <SprintReports projectId={projectId} version={version} onOpenTask={(ref) => navigate(`/projects/${projectId}?task=${ref}`)} />}
+              {tab === "timeline" && <Timeline projectId={projectId} version={version} onOpenTask={(ref) => navigate(`/projects/${projectId}?task=${ref}`)} />}
+
+              {tab === "releases" && <Releases projectId={projectId} version={version} onOpenTask={(ref) => navigate(`/projects/${projectId}?task=${ref}`)} />}
+
+              {tab === "reports" && (
+                <div style={{ display: "grid", gap: "1rem" }}>
+                  <SprintReports projectId={projectId} version={version} onOpenTask={(ref) => navigate(`/projects/${projectId}?task=${ref}`)} />
+                  <Timesheet projectId={projectId} />
+                </div>
+              )}
 
               {tab === "roadmap" && (
                 <Roadmap
@@ -384,6 +401,18 @@ export default function ProjectDetail() {
             initialProjectId={projectId}
             onClose={() => setImporting(false)}
             onImported={(n) => {
+              toast(`Imported ${n} ${n === 1 ? "issue" : "issues"}`);
+              load();
+            }}
+          />
+        )}
+        {importingCsv && data?.project.key && (
+          <ImportCsvDialog
+            projectId={projectId}
+            projectKey={data.project.key}
+            onClose={() => setImportingCsv(false)}
+            onImported={(n) => {
+              setImportingCsv(false);
               toast(`Imported ${n} ${n === 1 ? "issue" : "issues"}`);
               load();
             }}
