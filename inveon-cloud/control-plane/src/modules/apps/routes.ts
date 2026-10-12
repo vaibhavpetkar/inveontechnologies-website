@@ -9,6 +9,7 @@ import { decryptValue, encryptValue, randomToken } from "../../lib/crypto.js";
 import { audit } from "../../lib/audit.js";
 import { AppError, ConflictError, NotFoundError } from "../../lib/errors.js";
 import { parseGithubRepo } from "../../lib/github.js";
+import { parseReleaseCommand, RELEASE_SERVICE_RE } from "../../lib/release-command.js";
 import { slugify } from "../auth/routes.js";
 import { loadServer, publicServer } from "../servers/routes.js";
 import { envVarAad, createJob, notifyServer } from "../jobs/service.js";
@@ -198,9 +199,20 @@ export function environmentsRouter(db: Database, env: Env) {
 
   router.patch("/:envId", requireRole("admin"), async (req, res) => {
     const body = z
-      .object({ healthPath: z.string().trim().regex(/^\/[A-Za-z0-9._~\/?=&%-]*$/).max(200).optional(), autoDeploy: z.boolean().optional() })
+      .object({
+        healthPath: z.string().trim().regex(/^\/[A-Za-z0-9._~\/?=&%-]*$/).max(200).optional(),
+        autoDeploy: z.boolean().optional(),
+        releaseCommand: z.string().trim().max(2000).nullable().optional().transform((v) => (v === "" ? null : v)),
+        releaseService: z.string().trim().regex(RELEASE_SERVICE_RE, "Enter the compose service name").nullable().optional().or(z.literal("").transform(() => null)),
+      })
       .parse(req.body);
     const { environment } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
+    const command = body.releaseCommand !== undefined ? body.releaseCommand : environment.releaseCommand;
+    const service = body.releaseService !== undefined ? body.releaseService : environment.releaseService;
+    if (command) {
+      parseReleaseCommand(command);
+      if (!service) throw new AppError("RELEASE_SERVICE_REQUIRED", "Choose the compose service the release command runs in", 400);
+    }
     const [updated] = await db.update(environments).set(body).where(eq(environments.id, environment.id)).returning();
     await audit(db, req, "environment.update", "environment", environment.id, body);
     res.json({ environment: updated });

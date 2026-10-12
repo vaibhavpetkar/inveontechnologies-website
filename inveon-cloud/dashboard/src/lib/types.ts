@@ -62,6 +62,8 @@ export interface Environment {
   currentReleaseId: string | null;
   previousReleaseId: string | null;
   autoDeploy: boolean;
+  releaseCommand: string | null;
+  releaseService: string | null;
   createdAt: string;
   serverName?: string;
   serverIp?: string | null;
@@ -114,6 +116,10 @@ export interface Deployment {
   finishedAt: string | null;
   commitSha: string;
   commitMessage: string | null;
+  error: string | null;
+  releaseOutput: string | null;
+  backupId: string | null;
+  backupStatus: JobStatus | null;
 }
 
 export interface EnvVar {
@@ -162,7 +168,7 @@ export interface BackupConfig {
 
 export interface Backup {
   id: string;
-  kind: "scheduled" | "manual" | "pre_restore";
+  kind: "scheduled" | "manual" | "pre_restore" | "pre_deploy";
   status: JobStatus;
   s3Bucket: string;
   s3Key: string;

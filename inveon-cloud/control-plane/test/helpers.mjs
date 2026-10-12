@@ -158,19 +158,29 @@ export async function startServer(extraEnv = {}) {
     return { app: app.json.app, webhookSecret: app.json.webhookSecret, environment: environment.json.environment, repoOwner: owner_, repo };
   }
 
-  /** Plays the agent: claims a job and reports every step with the given outcome. */
-  async function runClaimedJob(agentToken, { fail = false, results = {} } = {}) {
+  /**
+   * Plays the agent: claims a job and reports every step with the given
+   * outcome. `failAt` fails the first step with that action (after the
+   * earlier ones succeed); `logs` appends extra output per action.
+   */
+  async function runClaimedJob(agentToken, { fail = false, failAt = null, results = {}, logs = {} } = {}) {
     const claim = await call("POST", "/agent/jobs/claim", { token: agentToken });
     if (claim.status !== 200) return null;
     const job = claim.json.job;
+    let failed = false;
     for (const step of job.steps) {
-      await call("POST", `/agent/jobs/${job.id}/steps/${step.id}`, { token: agentToken, body: { status: "running", append: `running ${step.action}\n` } });
+      const failing = fail || step.action === failAt;
+      await call("POST", `/agent/jobs/${job.id}/steps/${step.id}`, { token: agentToken, body: { status: "running", append: `running ${step.action}\n${logs[step.action] ?? ""}` } });
       const result = results[step.action]?.(step) ?? (step.action === "compose.validate" ? { appRoot: `/srv/inveon/apps/${step.params.slug}`, model: { services: { web: { image: "nginx" } } } } : undefined);
-      const r = await call("POST", `/agent/jobs/${job.id}/steps/${step.id}`, { token: agentToken, body: { status: fail ? "failure" : "success", result } });
+      const r = await call("POST", `/agent/jobs/${job.id}/steps/${step.id}`, { token: agentToken, body: { status: failing ? "failure" : "success", result } });
       if (r.status !== 200) throw new Error(`step report failed: ${JSON.stringify(r.json)}`);
-      if (fail) break;
+      if (failing) {
+        failed = true;
+        break;
+      }
     }
-    const fin = await call("POST", `/agent/jobs/${job.id}/finish`, { token: agentToken, body: { status: fail ? "failure" : "success" } });
+    const error = failed ? `${job.steps.find((s) => fail || s.action === failAt)?.name}: failed` : undefined;
+    const fin = await call("POST", `/agent/jobs/${job.id}/finish`, { token: agentToken, body: { status: failed ? "failure" : "success", error } });
     return { job, finish: fin.json };
   }
 

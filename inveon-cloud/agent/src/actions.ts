@@ -12,6 +12,7 @@ import {
   HOSTNAME_RE,
   ParamError,
   REGION_RE,
+  RELEASE_ARG_RE,
   REL_PATH_RE,
   S3_KEY_RE,
   SERVICE_RE,
@@ -307,6 +308,34 @@ export const ACTIONS: Record<string, Action<any>> = {
   "compose.up": composeSimple(["up", "-d", "--remove-orphans"], "up"),
   "compose.down": composeSimple(["down", "--remove-orphans"], "down"),
   "compose.ps": composeSimple(["ps"], "ps"),
+
+  /**
+   * The release command (migrations): a one-off container of the new
+   * release's image, `docker compose run --rm -T <service> <argv...>`. The
+   * argv is a validated list, never a shell string, and it runs only inside
+   * the app's own container.
+   */
+  "release.run": {
+    parse(params: unknown) {
+      const p = obj(params);
+      const ref = parseAppRef(p);
+      const command = p.command;
+      if (!Array.isArray(command) || command.length < 1 || command.length > 32) throw new ParamError("Invalid command");
+      for (const a of command) if (typeof a !== "string" || !RELEASE_ARG_RE.test(a)) throw new ParamError("Invalid command");
+      if ((command[0] as string).startsWith("-")) throw new ParamError("Invalid command");
+      return { ...ref, service: str(p, "service", SERVICE_RE), command: command as string[], timeoutSec: int(p, "timeoutSec", 10, 7200) };
+    },
+    async run(p: AppRef & { service: string; command: string[]; timeoutSec: number }, ctx) {
+      const paths = appPaths(ctx.config, p);
+      if (!existsSync(paths.composeFile)) throw new Error(`${paths.composeFile} not found (prepare the release first)`);
+      try {
+        await exec(ctx, "docker", composeArgs(ctx.config, p, "run", "--rm", "-T", p.service, ...p.command), { timeoutMs: p.timeoutSec * 1000 });
+      } catch (err) {
+        throw new Error(`Release command failed (${(err as Error).message}). Nothing was switched: the live release keeps serving.`);
+      }
+      ctx.log("release command finished\n");
+    },
+  },
 
   "compose.logs": {
     parse(params: unknown) {

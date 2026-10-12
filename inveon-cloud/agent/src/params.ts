@@ -17,6 +17,8 @@ export const SHA_RE = /^[0-9a-f]{40}$/;
 export const BUCKET_RE = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
 export const S3_KEY_RE = /^[A-Za-z0-9._\/-]{1,512}$/;
 export const REGION_RE = /^[a-z]{2}(-[a-z]+)+-\d$/;
+/** One word of a release command: nothing a shell would interpret (same rule as the control plane). */
+export const RELEASE_ARG_RE = /^[A-Za-z0-9_@%+=:,./-]{1,200}$/;
 export const URL_PATH_RE = /^\/[A-Za-z0-9._~\/?=&%-]{0,200}$/;
 
 export function obj(v: unknown, what = "params"): Obj {

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { desc, eq } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
 import type { Env } from "../../env.js";
-import { apps, deployments, environments, releases } from "../../db/schema.js";
+import { apps, backups, deployments, environments, releases } from "../../db/schema.js";
 import { requireRole } from "../auth/middleware.js";
 import { audit, writeAudit } from "../../lib/audit.js";
 import { AppError, NotFoundError } from "../../lib/errors.js";
@@ -50,9 +50,14 @@ export function deploysRouter(db: Database, env: Env) {
         releaseId: releases.id,
         commitSha: releases.commitSha,
         commitMessage: releases.commitMessage,
+        error: deployments.error,
+        releaseOutput: deployments.releaseOutput,
+        backupId: deployments.backupId,
+        backupStatus: backups.status,
       })
       .from(deployments)
       .innerJoin(releases, eq(releases.id, deployments.releaseId))
+      .leftJoin(backups, eq(backups.id, deployments.backupId))
       .where(eq(deployments.environmentId, environment.id))
       .orderBy(desc(deployments.createdAt))
       .limit(50);

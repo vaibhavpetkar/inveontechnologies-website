@@ -167,6 +167,11 @@ export const environments = pgTable(
     currentReleaseId: uuid("current_release_id"),
     previousReleaseId: uuid("previous_release_id"),
     autoDeploy: boolean("auto_deploy").notNull().default(true),
+    // Optional release command (e.g. "npm run db:migrate"), run with
+    // `docker compose run` in the new release's image before traffic switches.
+    // Stored as text, split into a validated argv: never run through a shell.
+    releaseCommand: text("release_command"),
+    releaseService: text("release_service"),
     createdAt: createdAt(),
   },
   (t) => ({ uniqName: unique().on(t.appId, t.name), uniqPort: unique().on(t.serverId, t.bluePort) }),
@@ -254,6 +259,11 @@ export const deployments = pgTable("deployments", {
   slot: text("slot").$type<"blue" | "green" | "main">().notNull(),
   previousSlot: text("previous_slot").$type<"blue" | "green" | "main">(),
   status: jobStatusEnum("status").notNull().default("pending"),
+  // Why it failed (the job's error) and the tail of the release command's output.
+  error: text("error"),
+  releaseOutput: text("release_output"),
+  // Backup taken before the release command, offered for restore if it fails.
+  backupId: uuid("backup_id").references(() => backups.id, { onDelete: "set null" }),
   createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: createdAt(),
   finishedAt: ts("finished_at"),
@@ -311,7 +321,7 @@ export const backups = pgTable("backups", {
   id: uuid("id").primaryKey().defaultRandom(),
   environmentId: uuid("environment_id").notNull().references(() => environments.id, { onDelete: "cascade" }),
   jobId: uuid("job_id").references(() => jobs.id, { onDelete: "set null" }),
-  kind: text("kind").$type<"scheduled" | "manual" | "pre_restore">().notNull(),
+  kind: text("kind").$type<"scheduled" | "manual" | "pre_restore" | "pre_deploy">().notNull(),
   status: jobStatusEnum("status").notNull().default("pending"),
   s3Bucket: text("s3_bucket").notNull(),
   s3Region: text("s3_region").notNull(),

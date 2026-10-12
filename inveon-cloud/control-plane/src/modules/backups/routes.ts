@@ -7,7 +7,7 @@ import { requireRole } from "../auth/middleware.js";
 import { audit, writeAudit } from "../../lib/audit.js";
 import { AppError, ConflictError, NotFoundError } from "../../lib/errors.js";
 import { loadEnvironment } from "../apps/routes.js";
-import { createJob, notifyServer, registerJobEffect, type StepInput } from "../jobs/service.js";
+import { createJob, notifyServer, registerJobEffect, type StepInput, type Tx } from "../jobs/service.js";
 
 type Environment = typeof environments.$inferSelect;
 type App = typeof apps.$inferSelect;
@@ -37,7 +37,7 @@ function stamp(d = new Date()) {
   return d.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 }
 
-function backupParams(environment: Environment, app: App, cfg: Config, backup: Backup) {
+export function backupParams(environment: Environment, app: App, cfg: Config, backup: Backup) {
   return {
     slug: environment.slug,
     slot: environment.activeSlot,
@@ -50,7 +50,7 @@ function backupParams(environment: Environment, app: App, cfg: Config, backup: B
   };
 }
 
-async function newBackupRow(db: Database, environment: Environment, cfg: Config, kind: Backup["kind"], userId: string | null) {
+export async function newBackupRow(db: Database | Tx, environment: Environment, cfg: Config, kind: Backup["kind"], userId: string | null) {
   if (!cfg.s3Bucket) throw new AppError("NO_BUCKET", "Configure an S3 bucket for backups first", 400);
   const id = crypto.randomUUID();
   const key = [cfg.s3Prefix, environment.slug, `${stamp()}-${kind}-${id.slice(0, 8)}.tar.gz`].filter(Boolean).join("/");
@@ -153,15 +153,25 @@ export function backupsRouter(db: Database) {
   return router;
 }
 
-async function onBackupJobFinished(db: Database, job: typeof jobs.$inferSelect, steps: { action: string; status: string; result: Record<string, unknown> | null }[]) {
+type StepRow = { action: string; status: string; result: Record<string, unknown> | null };
+
+/** A backup is only as good as its backup.create step. A step that never ran is "cancelled". */
+export async function recordBackupStep(db: Database, backupId: string, step: StepRow) {
+  const size = typeof step.result?.sizeBytes === "number" && step.result.sizeBytes >= 0 ? step.result.sizeBytes : null;
+  const status = step.status === "success" ? "success" : step.status === "cancelled" ? "cancelled" : "failure";
+  await db.update(backups).set({ status, sizeBytes: size, finishedAt: new Date() }).where(eq(backups.id, backupId));
+}
+
+async function onBackupJobFinished(db: Database, job: typeof jobs.$inferSelect, steps: StepRow[]) {
   const ids = Array.isArray(job.meta.backupIds) ? (job.meta.backupIds as string[]) : [];
   const step = steps.find((s) => s.action === "backup.create");
   if (!ids.length || !step) return;
-  const size = typeof step.result?.sizeBytes === "number" && step.result.sizeBytes >= 0 ? step.result.sizeBytes : null;
-  await db
-    .update(backups)
-    .set({ status: step.status === "success" ? "success" : "failure", sizeBytes: size, finishedAt: new Date() })
-    .where(eq(backups.id, ids[0]));
+  await recordBackupStep(db, ids[0], step);
+}
+
+/** Backups only make sense once there is a bucket and something to back up. */
+export function backupConfigured(cfg: Config | null | undefined): cfg is Config {
+  return !!cfg?.s3Bucket && (cfg.dbType !== "none" || cfg.volumePaths.length > 0);
 }
 
 registerJobEffect("backup", onBackupJobFinished);

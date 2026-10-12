@@ -1,10 +1,12 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
 import type { Env } from "../../env.js";
-import { apps, deployments, environments, jobSteps, jobs, releases } from "../../db/schema.js";
+import { apps, backupConfigs, backups, deployments, environments, jobSteps, jobs, releases } from "../../db/schema.js";
 import { ConflictError } from "../../lib/errors.js";
 import { fetchFileAtCommit, fetchHeadCommit } from "../../lib/github.js";
+import { parseReleaseCommand } from "../../lib/release-command.js";
 import { createJob, notifyServer, registerJobEffect, type StepInput } from "../jobs/service.js";
+import { backupConfigured, backupParams, newBackupRow, recordBackupStep } from "../backups/routes.js";
 
 type App = typeof apps.$inferSelect;
 type Environment = typeof environments.$inferSelect;
@@ -40,23 +42,47 @@ export function slotPort(environment: Environment, slot: Slot) {
   return slot === "green" ? environment.greenPort : environment.bluePort;
 }
 
+export const RELEASE_COMMAND_TIMEOUT_SEC = 30 * 60;
+/** How much of the release command's output is kept on the deployment. */
+const RELEASE_OUTPUT_TAIL = 16 * 1024;
+
+export interface DeployExtras {
+  /** backup.create params for the live slot, taken before the release command. */
+  backup?: Record<string, unknown> | null;
+}
+
 /**
  * The deploy plan. Blue/green: prepare and start the idle colour next to the
  * live one, wait for its health check, point the nginx upstream at it,
  * reload, then stop the old colour. Recreate: same steps on one project.
+ *
+ * With a release command: back up the database (when backups are set up and
+ * something is live), then run the command in a one-off container of the new
+ * release, before anything is started or switched. If it fails, the job stops
+ * there and the live release is untouched.
  */
-export function deploySteps(environment: Environment, app: App, release: Release, slot: Slot, previousSlot: Slot | null): StepInput[] {
+export function deploySteps(environment: Environment, app: App, release: Release, slot: Slot, previousSlot: Slot | null, extras: DeployExtras = {}): StepInput[] {
   const base = { slug: environment.slug, slot, composePath: app.composePath };
   const port = slotPort(environment, slot);
   const steps: StepInput[] = [
     { name: `Prepare release ${release.commitSha.slice(0, 7)}`, action: "release.prepare", params: { ...base, releaseId: release.id, environmentId: environment.id, commitSha: release.commitSha, port } },
     { name: "Validate compose file", action: "compose.validate", params: base },
     { name: "Pull images", action: "compose.pull", params: base },
+  ];
+  if (environment.releaseCommand && environment.releaseService) {
+    if (extras.backup) steps.push({ name: "Back up before the release command", action: "backup.create", params: extras.backup });
+    steps.push({
+      name: `Release command: ${environment.releaseCommand.slice(0, 80)}`,
+      action: "release.run",
+      params: { ...base, service: environment.releaseService, command: parseReleaseCommand(environment.releaseCommand), timeoutSec: RELEASE_COMMAND_TIMEOUT_SEC },
+    });
+  }
+  steps.push(
     { name: slot === "main" ? "Start containers" : `Start ${slot}`, action: "compose.up", params: base },
     { name: "Health check", action: "health.check", params: { port, path: environment.healthPath, retries: 20, intervalSec: 3 } },
     { name: "Switch nginx upstream", action: "nginx.write_upstream", params: { slug: environment.slug, port } },
     { name: "Reload nginx", action: "nginx.reload", params: {} },
-  ];
+  );
   if (previousSlot && previousSlot !== slot) {
     steps.push({ name: `Stop ${previousSlot}`, action: "compose.down", params: { slug: environment.slug, slot: previousSlot, composePath: app.composePath } });
   }
@@ -76,7 +102,19 @@ export async function createDeployment(
   const previousSlot = environment.activeSlot ?? null;
   const slot: Slot = environment.strategy === "recreate" ? "main" : previousSlot === "blue" ? "green" : "blue";
   const verb = kind === "rollback" ? "Roll back" : "Deploy";
+  if (environment.releaseCommand) parseReleaseCommand(environment.releaseCommand);
   const result = await db.transaction(async (tx) => {
+    // Back up first, but only if a release command will run, something is
+    // live to back up, and backups are set up for this environment.
+    let backup: Awaited<ReturnType<typeof newBackupRow>> | null = null;
+    let backupStep: Record<string, unknown> | null = null;
+    if (environment.releaseCommand && environment.releaseService && environment.activeSlot) {
+      const cfg = await tx.query.backupConfigs.findFirst({ where: eq(backupConfigs.environmentId, environment.id) });
+      if (backupConfigured(cfg)) {
+        backup = await newBackupRow(tx, environment, cfg, "pre_deploy", input.userId ?? null);
+        backupStep = backupParams(environment, app, cfg, backup);
+      }
+    }
     const job = await createJob(tx, {
       orgId: environment.orgId,
       serverId: environment.serverId,
@@ -84,13 +122,14 @@ export async function createDeployment(
       type: kind,
       title: `${verb} ${app.name} / ${environment.name} to ${release.commitSha.slice(0, 7)}`,
       createdBy: input.userId ?? null,
-      steps: deploySteps(environment, app, release, slot, previousSlot),
+      steps: deploySteps(environment, app, release, slot, previousSlot, { backup: backupStep }),
     });
     const [deployment] = await tx
       .insert(deployments)
-      .values({ environmentId: environment.id, releaseId: release.id, jobId: job.id, kind, slot, previousSlot, createdBy: input.userId ?? null })
+      .values({ environmentId: environment.id, releaseId: release.id, jobId: job.id, kind, slot, previousSlot, backupId: backup?.id ?? null, createdBy: input.userId ?? null })
       .returning();
-    await tx.update(jobs).set({ meta: { deploymentId: deployment.id, releaseId: release.id } }).where(eq(jobs.id, job.id));
+    await tx.update(jobs).set({ meta: { deploymentId: deployment.id, releaseId: release.id, ...(backup ? { backupIds: [backup.id] } : {}) } }).where(eq(jobs.id, job.id));
+    if (backup) await tx.update(backups).set({ jobId: job.id }).where(eq(backups.id, backup.id));
     return { job, deployment };
   });
   notifyServer(environment.serverId);
@@ -102,7 +141,19 @@ async function onDeployFinished(db: Database, job: typeof jobs.$inferSelect, ste
   const deploymentId = String(job.meta.deploymentId ?? "");
   const deployment = await db.query.deployments.findFirst({ where: eq(deployments.id, deploymentId) });
   if (!deployment) return;
-  await db.update(deployments).set({ status: job.status, finishedAt: new Date() }).where(eq(deployments.id, deployment.id));
+  const releaseStep = steps.find((s) => s.action === "release.run");
+  const ranRelease = releaseStep && (releaseStep.status === "success" || releaseStep.status === "failure");
+  await db
+    .update(deployments)
+    .set({
+      status: job.status,
+      error: job.status === "success" ? null : job.error,
+      releaseOutput: ranRelease ? tail(releaseStep.log, RELEASE_OUTPUT_TAIL) : null,
+      finishedAt: new Date(),
+    })
+    .where(eq(deployments.id, deployment.id));
+  const backupStep = steps.find((s) => s.action === "backup.create");
+  if (deployment.backupId && backupStep) await recordBackupStep(db, deployment.backupId, backupStep);
   const environment = await db.query.environments.findFirst({ where: eq(environments.id, deployment.environmentId) });
   if (!environment) return;
   if (job.status !== "success") {
@@ -137,7 +188,8 @@ async function cleanUpFailedDeploy(
     cleanup.push({ name: `Point upstream back to ${deployment.previousSlot}`, action: "nginx.write_upstream", params: { slug: environment.slug, port } });
     cleanup.push({ name: "Reload nginx", action: "nginx.reload", params: {} });
   }
-  if (ran("compose.up")) {
+  // `compose run` may have started the new colour's dependencies too.
+  if (ran("compose.up") || ran("release.run")) {
     cleanup.push({ name: `Stop failed ${deployment.slot}`, action: "compose.down", params: { slug: environment.slug, slot: deployment.slot, composePath: app.composePath } });
   }
   if (!cleanup.length) return;
@@ -151,6 +203,10 @@ async function cleanUpFailedDeploy(
     steps: cleanup,
   });
   notifyServer(environment.serverId);
+}
+
+function tail(log: string, max: number) {
+  return log.length > max ? "[…]\n" + log.slice(-max) : log;
 }
 
 registerJobEffect("deploy", onDeployFinished);

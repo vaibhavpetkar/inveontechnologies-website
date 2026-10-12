@@ -29,7 +29,7 @@ export interface CreateJobInput {
 
 type Job = typeof jobs.$inferSelect;
 type Step = typeof jobSteps.$inferSelect;
-type Tx = Parameters<Parameters<Database["transaction"]>[0]>[0];
+export type Tx = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 const MAX_LOG_BYTES = 1024 * 1024;
 

@@ -63,6 +63,7 @@ test("the action allow-list is exactly the documented set", () => {
     "nginx.write_site",
     "nginx.write_upstream",
     "release.prepare",
+    "release.run",
   ]);
   assert.deepEqual([...ALLOWED_BINARIES].sort(), ["aws", "certbot", "docker", "nginx", "systemctl", "tar"]);
   assert.equal(isAllowedBinary("bash"), false);
@@ -230,6 +231,41 @@ test("env file, upstream and URL helpers", () => {
   assert.equal(checkControlPlaneUrl("https://cloud.example.com/"), "https://cloud.example.com");
   assert.equal(checkControlPlaneUrl("http://localhost:4100"), "http://localhost:4100");
   assert.throws(() => checkControlPlaneUrl("http://cloud.example.com"));
+});
+
+test("release.run runs the validated argv with compose run in the new slot", async () => {
+  const ref = { slug: "site-prod-ab12", slot: "green", composePath: "docker-compose.yml" };
+  const dir = join(config.appsRoot, ref.slug, "green");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "docker-compose.yml"), "services: {}\n");
+  await runAction("release.run", { ...ref, service: "web", command: ["npm", "run", "db:migrate"], timeoutSec: 1800 }, ctx());
+  assert.deepEqual(calls[0].args, [
+    "compose", "-p", "site-prod-ab12-green", "-f", join(dir, "docker-compose.yml"), "--project-directory", dir,
+    "run", "--rm", "-T", "web", "npm", "run", "db:migrate",
+  ]);
+  assert.equal(calls[0].bin, "docker");
+  assert.equal(calls[0].opts.timeoutMs, 1800_000);
+
+  // A failing command fails the step with a clear message.
+  runnerImpl = async (_bin, _args, _opts, log) => (log("relation already exists\n"), { code: 1, stdout: "" });
+  const c = ctx();
+  await assert.rejects(runAction("release.run", { ...ref, service: "web", command: ["python", "manage.py", "migrate"], timeoutSec: 60 }, c), /Release command failed.*live release keeps serving/);
+
+  // Shell syntax, options first, bad services and missing files are refused before anything runs.
+  calls = [];
+  const bad = [
+    { ...ref, service: "web", command: ["sh", "-c", "rm -rf /"], timeoutSec: 60 },
+    { ...ref, service: "web", command: ["npm;reboot"], timeoutSec: 60 },
+    { ...ref, service: "web", command: ["$(id)"], timeoutSec: 60 },
+    { ...ref, service: "web", command: ["--entrypoint=/bin/sh"], timeoutSec: 60 },
+    { ...ref, service: "web", command: [], timeoutSec: 60 },
+    { ...ref, service: "web", command: "npm run migrate", timeoutSec: 60 },
+    { ...ref, service: "-v/:/host", command: ["npm"], timeoutSec: 60 },
+    { ...ref, service: "web", command: ["npm"], timeoutSec: 99999 },
+    { ...ref, slot: "blue", service: "web", command: ["npm"], timeoutSec: 60 },
+  ];
+  for (const params of bad) await assert.rejects(runAction("release.run", params, ctx()), undefined, JSON.stringify(params));
+  assert.equal(calls.length, 0);
 });
 
 function readdirCount(dir) {
