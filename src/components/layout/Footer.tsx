@@ -1,6 +1,6 @@
 import { Link } from 'wouter';
-import { CONTACT_EMAIL, PORTAL_URL, SOCIAL_LINKS } from '@/data/site';
-import { Zap, Mail, Linkedin, Twitter, Github, ArrowRight, Globe, Shield, Zap as ZapIcon } from 'lucide-react';
+import { CONTACT_EMAIL, LEGAL_EMAIL, LEGAL_NAME, LEGAL_PHONE, LEGAL_PHONE_INTL, PORTAL_URL, SOCIAL_LINKS } from '@/data/site';
+import { Zap, Mail, Phone, User, Linkedin, Twitter, Github, ArrowRight, Globe, Shield, Zap as ZapIcon } from 'lucide-react';
 
 const links = {
   company: [
@@ -35,6 +35,8 @@ const links = {
   legal: [
     { label: 'Privacy Policy', href: '/privacy' },
     { label: 'Terms of Service', href: '/terms' },
+    { label: 'Refund Policy', href: '/refund-policy' },
+    { label: 'Shipping Policy', href: '/shipping-policy' },
   ],
 };
 
@@ -166,7 +168,6 @@ export default function Footer() {
         <div className="mt-16 pt-10 border-t border-border">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             {/* Contact Info */}
-            {/* TODO: replace with Inveon Technologies' real email, phone, and office address */}
             <div className="flex flex-col gap-4">
               <h2 className="text-sm font-semibold text-foreground uppercase tracking-wider">Contact Us</h2>
               <div className="flex flex-col gap-3 text-sm text-muted-foreground">
@@ -174,9 +175,17 @@ export default function Footer() {
                   <Mail className="w-5 h-5 text-primary group-hover:scale-110 transition-transform" />
                   <span>inveontechnologies@gmail.com</span>
                 </a>
-                <span className="flex items-center gap-3 group">
-                  <Globe className="w-5 h-5 text-primary" />
-                  <span>Serving clients across 2+ countries</span>
+                <a href={`tel:${LEGAL_PHONE_INTL}`} className="flex items-center gap-3 hover:text-primary transition-colors group">
+                  <Phone className="w-5 h-5 text-primary group-hover:scale-110 transition-transform" />
+                  <span>{LEGAL_PHONE}</span>
+                </a>
+                <span className="flex items-center gap-3">
+                  <User className="w-5 h-5 text-primary shrink-0" />
+                  <span>
+                    Proprietor: {LEGAL_NAME}
+                    <br />
+                    <a href={`mailto:${LEGAL_EMAIL}`} className="hover:text-primary transition-colors break-all">{LEGAL_EMAIL}</a>
+                  </span>
                 </span>
               </div>
             </div>
@@ -220,8 +229,10 @@ export default function Footer() {
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <p className="text-sm text-muted-foreground">
               &copy; {new Date().getFullYear()} Inveon Technologies. All rights reserved.
+              <br />
+              <span className="text-xs">Inveon Technologies is operated by {LEGAL_NAME}.</span>
             </p>
-            <div className="flex items-center gap-6 text-sm text-muted-foreground">
+            <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-muted-foreground">
               {links.legal.map((l) => (
                 <Link key={l.label} href={l.href} className="hover:text-foreground transition-colors">
                   {l.label}

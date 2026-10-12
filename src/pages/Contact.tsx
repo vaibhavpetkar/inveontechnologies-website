@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { Helmet } from 'react-helmet-async';
-import { SOCIAL_LINKS } from '@/data/site';
-import { Mail, MapPin, Clock, Send, CheckCircle, Linkedin, Twitter, Github, ArrowRight } from 'lucide-react';
+import { LEGAL_EMAIL, LEGAL_NAME, LEGAL_PHONE, LEGAL_PHONE_INTL, SOCIAL_LINKS } from '@/data/site';
+import { Mail, MapPin, Clock, Phone, User, Send, CheckCircle, Linkedin, Twitter, Github, ArrowRight } from 'lucide-react';
 
 const fadeUp = {
   hidden: { opacity: 0, y: 32 },
@@ -226,7 +226,7 @@ export default function Contact() {
             {/* Contact Info */}
             <motion.div variants={fadeUp} initial="hidden" whileInView="visible" viewport={{ once: true }} custom={1} className="lg:col-span-2 flex flex-col gap-6">
               {/* Quick contact */}
-              {/* TODO: confirm real phone number and social profile URLs before launch */}
+              {/* TODO: confirm social profile URLs before launch */}
               <div className="rounded-2xl border border-border bg-white p-6 card-hover">
                 <h3 className="font-semibold mb-4">Contact Details</h3>
                 <div className="flex flex-col gap-4">
@@ -235,6 +235,12 @@ export default function Contact() {
                       <Mail className="w-4 h-4 text-primary" />
                     </div>
                     inveontechnologies@gmail.com
+                  </a>
+                  <a href={`tel:${LEGAL_PHONE_INTL}`} className="flex items-center gap-3 text-sm text-muted-foreground hover:text-primary transition-colors">
+                    <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                      <Phone className="w-4 h-4 text-primary" />
+                    </div>
+                    {LEGAL_PHONE}
                   </a>
                   <div className="flex items-center gap-3 text-sm text-muted-foreground">
                     <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
@@ -252,6 +258,34 @@ export default function Contact() {
                     ))}
                   </div>
                 )}
+              </div>
+
+              {/* Registered business details — required by the payment gateway */}
+              <div className="rounded-2xl border border-border bg-white p-6 card-hover">
+                <h3 className="font-semibold mb-4">Business Details</h3>
+                <div className="flex flex-col gap-4 text-sm text-muted-foreground">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                      <User className="w-4 h-4 text-primary" />
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase tracking-wider">Legal name (proprietor)</p>
+                      <p className="font-semibold text-foreground">{LEGAL_NAME}</p>
+                    </div>
+                  </div>
+                  <a href={`mailto:${LEGAL_EMAIL}`} className="flex items-center gap-3 hover:text-primary transition-colors break-all">
+                    <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                      <Mail className="w-4 h-4 text-primary" />
+                    </div>
+                    {LEGAL_EMAIL}
+                  </a>
+                  <a href={`tel:${LEGAL_PHONE_INTL}`} className="flex items-center gap-3 hover:text-primary transition-colors">
+                    <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                      <Phone className="w-4 h-4 text-primary" />
+                    </div>
+                    {LEGAL_PHONE}
+                  </a>
+                </div>
               </div>
 
               {/* Offices */}
