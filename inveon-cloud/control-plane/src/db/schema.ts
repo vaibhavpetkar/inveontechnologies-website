@@ -336,6 +336,11 @@ export const backupConfigs = pgTable("backup_configs", {
   s3Bucket: text("s3_bucket"),
   s3Prefix: text("s3_prefix").notNull().default("inveon-cloud"),
   s3Region: text("s3_region").notNull().default("ap-south-1"),
+  // Retention: keep the newest backup of each of the last keepDaily days, and
+  // of each of the last keepWeekly weeks. null keeps everything.
+  keepDaily: integer("keep_daily"),
+  keepWeekly: integer("keep_weekly").notNull().default(0),
+  lastPrunedAt: ts("last_pruned_at"),
   lastScheduledAt: ts("last_scheduled_at"),
   updatedAt: ts("updated_at").notNull().defaultNow(),
 });

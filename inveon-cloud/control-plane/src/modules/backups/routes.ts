@@ -9,6 +9,7 @@ import { AppError, ConflictError, NotFoundError } from "../../lib/errors.js";
 import { loadEnvironment } from "../apps/routes.js";
 import { createJob, notifyServer, registerJobEffect, type StepInput, type Tx } from "../jobs/service.js";
 import { dashboardLink, emitAlert } from "../alerts/service.js";
+import { pruneEnvironmentBackups } from "./retention.js";
 
 type Environment = typeof environments.$inferSelect;
 type App = typeof apps.$inferSelect;
@@ -30,7 +31,11 @@ const configSchema = z
     s3Bucket: z.string().regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, "Invalid S3 bucket name").nullable().optional(),
     s3Prefix: z.string().regex(/^[A-Za-z0-9._\/-]{0,200}$/).transform((p) => p.replace(/^\/+|\/+$/g, "")),
     s3Region: z.string().regex(/^[a-z]{2}(-[a-z]+)+-\d$/, "Invalid AWS region"),
+    // Retention (omit to leave unchanged; null keeps every backup).
+    keepDaily: z.number().int().min(1).max(366).nullable().optional(),
+    keepWeekly: z.number().int().min(0).max(260).optional(),
   })
+  .refine((c) => !c.keepWeekly || c.keepDaily !== null, { message: "Weekly backups are kept on top of daily ones: set how many daily backups to keep", path: ["keepDaily"] })
   .refine((c) => c.dbType === "none" || (c.dbService && c.dbName && c.dbUser), { message: "Database backups need the compose service, database name and user", path: ["dbService"] })
   .refine((c) => !c.enabled || !!c.s3Bucket, { message: "Set an S3 bucket to enable backups", path: ["s3Bucket"] });
 
@@ -108,6 +113,16 @@ export function backupsRouter(db: Database) {
     const { environment } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
     const rows = await db.select().from(backups).where(eq(backups.environmentId, environment.id)).orderBy(desc(backups.createdAt)).limit(100);
     res.json({ backups: rows });
+  });
+
+  // Applies the retention rule now instead of waiting for the daily run.
+  router.post("/environments/:envId/backups/prune", requireRole("admin"), async (req, res) => {
+    const { environment } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
+    const cfg = await db.query.backupConfigs.findFirst({ where: eq(backupConfigs.environmentId, environment.id) });
+    if (!cfg || cfg.keepDaily === null) throw new AppError("NO_RETENTION", "Set how many backups to keep first", 400);
+    const { job, count } = await pruneEnvironmentBackups(db, environment, cfg, req.user!.sub);
+    if (job) await audit(db, req, "backup.prune", "environment", environment.id, { jobId: job.id, count, source: "manual" });
+    res.status(job ? 201 : 200).json({ job, count });
   });
 
   router.post("/environments/:envId/backups", requireRole("developer"), async (req, res) => {

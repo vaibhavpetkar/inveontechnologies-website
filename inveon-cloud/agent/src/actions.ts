@@ -20,6 +20,8 @@ import {
   RELEASE_ARG_RE,
   REL_PATH_RE,
   S3_KEY_RE,
+  S3_PREFIX_RE,
+  BACKUP_FILE_RE,
   SERVICE_RE,
   SHA_RE,
   SLOTS,
@@ -727,6 +729,42 @@ export const ACTIONS: Record<string, Action<any>> = {
 
   "backup.create": { parse: parseBackup, run: createBackup },
   "backup.restore": { parse: parseBackup, run: restoreBackup },
+
+  /**
+   * Backup retention: `aws s3 rm` of exact keys, never --recursive. Every key
+   * must be a backup archive directly inside the environment's own prefix
+   * (one that ends in /<slug>/), so a job can't delete anything else in the
+   * bucket. Every key is tried; the step fails if any delete failed, and the
+   * control plane then keeps all the records and retries the next day.
+   */
+  "backup.delete": {
+    parse(params: unknown) {
+      const p = obj(params);
+      const slug = str(p, "slug", SLUG_RE);
+      const prefix = str(p, "prefix", S3_PREFIX_RE);
+      if (!(prefix === `${slug}/` || prefix.endsWith(`/${slug}/`))) throw new ParamError("The prefix is not this environment's backup folder");
+      const keys = p.keys;
+      if (!Array.isArray(keys) || keys.length < 1 || keys.length > 200) throw new ParamError("Invalid keys");
+      for (const k of keys) {
+        if (typeof k !== "string" || !S3_KEY_RE.test(k) || !k.startsWith(prefix) || !BACKUP_FILE_RE.test(k.slice(prefix.length))) throw new ParamError(`Invalid key ${String(k).slice(0, 80)}`);
+      }
+      return { slug, bucket: str(p, "bucket", BUCKET_RE), region: str(p, "region", REGION_RE), prefix, keys: keys as string[] };
+    },
+    async run(p: { bucket: string; region: string; keys: string[] }, ctx) {
+      const failed: string[] = [];
+      for (const key of p.keys) {
+        try {
+          await exec(ctx, "aws", ["s3", "rm", `s3://${p.bucket}/${key}`, "--region", p.region, "--only-show-errors"], { timeoutMs: 120_000 });
+        } catch (err) {
+          failed.push(key);
+          ctx.log(`could not delete ${key}: ${(err as Error).message}\n`);
+        }
+      }
+      ctx.log(`deleted ${p.keys.length - failed.length} of ${p.keys.length} backup(s)\n`);
+      if (failed.length) throw new Error(`${failed.length} backup(s) could not be deleted`);
+      return { deleted: p.keys.length };
+    },
+  },
 };
 
 /** Long-running actions: the agent checks in every few seconds, so a cancel stops them promptly. */

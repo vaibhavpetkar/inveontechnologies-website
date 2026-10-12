@@ -50,6 +50,7 @@ test("the action allow-list is exactly the documented set", () => {
   assert.deepEqual(Object.keys(ACTIONS).sort(), [
     "app.remove_folder",
     "backup.create",
+    "backup.delete",
     "backup.restore",
     "certbot.delete",
     "certbot.issue",

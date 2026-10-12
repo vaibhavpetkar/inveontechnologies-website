@@ -174,6 +174,9 @@ export interface BackupConfig {
   s3Bucket: string | null;
   s3Prefix: string;
   s3Region: string;
+  keepDaily: number | null;
+  keepWeekly: number;
+  lastPrunedAt?: string | null;
 }
 
 export interface Backup {

@@ -314,3 +314,4 @@ textarea { resize: vertical; font-family: var(--font-mono); font-size: 0.85rem; 
 .checks { border: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 230px), 1fr)); gap: 0 1rem; }
 .checks legend { margin-bottom: 0.25rem; }
 .checks .check { padding: 0.3rem 0; }
+.btn-row.no-margin { margin-top: 0; }

@@ -151,3 +151,54 @@ test("a streaming step checks in while quiet and is aborted as soon as the job i
     restore();
   }
 });
+
+// ---------------------------------------------------------------- backup retention
+
+const del = { slug: "site-prod-ab12", bucket: "inveon-backups", region: "ap-south-1", prefix: "cloud/site-prod-ab12/" };
+
+test("backup.delete runs `aws s3 rm` on each exact key, never recursively", async () => {
+  const keys = ["cloud/site-prod-ab12/20261001T020000Z-scheduled-1a2b3c4d.tar.gz", "cloud/site-prod-ab12/20261002T020000Z-manual-5e6f7a8b.tar.gz"];
+  const result = await runAction("backup.delete", { ...del, keys }, ctx());
+  assert.deepEqual(
+    calls.map((c) => [c.bin, ...c.args]),
+    keys.map((k) => ["aws", "s3", "rm", `s3://inveon-backups/${k}`, "--region", "ap-south-1", "--only-show-errors"]),
+  );
+  assert.ok(calls.every((c) => !c.args.includes("--recursive")));
+  assert.deepEqual(result, { deleted: 2 });
+  // A prefix that is just the slug (no configured prefix) works too.
+  calls = [];
+  await runAction("backup.delete", { ...del, prefix: "site-prod-ab12/", keys: ["site-prod-ab12/x-manual-1.tar.gz"] }, ctx());
+  assert.equal(calls[0].args[2], "s3://inveon-backups/site-prod-ab12/x-manual-1.tar.gz");
+});
+
+test("backup.delete only touches backup archives inside the environment's own prefix", async () => {
+  const ok = "cloud/site-prod-ab12/20261001T020000Z-scheduled-1a2b3c4d.tar.gz";
+  const bad = [
+    { ...del, keys: [] },
+    { ...del, keys: ["cloud/other-env-zz99/20261001T020000Z-scheduled-1a2b3c4d.tar.gz"] }, // another environment
+    { ...del, keys: ["cloud/site-prod-ab12/nested/x.tar.gz"] }, // below the folder
+    { ...del, keys: ["cloud/site-prod-ab12/database.sql"] }, // not an archive
+    { ...del, keys: ["cloud/site-prod-ab12/"] },
+    { ...del, keys: ["--recursive"] },
+    { ...del, keys: [ok, "s3://elsewhere/x.tar.gz"] },
+    { ...del, prefix: "cloud/", keys: ["cloud/x.tar.gz"] }, // prefix isn't the environment's folder
+    { ...del, prefix: "", keys: [ok] },
+    { ...del, prefix: "cloud/../site-prod-ab12/", keys: ["cloud/../site-prod-ab12/x.tar.gz"] },
+    { ...del, prefix: "/site-prod-ab12/", keys: ["/site-prod-ab12/x.tar.gz"] },
+    { ...del, slug: "../x", keys: [ok] },
+    { ...del, bucket: "Bad_Bucket", keys: [ok] },
+    { ...del, region: "us-east-1; rm", keys: [ok] },
+    { ...del, keys: Array.from({ length: 201 }, (_, i) => `cloud/site-prod-ab12/${i}.tar.gz`) },
+  ];
+  for (const p of bad) await assert.rejects(runAction("backup.delete", p, ctx()), undefined, JSON.stringify(p).slice(0, 120));
+  assert.equal(calls.length, 0);
+});
+
+test("backup.delete tries every key and fails the step if any delete failed", async () => {
+  const keys = ["cloud/site-prod-ab12/a.tar.gz", "cloud/site-prod-ab12/b.tar.gz", "cloud/site-prod-ab12/c.tar.gz"];
+  runnerImpl = async (_bin, args) => ({ code: args[2].endsWith("b.tar.gz") ? 1 : 0, stdout: "" });
+  const c = ctx();
+  await assert.rejects(runAction("backup.delete", { ...del, keys }, c), /1 backup\(s\) could not be deleted/);
+  assert.equal(calls.length, 3);
+  assert.match(c.logs.join(""), /deleted 2 of 3/);
+});
