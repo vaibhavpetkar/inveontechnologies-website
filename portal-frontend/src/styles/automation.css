@@ -76,3 +76,5 @@
 .shortcut-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
 .shortcut-list li { display: flex; justify-content: space-between; gap: 1rem; font-size: 0.88rem; }
 .issue-list-row.kbd-focus, .issue-row.kbd-focus { outline: 2px solid var(--primary); outline-offset: -2px; }
+.gadget-issues .prio { flex: none; }
+@media (max-width: 560px) { .gadget-issues .prio { display: none; } }

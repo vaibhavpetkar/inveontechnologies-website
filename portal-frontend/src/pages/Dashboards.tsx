@@ -346,7 +346,7 @@ function IssueListGadget({ query }: { query: string }) {
               <IssueKey value={t.key} />
               <span className="title">{t.title}</span>
               <span className={`status-dot tone-${STATUS_META[t.status].tone}`} title={STATUS_META[t.status].label} />
-              <span className="muted-small">{PRIORITY_META[t.priority].label}</span>
+              <span className="muted-small prio">{PRIORITY_META[t.priority].label}</span>
             </Link>
           </li>
         ))}
