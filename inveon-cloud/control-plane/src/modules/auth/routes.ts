@@ -107,7 +107,11 @@ export function authRouter(db: Database, env: Env) {
   router.post("/signup", signupLimit, async (req, res) => {
     const body = signupSchema.parse(req.body);
     const invite = body.inviteToken ? await findUsableInvite(db, body.inviteToken) : null;
-    if (!invite && !env.INVEON_OPEN_SIGNUP) throw new AppError("SIGNUP_CLOSED", "Sign-up needs an invite", 403);
+    // With sign-up closed, only the very first account (the installer's) can be created without an invite.
+    if (!invite && !env.INVEON_OPEN_SIGNUP) {
+      const anyone = await db.query.users.findFirst({ columns: { id: true } });
+      if (anyone) throw new AppError("SIGNUP_CLOSED", "Sign-up needs an invite", 403);
+    }
     const existing = await db.query.users.findFirst({ where: sql`lower(${users.email}) = ${body.email}` });
     if (existing) throw new ConflictError("An account with this email already exists. Sign in instead.");
 

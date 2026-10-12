@@ -110,3 +110,15 @@ test("invites: single use, role ceiling, sign-up with invite joins the org", asy
   const members = await api.call("GET", `/orgs/${orgId}/members`, { token: owner.token });
   assert.ok(members.json.members.some((m) => m.email === email && m.role === "developer"));
 });
+
+test("closed sign-up: only the first account or an invite can create one", async () => {
+  const closed = await startServer({ INVEON_OPEN_SIGNUP: "false" });
+  try {
+    // The shared test database already has users, so this isn't the first account.
+    const res = await closed.call("POST", "/auth/signup", { body: { email: `x-${randomUUID()}@test.local`, password: "long enough password", name: "X" } });
+    assert.equal(res.status, 403);
+    assert.equal(res.json.error.code, "SIGNUP_CLOSED");
+  } finally {
+    await closed.stop();
+  }
+});
