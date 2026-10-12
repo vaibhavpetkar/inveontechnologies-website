@@ -16,5 +16,5 @@ export const SOCIAL_LINKS: { linkedin: string; twitter: string; github: string }
 // keep them in sync with the gateway account if they ever change.
 export const LEGAL_NAME = 'RAJVAIBHAV PRAKASH PETKAR';
 export const LEGAL_EMAIL = 'rajvaibhavpetkar007@gmail.com';
-export const LEGAL_PHONE = '9145664600';
-export const LEGAL_PHONE_INTL = '+919145664600';
+export const LEGAL_PHONE = '9922565938';
+export const LEGAL_PHONE_INTL = '+919922565938';
