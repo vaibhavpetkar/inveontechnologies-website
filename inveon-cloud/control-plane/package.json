@@ -12,10 +12,12 @@
     "db:migrate": "node dist/migrate.js",
     "test": "npm run build && node --test --test-concurrency=1 test/*.test.mjs",
     "keys:status": "node dist/keys.js status",
-    "keys:rotate": "node dist/keys.js rotate"
+    "keys:rotate": "node dist/keys.js rotate",
+    "keys:kms-generate": "node dist/keys.js kms-generate"
   },
   "dependencies": {
     "@aws-sdk/client-ec2": "3.1140.0",
+    "@aws-sdk/client-kms": "3.1140.0",
     "@aws-sdk/client-ssm": "3.1140.0",
     "@aws-sdk/client-sts": "3.1140.0",
     "argon2": "^0.41.1",

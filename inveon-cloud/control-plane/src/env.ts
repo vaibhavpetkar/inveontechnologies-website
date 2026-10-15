@@ -17,9 +17,15 @@ const envSchema = z.object({
   // INVEON_MASTER_KEYS adds more as "id:key,id:key", and
   // INVEON_MASTER_KEY_CURRENT picks the one new values use (default: the
   // last listed, else legacy). See "Rotating the master key" in the README.
+  // An INVEON_MASTER_KEYS entry "id:kms:<base64 CiphertextBlob>" is a data
+  // key encrypted by AWS KMS, decrypted once at start-up (npm run
+  // keys:kms-generate makes one).
   INVEON_MASTER_KEY: z.string().optional(),
   INVEON_MASTER_KEYS: z.string().optional(),
   INVEON_MASTER_KEY_CURRENT: z.string().optional(),
+  // Region of the KMS key behind KMS-backed master keys. Unset: the AWS SDK's
+  // default (AWS_REGION, or the instance's region via the profile).
+  INVEON_KMS_REGION: z.string().regex(/^[a-z]{2}(?:-[a-z]+)+-\d$/, "An AWS region like ap-south-1").optional(),
   // Comma-separated emails of platform admins (encryption keys). Unset: the
   // first account created on this installation.
   INVEON_PLATFORM_ADMINS: z.string().optional(),
@@ -71,6 +77,11 @@ export const masterKeyConfig = (env: Env) => ({ legacy: env.INVEON_MASTER_KEY, k
  */
 export function parseEnv(source: NodeJS.ProcessEnv) {
   return envSchema.safeParse(Object.fromEntries(Object.entries(source).filter(([, v]) => v !== "")));
+}
+
+/** INVEON_KMS_REGION alone, for commands that don't need the rest (keys:kms-generate). */
+export function parseKmsRegion(source: NodeJS.ProcessEnv): string | undefined {
+  return envSchema.shape.INVEON_KMS_REGION.parse(source.INVEON_KMS_REGION || undefined);
 }
 
 export function loadEnv(): Env {

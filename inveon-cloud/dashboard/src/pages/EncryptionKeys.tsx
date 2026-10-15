@@ -8,6 +8,8 @@ import { ErrorNote, Loading, PageHeader, useAction } from "../components/ui";
 interface KeyStatus {
   currentKeyId: string | null;
   configuredKeyIds: string[];
+  /** Missing on control planes from before KMS-backed keys. */
+  kmsKeyIds?: string[];
   counts: Record<string, number>;
   columns: { name: string; counts: Record<string, number> }[];
   missingKeyIds: string[];
@@ -84,6 +86,14 @@ export default function EncryptionKeys() {
                     <tr key={id}>
                       <td>
                         <KeyRound size={14} /> <code>{id}</code>
+                        {status.kmsKeyIds?.includes(id) && (
+                          <>
+                            {" "}
+                            <span className="badge badge-info" title="A data key encrypted by AWS KMS, decrypted when the control plane started">
+                              AWS KMS
+                            </span>
+                          </>
+                        )}
                       </td>
                       <td>{status.counts[id] ?? 0}</td>
                       <td>

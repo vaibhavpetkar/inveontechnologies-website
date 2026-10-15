@@ -1,7 +1,8 @@
 import "dotenv/config";
 import { loadEnv, masterKeyConfig } from "./env.js";
 import { createDb, runMigrations } from "./db/client.js";
-import { configureMasterKeys } from "./lib/crypto.js";
+import { loadMasterKeys } from "./lib/crypto.js";
+import { kmsApi } from "./lib/kms.js";
 import { configureMailer } from "./lib/mailer.js";
 import { logger } from "./lib/logger.js";
 import { createApp } from "./app.js";
@@ -10,7 +11,8 @@ import { warnAboutMissingKeys } from "./modules/keys/service.js";
 
 const env = loadEnv();
 try {
-  configureMasterKeys(masterKeyConfig(env));
+  // KMS-backed entries are decrypted here, once; nothing else calls KMS.
+  await loadMasterKeys(masterKeyConfig(env), async (blob) => (await kmsApi(env.INVEON_KMS_REGION)).decrypt(blob));
 } catch (err) {
   logger.fatal({ err }, "Invalid master key configuration (INVEON_MASTER_KEY, INVEON_MASTER_KEYS, INVEON_MASTER_KEY_CURRENT)");
   process.exit(1);

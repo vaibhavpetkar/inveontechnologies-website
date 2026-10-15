@@ -1,9 +1,11 @@
 // Preloaded into the control plane under test (node --import) to replace
-// the AWS SDK with an in-memory EC2/SSM/STS. The test drives it over a small
+// the AWS SDK with an in-memory EC2/SSM/STS and KMS. The test drives it over a small
 // HTTP port (FAKE_AWS_PORT): read the recorded calls, change instance
 // states, and make the next call of a method fail. Never calls AWS.
 import { createServer } from "node:http";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { setEc2ApiFactory } from "../dist/modules/aws/provider.js";
+import { KMS_CONTEXT, setKmsApiFactory } from "../dist/lib/kms.js";
 
 const state = {
   calls: [],
@@ -79,6 +81,42 @@ function api(creds, region) {
 }
 
 setEc2ApiFactory(api);
+
+// Fake KMS. A "ciphertext blob" is the data key sealed with a fixed fake
+// KMS key, bound to the KMS key id and the encryption context, so blobs
+// made by one process (keys:kms-generate) decrypt in another (the server),
+// and a tampered blob or a different context fails like real KMS would.
+// KMS key ids starting with "deny" are refused (AccessDenied).
+const FAKE_KMS_ROOT = createHash("sha256").update("inveon fake kms").digest();
+const kmsContext = JSON.stringify(KMS_CONTEXT);
+setKmsApiFactory((region) => ({
+  async generateDataKey(keyId) {
+    state.calls.push({ method: "kms.generateDataKey", region, args: { keyId } });
+    if (keyId.includes("deny")) throw Object.assign(new Error("User is not authorized to perform kms:GenerateDataKey"), { name: "AccessDeniedException" });
+    const plaintext = randomBytes(32);
+    const arn = keyId.startsWith("arn:") ? keyId : `arn:aws:kms:${region ?? "us-east-1"}:123456789012:key/fake-${keyId.replace(/[^A-Za-z0-9-]/g, "-")}`;
+    const iv = randomBytes(12);
+    const c = createCipheriv("aes-256-gcm", FAKE_KMS_ROOT, iv).setAAD(Buffer.from(`${arn}|${kmsContext}`));
+    const ct = Buffer.concat([c.update(plaintext), c.final()]);
+    const id = Buffer.from(arn);
+    const blob = Buffer.concat([Buffer.from([id.length]), id, iv, c.getAuthTag(), ct]);
+    return { plaintext, ciphertextBlob: blob, keyArn: arn };
+  },
+  async decrypt(blob) {
+    state.calls.push({ method: "kms.decrypt", region, args: {} });
+    const n = blob[0];
+    const arn = blob.subarray(1, 1 + n).toString();
+    const iv = blob.subarray(1 + n, 13 + n);
+    const tag = blob.subarray(13 + n, 29 + n);
+    try {
+      const d = createDecipheriv("aes-256-gcm", FAKE_KMS_ROOT, iv).setAAD(Buffer.from(`${arn}|${kmsContext}`));
+      d.setAuthTag(tag);
+      return Buffer.concat([d.update(blob.subarray(29 + n)), d.final()]);
+    } catch {
+      throw Object.assign(new Error("The ciphertext is invalid"), { name: "InvalidCiphertextException" });
+    }
+  },
+}));
 
 const port = Number(process.env.FAKE_AWS_PORT);
 if (port) {

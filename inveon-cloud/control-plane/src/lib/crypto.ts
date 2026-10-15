@@ -80,36 +80,95 @@ export function parseMasterKey(raw: string): Buffer {
 
 let keyring = new Map<string, KeyEncryptionKey>();
 let currentKeyId: string | null = null;
+let kmsKeyIds = new Set<string>();
 
 export interface MasterKeyConfig {
   /** INVEON_MASTER_KEY: the original single key, id "legacy" (decrypts v1). */
   legacy?: string;
-  /** INVEON_MASTER_KEYS: "id:key,id:key". */
+  /** INVEON_MASTER_KEYS: "id:key,id:key", where a key is base64/hex or "kms:<base64 CiphertextBlob>". */
   keys?: string;
   /** INVEON_MASTER_KEY_CURRENT: the id new values are encrypted with. */
   current?: string;
 }
 
-/** Parses the environment's keys into the keyring. Throws on anything malformed. */
-export function configureMasterKeys(cfg: MasterKeyConfig) {
+interface KeyEntry {
+  id: string;
+  /** The key itself, or (kms) the base64 CiphertextBlob of a KMS data key. */
+  material: string;
+  kms: boolean;
+}
+
+function parseKeyEntries(keys: string | undefined): KeyEntry[] {
+  const seen = new Set<string>();
+  return (keys ?? "")
+    .split(",")
+    .map((e) => e.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const i = entry.indexOf(":");
+      if (i < 1) throw new Error("INVEON_MASTER_KEYS entries look like <id>:<base64 or hex key> or <id>:kms:<base64 ciphertext>");
+      const id = entry.slice(0, i).trim();
+      if (!KEY_ID_RE.test(id)) throw new Error(`Invalid master key id "${id}" (letters, digits, - and _, up to 32)`);
+      if (id === LEGACY_KEY_ID) throw new Error(`"${LEGACY_KEY_ID}" is reserved for INVEON_MASTER_KEY`);
+      if (seen.has(id)) throw new Error(`Master key id "${id}" is listed twice`);
+      seen.add(id);
+      const rest = entry.slice(i + 1).trim();
+      if (rest.startsWith("kms:")) {
+        const blob = rest.slice(4);
+        if (!/^[A-Za-z0-9+/]{40,8192}={0,2}$/.test(blob)) throw new Error(`Master key "${id}": kms: needs the base64 CiphertextBlob from keys:kms-generate`);
+        return { id, material: blob, kms: true };
+      }
+      return { id, material: rest, kms: false };
+    });
+}
+
+/**
+ * Parses the environment's keys into the keyring. Throws on anything
+ * malformed. KMS-backed entries need their decrypted data keys in
+ * `kmsKeys` (see loadMasterKeys, which fetches them).
+ */
+export function configureMasterKeys(cfg: MasterKeyConfig, kmsKeys: Map<string, Buffer> = new Map()) {
   const next = new Map<string, KeyEncryptionKey>();
+  const kms = new Set<string>();
   if (cfg.legacy?.trim()) next.set(LEGACY_KEY_ID, new LocalKey(LEGACY_KEY_ID, parseMasterKey(cfg.legacy)));
   let lastListed: string | null = null;
-  for (const entry of (cfg.keys ?? "").split(",").map((e) => e.trim()).filter(Boolean)) {
-    const i = entry.indexOf(":");
-    if (i < 1) throw new Error("INVEON_MASTER_KEYS entries look like <id>:<base64 or hex key>");
-    const id = entry.slice(0, i).trim();
-    if (!KEY_ID_RE.test(id)) throw new Error(`Invalid master key id "${id}" (letters, digits, - and _, up to 32)`);
-    if (id === LEGACY_KEY_ID) throw new Error(`"${LEGACY_KEY_ID}" is reserved for INVEON_MASTER_KEY`);
-    if (next.has(id)) throw new Error(`Master key id "${id}" is listed twice`);
-    next.set(id, new LocalKey(id, parseMasterKey(entry.slice(i + 1))));
-    lastListed = id;
+  for (const entry of parseKeyEntries(cfg.keys)) {
+    if (entry.kms) {
+      const key = kmsKeys.get(entry.id);
+      if (!key || key.length !== 32) throw new Error(`Master key "${entry.id}" is KMS-backed and wasn't decrypted (it must be a 32-byte data key)`);
+      next.set(entry.id, new LocalKey(entry.id, Buffer.from(key)));
+      kms.add(entry.id);
+    } else {
+      next.set(entry.id, new LocalKey(entry.id, parseMasterKey(entry.material)));
+    }
+    lastListed = entry.id;
   }
   if (next.size === 0) throw new Error("Set INVEON_MASTER_KEY or INVEON_MASTER_KEYS");
   const current = cfg.current?.trim() || lastListed || LEGACY_KEY_ID;
   if (!next.has(current)) throw new Error(`INVEON_MASTER_KEY_CURRENT is "${current}", which isn't configured`);
   keyring = next;
   currentKeyId = current;
+  kmsKeyIds = kms;
+}
+
+/**
+ * configureMasterKeys, after asking KMS to decrypt each KMS-backed entry
+ * (once, at start-up). `decrypt` is only called when there is such an entry.
+ */
+export async function loadMasterKeys(cfg: MasterKeyConfig, decrypt: (blob: Buffer) => Promise<Buffer>) {
+  const kmsKeys = new Map<string, Buffer>();
+  try {
+    for (const entry of parseKeyEntries(cfg.keys).filter((e) => e.kms)) {
+      try {
+        kmsKeys.set(entry.id, await decrypt(Buffer.from(entry.material, "base64")));
+      } catch (err) {
+        throw new Error(`KMS could not decrypt master key "${entry.id}": ${(err as Error).message}`);
+      }
+    }
+    configureMasterKeys(cfg, kmsKeys);
+  } finally {
+    for (const k of kmsKeys.values()) k.fill(0);
+  }
 }
 
 /** The original single-key setup (INVEON_MASTER_KEY only). */
@@ -124,7 +183,7 @@ export function registerKeyEncryptionKey(kek: KeyEncryptionKey, makeCurrent = fa
 }
 
 export function keyringInfo() {
-  return { currentKeyId, keyIds: [...keyring.keys()] };
+  return { currentKeyId, keyIds: [...keyring.keys()], kmsKeyIds: [...kmsKeyIds] };
 }
 
 function getKey(id: string): KeyEncryptionKey {

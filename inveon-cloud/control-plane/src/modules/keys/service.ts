@@ -50,6 +50,8 @@ const keyIdExpr = (col: ReturnType<typeof ident>) => sql`CASE WHEN split_part(${
 export interface KeyStatus {
   currentKeyId: string | null;
   configuredKeyIds: string[];
+  /** Configured ids whose key is a KMS-encrypted data key (decrypted at start-up). */
+  kmsKeyIds: string[];
   /** Values per master key id, across every encrypted column. */
   counts: Record<string, number>;
   columns: { name: string; counts: Record<string, number> }[];
@@ -61,7 +63,7 @@ export interface KeyStatus {
 }
 
 export async function keyStatus(db: Database): Promise<KeyStatus> {
-  const { currentKeyId, keyIds } = keyringInfo();
+  const { currentKeyId, keyIds, kmsKeyIds } = keyringInfo();
   const counts: Record<string, number> = {};
   const columns: KeyStatus["columns"] = [];
   for (const c of ENCRYPTED_COLUMNS) {
@@ -80,6 +82,7 @@ export async function keyStatus(db: Database): Promise<KeyStatus> {
   return {
     currentKeyId,
     configuredKeyIds: keyIds,
+    kmsKeyIds,
     counts,
     columns,
     missingKeyIds: Object.keys(counts).filter((k) => !keyIds.includes(k)),
