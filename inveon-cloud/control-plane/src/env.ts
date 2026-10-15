@@ -65,8 +65,16 @@ export type Env = z.infer<typeof envSchema>;
 
 export const masterKeyConfig = (env: Env) => ({ legacy: env.INVEON_MASTER_KEY, keys: env.INVEON_MASTER_KEYS, current: env.INVEON_MASTER_KEY_CURRENT });
 
+/**
+ * Docker Compose passes unset optional settings as empty strings
+ * (`${INVEON_ACME_EMAIL:-}`), so an empty value counts as not set.
+ */
+export function parseEnv(source: NodeJS.ProcessEnv) {
+  return envSchema.safeParse(Object.fromEntries(Object.entries(source).filter(([, v]) => v !== "")));
+}
+
 export function loadEnv(): Env {
-  const parsed = envSchema.safeParse(process.env);
+  const parsed = parseEnv(process.env);
   if (!parsed.success) {
     // eslint-disable-next-line no-console
     console.error("Invalid environment configuration:", parsed.error.flatten().fieldErrors);
