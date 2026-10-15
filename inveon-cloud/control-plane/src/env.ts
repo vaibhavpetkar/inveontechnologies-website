@@ -32,6 +32,10 @@ const envSchema = z.object({
   // Public HTTPS URL of this control plane: used in the install command,
   // webhook URLs and email links.
   INVEON_PUBLIC_URL: z.string().url().default("http://localhost:4100"),
+  // Passkeys: the rpId is INVEON_PUBLIC_URL's host and the browser origin
+  // must be its origin. Extra origins on that host (comma-separated, e.g.
+  // the Vite dev server http://localhost:5174) can be added here.
+  INVEON_WEBAUTHN_ORIGINS: z.string().optional(),
   // Built dashboard to serve from the same origin (optional).
   INVEON_DASHBOARD_DIR: z.string().optional(),
   // Folder holding install.sh and inveon-agent.tar.gz (npm run bundle in agent/).

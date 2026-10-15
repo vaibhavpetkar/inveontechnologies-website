@@ -10,7 +10,8 @@ import { randomToken, sha256Hex } from "../../lib/crypto.js";
 import { audit, writeAudit } from "../../lib/audit.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import { sendMail } from "../../lib/mailer.js";
-import { clearTwoFactor } from "../auth/two-factor.js";
+import { clearTwoFactor, hasSecondFactor, hasSecondFactorSql } from "../auth/two-factor.js";
+import { userPasskeys } from "../../db/schema.js";
 
 const roleSchema = z.enum(["owner", "admin", "developer", "viewer"]);
 const INVITE_TTL_DAYS = 7;
@@ -51,7 +52,7 @@ export function orgRouter(db: Database, env: Env) {
 
   router.get("/members", async (req, res) => {
     const rows = await db
-      .select({ userId: users.id, email: users.email, name: users.name, role: memberships.role, joinedAt: memberships.createdAt, twoFactorEnabled: sql<boolean>`${users.totpEnabledAt} IS NOT NULL` })
+      .select({ userId: users.id, email: users.email, name: users.name, role: memberships.role, joinedAt: memberships.createdAt, twoFactorEnabled: hasSecondFactorSql })
       .from(memberships)
       .innerJoin(users, eq(users.id, memberships.userId))
       .where(eq(memberships.orgId, req.member!.orgId))
@@ -91,9 +92,11 @@ export function orgRouter(db: Database, env: Env) {
       if (mine?.role !== "owner") throw new ForbiddenError("This member also belongs to another organization; an owner of each of their organizations has to do this");
     }
     const user = await db.query.users.findFirst({ where: eq(users.id, target.userId) });
-    if (!user?.totpEnabledAt) throw new AppError("NOT_ENABLED", "This member doesn't have two-factor on", 400);
+    if (!user || !(await hasSecondFactor(db, user))) throw new AppError("NOT_ENABLED", "This member doesn't have two-factor on", 400);
+    // A lost phone may well have held the passkeys too: they go as well.
+    const passkeys = await db.delete(userPasskeys).where(eq(userPasskeys.userId, target.userId)).returning({ id: userPasskeys.id });
     await clearTwoFactor(db, target.userId);
-    await audit(db, req, "member.2fa_reset", "user", target.userId, { email: user.email });
+    await audit(db, req, "member.2fa_reset", "user", target.userId, { email: user.email, passkeysRemoved: passkeys.length });
     res.json({ ok: true });
   });
 

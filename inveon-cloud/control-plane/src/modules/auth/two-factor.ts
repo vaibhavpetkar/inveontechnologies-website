@@ -5,7 +5,7 @@ import { createHmac } from "node:crypto";
 import { and, eq, isNull, lt, or, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
 import type { Env } from "../../env.js";
-import { memberships, organizations, refreshTokens, userRecoveryCodes, users } from "../../db/schema.js";
+import { memberships, organizations, refreshTokens, userPasskeys, userRecoveryCodes, users } from "../../db/schema.js";
 import { decryptValue, encryptValue } from "../../lib/crypto.js";
 import { generateRecoveryCodes, generateTotpSecret, hashRecoveryCode, otpauthUri, verifyTotp, base32Encode } from "../../lib/totp.js";
 import { writeAudit } from "../../lib/audit.js";
@@ -51,12 +51,36 @@ export async function twoFactorRequired(db: Database, userId: string) {
   return rows.some((r) => r.role === "owner" || (r.role === "admin" && r.requireAdmins));
 }
 
+export async function passkeyCount(db: Database, userId: string) {
+  const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(userPasskeys).where(eq(userPasskeys.userId, userId));
+  return n;
+}
+
+/**
+ * Whether the account has a second factor: TOTP, or a passkey (a passkey
+ * sign-in is itself two factors: the device, and its PIN or biometrics).
+ * SQL form for joins: hasSecondFactorSql.
+ */
+export async function hasSecondFactor(db: Database, user: User) {
+  return !!user.totpEnabledAt || (await passkeyCount(db, user.id)) > 0;
+}
+export const hasSecondFactorSql = sql<boolean>`(${users.totpEnabledAt} IS NOT NULL OR EXISTS (SELECT 1 FROM user_passkeys p WHERE p.user_id = ${users.id}))`;
+
 export async function twoFactorSummary(db: Database, user: User) {
   const [{ left }] = await db
     .select({ left: sql<number>`count(*)::int` })
     .from(userRecoveryCodes)
     .where(and(eq(userRecoveryCodes.userId, user.id), isNull(userRecoveryCodes.usedAt)));
-  return { enabled: !!user.totpEnabledAt, enabledAt: user.totpEnabledAt, recoveryCodesLeft: user.totpEnabledAt ? left : 0, required: await twoFactorRequired(db, user.id) };
+  const passkeys = await passkeyCount(db, user.id);
+  return {
+    // enabled: TOTP; satisfied: TOTP or at least one passkey (what the owner requirement checks).
+    enabled: !!user.totpEnabledAt,
+    enabledAt: user.totpEnabledAt,
+    recoveryCodesLeft: user.totpEnabledAt ? left : 0,
+    passkeys,
+    satisfied: !!user.totpEnabledAt || passkeys > 0,
+    required: await twoFactorRequired(db, user.id),
+  };
 }
 
 async function replaceRecoveryCodes(db: Database, userId: string) {

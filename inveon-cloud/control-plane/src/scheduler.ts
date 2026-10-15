@@ -4,6 +4,7 @@ import type { Env } from "./env.js";
 import { logger } from "./lib/logger.js";
 import { markOfflineServers, pruneAgentNonces } from "./modules/agent/routes.js";
 import { failStaleJobs } from "./modules/jobs/service.js";
+import { pruneWebauthnChallenges } from "./modules/auth/passkeys.js";
 import { runDueChecks } from "./modules/health/service.js";
 import { alertExpiringCertificates, queueRenewals } from "./modules/domains/routes.js";
 import { processDueDeliveries, pruneDeliveries } from "./modules/alerts/service.js";
@@ -39,6 +40,7 @@ export async function tick(db: Database, env: Env) {
     ["metric threshold alerts", () => evaluateMetricAlerts(db, env.INVEON_HEARTBEAT_TIMEOUT_SEC)],
     ["EC2 servers being launched or terminated", () => pollAwsServers(db)],
     ["agent request nonces", () => pruneAgentNonces(db)],
+    ["expired passkey challenges", () => pruneWebauthnChallenges(db)],
     ["stale jobs", () => failStaleJobs(db, env.INVEON_JOB_TIMEOUT_MIN)],
     ["live log time limits", () => expireLogFollows(db)],
     ["health checks", () => runDueChecks(db, env.INVEON_PUBLIC_URL)],

@@ -5,6 +5,7 @@ import type { Env } from "../../env.js";
 import { users } from "../../db/schema.js";
 import { writeAudit } from "../../lib/audit.js";
 import { AppError, ForbiddenError, UnauthorizedError } from "../../lib/errors.js";
+import { hasSecondFactor } from "../auth/two-factor.js";
 import { keyStatus, rotationState, startRotation } from "./service.js";
 
 /**
@@ -27,7 +28,7 @@ function requirePlatformAdmin(db: Database, env: Env) {
     if (!req.user) throw new UnauthorizedError();
     const user = await db.query.users.findFirst({ where: eq(users.id, req.user.sub) });
     if (!user || !(await isPlatformAdmin(db, env, user))) throw new ForbiddenError("Only platform admins can manage encryption keys");
-    if (!user.totpEnabledAt) throw new AppError("TWO_FACTOR_REQUIRED", "Turn on two-factor authentication to continue (Account, Two-factor)", 403);
+    if (!(await hasSecondFactor(db, user))) throw new AppError("TWO_FACTOR_REQUIRED", "Turn on two-factor authentication or add a passkey to continue (Account)", 403);
     next();
   };
 }

@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import rateLimit from "express-rate-limit";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Env } from "../../env.js";
 import type { Database } from "../../db/client.js";
 import { memberships, organizations, users } from "../../db/schema.js";
@@ -61,7 +61,12 @@ export function requireMember(db: Database) {
     const orgId = req.params.orgId;
     if (!orgId || !/^[0-9a-f-]{36}$/i.test(orgId)) throw new NotFoundError("Organization not found");
     const [m] = await db
-      .select({ role: memberships.role, requireAdmins: organizations.require2faForAdmins, totpEnabledAt: users.totpEnabledAt })
+      .select({
+        role: memberships.role,
+        requireAdmins: organizations.require2faForAdmins,
+        // TOTP or a passkey (the same as hasSecondFactorSql in two-factor.ts).
+        secondFactor: sql<boolean>`(${users.totpEnabledAt} IS NOT NULL OR EXISTS (SELECT 1 FROM user_passkeys p WHERE p.user_id = ${users.id}))`,
+      })
       .from(memberships)
       .innerJoin(organizations, eq(organizations.id, memberships.orgId))
       .innerJoin(users, eq(users.id, memberships.userId))
@@ -69,8 +74,8 @@ export function requireMember(db: Database) {
       .limit(1);
     if (!m) throw new NotFoundError("Organization not found");
     // Owners (and admins, when the organization asks) must turn on two-factor
-    // before anything else in the organization works.
-    if (!m.totpEnabledAt && (m.role === "owner" || (m.role === "admin" && m.requireAdmins))) {
+    // (TOTP or a passkey) before anything else in the organization works.
+    if (!m.secondFactor && (m.role === "owner" || (m.role === "admin" && m.requireAdmins))) {
       throw new AppError("TWO_FACTOR_REQUIRED", "Turn on two-factor authentication to continue (Account, Two-factor)", 403);
     }
     req.member = { orgId, role: m.role };

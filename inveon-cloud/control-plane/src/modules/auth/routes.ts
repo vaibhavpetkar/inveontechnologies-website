@@ -10,7 +10,8 @@ import { randomToken, sha256Hex } from "../../lib/crypto.js";
 import { writeAudit } from "../../lib/audit.js";
 import { AppError, ConflictError, UnauthorizedError } from "../../lib/errors.js";
 import { isPlatformAdmin } from "../keys/routes.js";
-import { checkSecondFactor, secondFactorSchema, signChallenge, twoFactorRouter, twoFactorSummary, verifyChallenge } from "./two-factor.js";
+import { checkSecondFactor, passkeyCount, secondFactorSchema, signChallenge, twoFactorRouter, twoFactorSummary, verifyChallenge } from "./two-factor.js";
+import { passkeyRouter } from "./passkeys.js";
 
 const REFRESH_COOKIE = "inveon_refresh_token";
 const MAX_FAILED_ATTEMPTS = 5;
@@ -160,9 +161,11 @@ export function authRouter(db: Database, env: Env) {
       await recordFailure(user, "user.login_failed", req.ip);
       throw invalid();
     }
-    if (user.totpEnabledAt) {
-      // Step two: no session yet, only a short-lived challenge for the code.
-      res.json({ twoFactorRequired: true, challengeToken: signChallenge(user.id, env) });
+    const passkeys = await passkeyCount(db, user.id);
+    if (user.totpEnabledAt || passkeys > 0) {
+      // Step two: no session yet, only a short-lived challenge for a code or a passkey.
+      const methods = [...(user.totpEnabledAt ? ["totp"] : []), ...(passkeys ? ["passkey"] : [])];
+      res.json({ twoFactorRequired: true, challengeToken: signChallenge(user.id, env), methods });
       return;
     }
     await db.update(users).set({ failedLoginAttempts: 0, lockedUntil: null }).where(eq(users.id, user.id));
@@ -175,7 +178,8 @@ export function authRouter(db: Database, env: Env) {
     const { challengeToken, ...factor } = z.object({ challengeToken: z.string().min(10).max(2000) }).and(secondFactorSchema).parse(req.body);
     const userId = verifyChallenge(challengeToken, env);
     const user = await db.query.users.findFirst({ where: eq(users.id, userId) });
-    if (!user || !user.totpEnabledAt) throw new AppError("INVALID_CHALLENGE", "The sign-in step expired. Enter your email and password again.", 401);
+    if (!user) throw new AppError("INVALID_CHALLENGE", "The sign-in step expired. Enter your email and password again.", 401);
+    if (!user.totpEnabledAt) throw new AppError("USE_PASSKEY", "This account has no authenticator app; use your passkey", 400);
     if (user.lockedUntil && user.lockedUntil > new Date()) throw new AppError("ACCOUNT_LOCKED", "Account temporarily locked after failed sign-ins", 423);
     const method = await checkSecondFactor(db, user, factor);
     if (!method) {
@@ -189,6 +193,7 @@ export function authRouter(db: Database, env: Env) {
   });
 
   router.use("/2fa", twoFactorRouter(db, env, refreshHashOf));
+  router.use("/passkeys", passkeyRouter(db, env, { issueSession, profile, recordFailure, currentRefreshHash: refreshHashOf }));
 
   router.post("/refresh", async (req, res) => {
     const plaintext = req.cookies?.[REFRESH_COOKIE];

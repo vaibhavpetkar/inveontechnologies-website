@@ -46,6 +46,46 @@ export const userRecoveryCodes = pgTable(
   (t) => ({ uniq: unique().on(t.userId, t.codeHash) }),
 );
 
+/**
+ * Passkeys (WebAuthn credentials). The public key is stored as SPKI DER
+ * (base64); it isn't secret. A passkey sign-in counts as two-factor.
+ */
+export const userPasskeys = pgTable(
+  "user_passkeys",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    // base64url of the raw credential id.
+    credentialId: text("credential_id").notNull().unique(),
+    publicKey: text("public_key").notNull(),
+    // COSE algorithm: -7 ES256, -8 EdDSA, -257 RS256.
+    alg: integer("alg").notNull(),
+    signCount: bigint("sign_count", { mode: "number" }).notNull().default(0),
+    name: text("name").notNull(),
+    aaguid: text("aaguid"),
+    transports: jsonb("transports").$type<string[]>().notNull().default([]),
+    backupEligible: boolean("backup_eligible").notNull().default(false),
+    backedUp: boolean("backed_up").notNull().default(false),
+    lastUsedAt: ts("last_used_at"),
+    createdAt: createdAt(),
+  },
+  (t) => ({ byUser: index("user_passkeys_user_idx").on(t.userId) }),
+);
+
+/** WebAuthn challenges: single use, 5 minutes, bound to the user when there is one. */
+export const webauthnChallenges = pgTable(
+  "webauthn_challenges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "cascade" }),
+    purpose: text("purpose").$type<"register" | "login">().notNull(),
+    challenge: text("challenge").notNull(),
+    expiresAt: ts("expires_at").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => ({ byExpiry: index("webauthn_challenges_expires_idx").on(t.expiresAt) }),
+);
+
 // Opaque random refresh tokens, stored as SHA-256 hashes and rotated on use.
 export const refreshTokens = pgTable("refresh_tokens", {
   id: uuid("id").primaryKey().defaultRandom(),
