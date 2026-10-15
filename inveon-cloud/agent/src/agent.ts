@@ -3,6 +3,7 @@ import type { Runner } from "./exec.js";
 import { ControlPlaneClient, HttpError, type AgentJob } from "./client.js";
 import { STREAMING_ACTIONS, runAction } from "./actions.js";
 import { collectFacts } from "./facts.js";
+import { MetricsBuffer, MetricsSampler, SAMPLE_INTERVAL_MS } from "./metrics.js";
 
 const log = (msg: string, extra: Record<string, unknown> = {}) => console.log(JSON.stringify({ time: new Date().toISOString(), msg, ...extra }));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -101,6 +102,8 @@ export async function runJob(client: ControlPlaneClient, job: AgentJob, deps: Ru
 /** Live log streams run on their own lane, next to deploys, a few at a time. */
 export const MAX_STREAMS = 4;
 let streamLaneSupported = false;
+/** Set once the control plane's heartbeat says it stores metrics (older ones answer 404). */
+let metricsSupported = false;
 
 async function streamLane(client: ControlPlaneClient, config: AgentConfig, runner: Runner) {
   let active = 0;
@@ -129,6 +132,31 @@ async function streamLane(client: ControlPlaneClient, config: AgentConfig, runne
   }
 }
 
+/**
+ * Samples host metrics every 30 seconds and sends what is buffered. A
+ * failed send keeps the samples (up to an hour) for the next round.
+ */
+function startMetrics(client: ControlPlaneClient, runner: Runner) {
+  const sampler = new MetricsSampler({ runner });
+  const buffer = new MetricsBuffer();
+  let busy = false;
+  const round = async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      buffer.push(await sampler.sample());
+      if (metricsSupported) await buffer.flush(client);
+    } catch (err) {
+      log("sending metrics failed; will retry", { error: String(err), buffered: buffer.samples.length });
+    } finally {
+      busy = false;
+    }
+  };
+  // The first sample only primes the CPU and network counters.
+  void round();
+  setInterval(() => void round(), SAMPLE_INTERVAL_MS).unref();
+}
+
 export async function runAgent(config: AgentConfig, runner: Runner) {
   const client = new ControlPlaneClient(config.controlPlaneUrl, config.token);
   log("inveon-agent started", { controlPlane: config.controlPlaneUrl, serverId: config.serverId });
@@ -137,6 +165,7 @@ export async function runAgent(config: AgentConfig, runner: Runner) {
     try {
       const res = (await client.heartbeat(await collectFacts(runner))) as { features?: unknown } | null;
       if (Array.isArray(res?.features) && res.features.includes("stream_lane")) streamLaneSupported = true;
+      if (Array.isArray(res?.features) && res.features.includes("metrics")) metricsSupported = true;
     } catch (err) {
       log("heartbeat failed", { error: String(err) });
     }
@@ -145,6 +174,7 @@ export async function runAgent(config: AgentConfig, runner: Runner) {
   setInterval(beat, 30000).unref();
 
   void streamLane(client, config, runner);
+  startMetrics(client, runner);
 
   let backoff = 1000;
   for (;;) {

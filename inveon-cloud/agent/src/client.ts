@@ -50,6 +50,11 @@ export class ControlPlaneClient {
     return this.post("/heartbeat", { facts });
   }
 
+  /** Host metrics, in batches (see metrics.ts). */
+  sendMetrics(samples: unknown[]) {
+    return this.post("/metrics", { samples });
+  }
+
   /**
    * Long poll: the control plane holds the request until a job arrives or ~25s
    * pass. The "stream" lane only hands out live log streams; "main" everything else.
