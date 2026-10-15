@@ -12,11 +12,12 @@ import { DomainsTab } from "./app/DomainsTab";
 import { HealthTab } from "./app/HealthTab";
 import { BackupsTab } from "./app/BackupsTab";
 import { LogsTab } from "./app/LogsTab";
+import { ResourcesTab } from "./app/ResourcesTab";
 import { AppSettings } from "./app/AppSettings";
 import { JobView } from "../components/JobView";
 import { windowSummary } from "./app/MaintenanceCard";
 
-const TABS = ["Deploys", "Variables", "Domains", "Health", "Backups", "Logs"] as const;
+const TABS = ["Deploys", "Variables", "Domains", "Health", "Resources", "Backups", "Logs"] as const;
 type Tab = (typeof TABS)[number];
 
 function NewEnvironment({ appId, onCreated }: { appId: string; onCreated: (env: Environment) => void }) {
@@ -226,6 +227,7 @@ export default function AppDetail() {
                 {tab === "Variables" && <VariablesTab environmentId={detail.data.environment.id} />}
                 {tab === "Domains" && <DomainsTab detail={detail.data} reload={detail.reload} />}
                 {tab === "Health" && <HealthTab detail={detail.data} reload={detail.reload} />}
+                {tab === "Resources" && <ResourcesTab detail={detail.data} />}
                 {tab === "Backups" && <BackupsTab detail={detail.data} reload={detail.reload} />}
                 {tab === "Logs" && <LogsTab detail={detail.data} />}
               </div>

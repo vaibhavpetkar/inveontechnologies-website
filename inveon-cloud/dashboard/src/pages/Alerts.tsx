@@ -6,6 +6,9 @@ import { useAuth, useOrgPath } from "../context/AuthContext";
 import type { AlertChannel, AlertChannelType, AlertDelivery, AlertEventInfo } from "../lib/types";
 import { dateTime, timeAgo } from "../lib/format";
 import { CopyField, Empty, ErrorNote, Field, Loading, Modal, PageHeader, StatusBadge, useAction } from "../components/ui";
+import { ThresholdRules } from "./monitoring/Thresholds";
+import { ScrapeTokens } from "./monitoring/ScrapeTokens";
+import { Gauge } from "lucide-react";
 
 const TYPE_LABEL: Record<AlertChannelType, string> = { slack: "Slack", webhook: "Webhook", email: "Email" };
 const TypeIcon = ({ type }: { type: AlertChannelType }) => (type === "slack" ? <Hash size={16} /> : type === "webhook" ? <Webhook size={16} /> : <Mail size={16} />);
@@ -269,6 +272,19 @@ export default function Alerts() {
         </div>
       )}
       <div className="stack section-gap">
+        <div className="card">
+          <div className="card-head">
+            <h3>
+              <Gauge size={16} /> Server thresholds
+            </h3>
+          </div>
+          <p className="muted small">
+            Defaults for every server; a server's Thresholds tab can override them. Crossing one opens an incident and sends a <em>Server threshold crossed</em> alert; clearing it sends
+            one more. CPU and memory use the agent's 30-second samples, disk the fuller of / and Docker's data root.
+          </p>
+          <ThresholdRules />
+        </div>
+        <ScrapeTokens />
         <DeliveryLog channels={channels} />
       </div>
 

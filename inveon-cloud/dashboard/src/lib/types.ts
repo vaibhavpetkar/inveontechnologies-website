@@ -349,3 +349,96 @@ export interface DeployedRelease {
   current: boolean;
   previous: boolean;
 }
+
+// ---------------------------------------------------------------- monitoring
+
+export type MetricRange = "1h" | "24h" | "7d" | "30d";
+export type MetricKind = "cpu" | "memory" | "disk" | "offline";
+
+export interface MetricPoint {
+  t: string;
+  cpuPct: number | null;
+  cpuPctMax: number | null;
+  load1: number | null;
+  memUsedBytes: number | null;
+  memUsedBytesMax: number | null;
+  memTotalBytes: number | null;
+  diskRootUsedBytes: number | null;
+  diskRootTotalBytes: number | null;
+  diskDockerUsedBytes: number | null;
+  diskDockerTotalBytes: number | null;
+  netRxBps: number | null;
+  netTxBps: number | null;
+}
+
+export interface ContainerSummary {
+  name: string;
+  project: string | null;
+  service: string | null;
+  cpuPct: number | null;
+  memBytes: number | null;
+  memLimitBytes: number | null;
+  cpuPctAvg: number | null;
+  cpuPctMax: number | null;
+  memBytesMax: number | null;
+}
+
+export interface ServerMetrics {
+  range: MetricRange;
+  stepSec: number;
+  since: string;
+  until: string;
+  points: MetricPoint[];
+  latestAt: string | null;
+  containers: ContainerSummary[];
+}
+
+export interface EnvironmentResources {
+  range: MetricRange;
+  stepSec: number;
+  since: string;
+  until: string;
+  points: { t: string; cpuPct: number | null; memBytes: number | null }[];
+  latestAt: string | null;
+  containers: ContainerSummary[];
+  serverId: string;
+}
+
+export interface MetricIncident {
+  id: string;
+  serverId: string;
+  metric: MetricKind;
+  thresholdPct: number | null;
+  forMinutes: number;
+  startedAt: string;
+  resolvedAt: string | null;
+  openValue: number | null;
+  peakValue: number | null;
+  clearValue: number | null;
+  closedReason: string | null;
+}
+
+export interface MetricRule {
+  id: string;
+  serverId: string | null;
+  metric: MetricKind;
+  thresholdPct: number | null;
+  forMinutes: number;
+  enabled: boolean;
+  updatedAt: string;
+}
+
+export interface MetricRulesResponse {
+  rules: MetricRule[];
+  effective: Partial<Record<MetricKind, MetricRule>> | null;
+  metrics: { id: MetricKind; label: string; suggested: { thresholdPct: number | null; forMinutes: number } }[];
+}
+
+export interface ScrapeToken {
+  id: string;
+  name: string;
+  tokenPrefix: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+}

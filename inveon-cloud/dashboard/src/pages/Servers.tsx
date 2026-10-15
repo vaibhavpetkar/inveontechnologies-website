@@ -3,7 +3,8 @@ import { Cloud, Cpu, HardDrive, KeyRound, MemoryStick, Plus, Power, RefreshCw, S
 import { api } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useAuth, useOrgPath } from "../context/AuthContext";
-import type { AwsInfo, Server } from "../lib/types";
+import { Link } from "wouter";
+import type { AwsInfo, MetricIncident, Server } from "../lib/types";
 import { AwsConnectionModal, CreateAwsServerModal, TerminateModal } from "./servers/Aws";
 import { bytes, timeAgo } from "../lib/format";
 import { CopyField, Empty, ErrorNote, Field, Loading, Modal, PageHeader, StatusBadge, useAction } from "../components/ui";
@@ -51,6 +52,8 @@ export default function Servers() {
   const [launching, setLaunching] = useState(false);
   const [terminating, setTerminating] = useState<Server | null>(null);
   const awsConnected = !!aws.data?.connection?.connected;
+  const incidents = useApi<{ incidents: MetricIncident[] }>(orgPath("/metric-incidents"), 30000);
+  const openFor = (id: string) => incidents.data?.incidents.filter((i) => i.serverId === id).length ?? 0;
 
   const refresh = (s: Server) =>
     void action.run(async () => {
@@ -109,7 +112,14 @@ export default function Servers() {
         {data?.servers.map((s) => (
           <div className="card" key={s.id}>
             <div className="card-head">
-              <h3>{s.name}</h3>
+              <h3>
+                {s.registeredAt ? <Link href={`/servers/${s.id}`}>{s.name}</Link> : s.name}
+                {openFor(s.id) > 0 && (
+                  <Link href={`/servers/${s.id}`} className="badge badge-bad" title="Open threshold incidents">
+                    {openFor(s.id)} alert{openFor(s.id) > 1 ? "s" : ""}
+                  </Link>
+                )}
+              </h3>
               <StatusBadge status={s.provider === "aws" && s.provisionState && s.provisionState !== "agent_online" ? s.provisionState : s.status} />
             </div>
             {s.provider === "aws" && (

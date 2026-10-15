@@ -6,6 +6,7 @@ import { Shell } from "./components/Shell";
 import { Loading } from "./components/ui";
 import { AcceptInvite, Login, Signup } from "./pages/Auth";
 import Servers from "./pages/Servers";
+import ServerDetail from "./pages/ServerDetail";
 import Apps from "./pages/Apps";
 import AppDetail from "./pages/AppDetail";
 import Jobs from "./pages/Jobs";
@@ -50,6 +51,11 @@ export default function App() {
             </Public>
           </Route>
           <Route path="/invite/:token" component={AcceptInvite} />
+          <Route path="/servers/:id">
+            <Private>
+              <ServerDetail />
+            </Private>
+          </Route>
           <Route path="/servers">
             <Private>
               <Servers />
