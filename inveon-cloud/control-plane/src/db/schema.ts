@@ -21,9 +21,29 @@ export const users = pgTable("users", {
   passwordHash: text("password_hash").notNull(),
   failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
   lockedUntil: ts("locked_until"),
+  // Two-factor (TOTP). The secret is envelope-encrypted; a pending secret
+  // waits for the first code during enrolment. totpLastStep is the newest
+  // 30-second step a code was accepted for: an older or equal step is a replay.
+  totpSecretEnc: text("totp_secret_enc"),
+  totpPendingSecretEnc: text("totp_pending_secret_enc"),
+  totpEnabledAt: ts("totp_enabled_at"),
+  totpLastStep: bigint("totp_last_step", { mode: "number" }),
   createdAt: createdAt(),
   updatedAt: ts("updated_at").notNull().defaultNow(),
 });
+
+/** One-time recovery codes for two-factor sign-in, stored as salted SHA-256 hashes. */
+export const userRecoveryCodes = pgTable(
+  "user_recovery_codes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    codeHash: text("code_hash").notNull(),
+    usedAt: ts("used_at"),
+    createdAt: createdAt(),
+  },
+  (t) => ({ uniq: unique().on(t.userId, t.codeHash) }),
+);
 
 // Opaque random refresh tokens, stored as SHA-256 hashes and rotated on use.
 export const refreshTokens = pgTable("refresh_tokens", {
@@ -42,6 +62,8 @@ export const organizations = pgTable("organizations", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
   slug: text("slug").notNull().unique(),
+  // Owners always need two-factor; this extends the requirement to admins.
+  require2faForAdmins: boolean("require_2fa_for_admins").notNull().default(false),
   createdAt: createdAt(),
 });
 
@@ -109,8 +131,45 @@ export const servers = pgTable("servers", {
   agentVersion: text("agent_version"),
   lastSeenAt: ts("last_seen_at"),
   registeredAt: ts("registered_at"),
+  // "aws" when Inveon Cloud launched the EC2 instance itself.
+  provider: text("provider").$type<"manual" | "aws">().notNull().default("manual"),
+  // pending (launched) -> running (instance up) -> agent_online (registered);
+  // terminating -> terminated after Terminate. failed if the launch failed.
+  provisionState: text("provision_state").$type<"pending" | "running" | "agent_online" | "terminating" | "terminated" | "failed">(),
+  provisionError: text("provision_error"),
+  awsRegion: text("aws_region"),
+  awsInstanceId: text("aws_instance_id"),
+  awsInstanceType: text("aws_instance_type"),
+  awsAmiId: text("aws_ami_id"),
+  awsState: text("aws_state"),
+  awsSecurityGroupId: text("aws_security_group_id"),
+  // The security group was created for this server (deleted after termination).
+  awsCreatedSecurityGroup: boolean("aws_created_security_group").notNull().default(false),
+  terminatedAt: ts("terminated_at"),
   createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: createdAt(),
+});
+
+/**
+ * An organization's AWS account, for launching servers. Preferred: a role
+ * the control plane assumes with this external id (generated here, never
+ * chosen by the user). Otherwise an access key, its secret envelope-encrypted.
+ */
+export const awsConnections = pgTable("aws_connections", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  orgId: uuid("org_id").notNull().unique().references(() => organizations.id, { onDelete: "cascade" }),
+  // null until the connection is saved (the row exists early to hold the external id).
+  authType: text("auth_type").$type<"role" | "keys">(),
+  roleArn: text("role_arn"),
+  externalId: text("external_id").notNull(),
+  accessKeyId: text("access_key_id"),
+  secretAccessKeyEnc: text("secret_access_key_enc"),
+  defaultRegion: text("default_region").notNull().default("ap-south-1"),
+  accountId: text("account_id"),
+  verifiedAt: ts("verified_at"),
+  createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+  createdAt: createdAt(),
+  updatedAt: ts("updated_at").notNull().defaultNow(),
 });
 
 export const serverBootstrapTokens = pgTable("server_bootstrap_tokens", {
@@ -140,6 +199,27 @@ export const apps = pgTable(
     imageRegistry: text("image_registry"),
     // Envelope-encrypted HMAC secret for the GitHub push webhook.
     webhookSecretEnc: text("webhook_secret_enc").notNull(),
+    // For repos without a CI image: the agent clones the commit and runs
+    // docker build on the server. The compose file uses ${INVEON_IMAGE}.
+    buildOnServer: boolean("build_on_server").notNull().default(false),
+    dockerfilePath: text("dockerfile_path").notNull().default("Dockerfile"),
+    buildContext: text("build_context").notNull().default("."),
+    // Registry login for pulls and builds. The password is write-only and
+    // envelope-encrypted; the agent logs in for the job and logs out after.
+    registryServer: text("registry_server"),
+    registryUsername: text("registry_username"),
+    registryPasswordEnc: text("registry_password_enc"),
+    // Read-only SSH deploy key for cloning private repos on the server
+    // (private half encrypted; the public half is added to GitHub by hand).
+    deployKeyEnc: text("deploy_key_enc"),
+    deployKeyPublic: text("deploy_key_public"),
+    // Preview environments: one per pull request (pr-<number>), on this
+    // server, at pr-<number>.<previewBaseDomain>. Variables are copied from
+    // previewVarsFromEnvironmentId when the preview is created.
+    previewsEnabled: boolean("previews_enabled").notNull().default(false),
+    previewServerId: uuid("preview_server_id").references(() => servers.id, { onDelete: "set null" }),
+    previewBaseDomain: text("preview_base_domain"),
+    previewVarsFromEnvironmentId: uuid("preview_vars_from_environment_id"),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
     updatedAt: ts("updated_at").notNull().defaultNow(),
@@ -167,6 +247,21 @@ export const environments = pgTable(
     currentReleaseId: uuid("current_release_id"),
     previousReleaseId: uuid("previous_release_id"),
     autoDeploy: boolean("auto_deploy").notNull().default(true),
+    // Optional release command (e.g. "npm run db:migrate"), run with
+    // `docker compose run` in the new release's image before traffic switches.
+    // Stored as text, split into a validated argv: never run through a shell.
+    releaseCommand: text("release_command"),
+    releaseService: text("release_service"),
+    // Set on preview environments: the pull request they belong to.
+    previewPr: integer("preview_pr"),
+    // Release archiving: how many recently deployed releases keep their
+    // images on the server (the live and previous ones always do).
+    keepReleases: integer("keep_releases").notNull().default(10),
+    // Weekly maintenance windows (UTC). When set, deploys from webhooks wait
+    // for the next window: the newest pushed release is queued here.
+    maintenanceWindows: jsonb("maintenance_windows").$type<{ day: number; start: string; durationMin: number }[]>().notNull().default([]),
+    queuedReleaseId: uuid("queued_release_id"),
+    queuedAt: ts("queued_at"),
     createdAt: createdAt(),
   },
   (t) => ({ uniqName: unique().on(t.appId, t.name), uniqPort: unique().on(t.serverId, t.bluePort) }),
@@ -196,11 +291,27 @@ export const releases = pgTable(
     commitSha: text("commit_sha").notNull(),
     commitMessage: text("commit_message"),
     composeContent: text("compose_content").notNull(),
-    source: text("source").$type<"webhook" | "manual">().notNull(),
+    source: text("source").$type<"webhook" | "manual" | "pull_request">().notNull(),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: createdAt(),
   },
   (t) => ({ uniq: unique().on(t.appId, t.commitSha) }),
+);
+
+/**
+ * A release that is archived for one environment: its images were pruned
+ * from that environment's server and it can no longer be rolled back to
+ * there. Deploying the same commit again (a fresh build or pull) un-archives it.
+ */
+export const archivedReleases = pgTable(
+  "archived_releases",
+  {
+    environmentId: uuid("environment_id").notNull().references(() => environments.id, { onDelete: "cascade" }),
+    releaseId: uuid("release_id").notNull().references(() => releases.id, { onDelete: "cascade" }),
+    jobId: uuid("job_id"),
+    archivedAt: ts("archived_at").notNull().defaultNow(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.environmentId, t.releaseId] }) }),
 );
 
 // ---------------------------------------------------------------- jobs
@@ -254,6 +365,11 @@ export const deployments = pgTable("deployments", {
   slot: text("slot").$type<"blue" | "green" | "main">().notNull(),
   previousSlot: text("previous_slot").$type<"blue" | "green" | "main">(),
   status: jobStatusEnum("status").notNull().default("pending"),
+  // Why it failed (the job's error) and the tail of the release command's output.
+  error: text("error"),
+  releaseOutput: text("release_output"),
+  // Backup taken before the release command, offered for restore if it fails.
+  backupId: uuid("backup_id").references(() => backups.id, { onDelete: "set null" }),
   createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: createdAt(),
   finishedAt: ts("finished_at"),
@@ -303,6 +419,11 @@ export const backupConfigs = pgTable("backup_configs", {
   s3Bucket: text("s3_bucket"),
   s3Prefix: text("s3_prefix").notNull().default("inveon-cloud"),
   s3Region: text("s3_region").notNull().default("ap-south-1"),
+  // Retention: keep the newest backup of each of the last keepDaily days, and
+  // of each of the last keepWeekly weeks. null keeps everything.
+  keepDaily: integer("keep_daily"),
+  keepWeekly: integer("keep_weekly").notNull().default(0),
+  lastPrunedAt: ts("last_pruned_at"),
   lastScheduledAt: ts("last_scheduled_at"),
   updatedAt: ts("updated_at").notNull().defaultNow(),
 });
@@ -311,7 +432,7 @@ export const backups = pgTable("backups", {
   id: uuid("id").primaryKey().defaultRandom(),
   environmentId: uuid("environment_id").notNull().references(() => environments.id, { onDelete: "cascade" }),
   jobId: uuid("job_id").references(() => jobs.id, { onDelete: "set null" }),
-  kind: text("kind").$type<"scheduled" | "manual" | "pre_restore">().notNull(),
+  kind: text("kind").$type<"scheduled" | "manual" | "pre_restore" | "pre_deploy">().notNull(),
   status: jobStatusEnum("status").notNull().default("pending"),
   s3Bucket: text("s3_bucket").notNull(),
   s3Region: text("s3_region").notNull(),
@@ -330,4 +451,56 @@ export const schedulerRuns = pgTable(
     lastRunAt: ts("last_run_at").notNull(),
   },
   (t) => ({ pk: primaryKey({ columns: [t.name, t.key] }) }),
+);
+
+// ---------------------------------------------------------------- alerts
+
+/**
+ * Where an organization's alerts go. Slack and webhook URLs are secrets (a
+ * Slack URL is its own credential), so they are envelope-encrypted like
+ * variables; only the scheme and host are shown (urlHint). A webhook's
+ * signing secret is generated here, shown once and encrypted.
+ */
+export const alertChannels = pgTable(
+  "alert_channels",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    type: text("type").$type<"slack" | "webhook" | "email">().notNull(),
+    urlEnc: text("url_enc"),
+    urlHint: text("url_hint"),
+    signingSecretEnc: text("signing_secret_enc"),
+    // Email: recipients; empty means the organization's owners and admins.
+    emails: jsonb("emails").$type<string[]>().notNull().default([]),
+    events: jsonb("events").$type<string[]>().notNull().default([]),
+    enabled: boolean("enabled").notNull().default(true),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: ts("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({ byOrg: index("alert_channels_org_idx").on(t.orgId) }),
+);
+
+/** One alert to one channel: a small durable queue with retries, and the delivery log. */
+export const alertDeliveries = pgTable(
+  "alert_deliveries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    channelId: uuid("channel_id").notNull().references(() => alertChannels.id, { onDelete: "cascade" }),
+    event: text("event").notNull(),
+    // Title, text, link and details. Never holds secrets.
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+    status: text("status").$type<"pending" | "success" | "failure">().notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(5),
+    nextAttemptAt: ts("next_attempt_at").notNull().defaultNow(),
+    responseStatus: integer("response_status"),
+    lastError: text("last_error"),
+    detail: text("detail"),
+    createdAt: createdAt(),
+    deliveredAt: ts("delivered_at"),
+  },
+  (t) => ({ due: index("alert_deliveries_due_idx").on(t.status, t.nextAttemptAt), byOrg: index("alert_deliveries_org_created_idx").on(t.orgId, t.createdAt) }),
 );

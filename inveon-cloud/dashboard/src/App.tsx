@@ -11,12 +11,17 @@ import AppDetail from "./pages/AppDetail";
 import Jobs from "./pages/Jobs";
 import Team from "./pages/Team";
 import Audit from "./pages/Audit";
+import Alerts from "./pages/Alerts";
 import NoOrganization from "./pages/NoOrganization";
+import Account from "./pages/Account";
+import EncryptionKeys from "./pages/EncryptionKeys";
+import TwoFactorGate from "./pages/TwoFactorGate";
 
 function Private({ children }: { children: ReactNode }) {
   const { user, loading, org } = useAuth();
   if (loading) return <div className="page-loading"><Loading /></div>;
   if (!user) return <Redirect to="/login" />;
+  if (user.twoFactor.required && !user.twoFactor.enabled) return <TwoFactorGate />;
   if (!org) return <NoOrganization />;
   // Remount pages when the organization changes so no data leaks across.
   return <Shell key={org.id}>{children}</Shell>;
@@ -68,6 +73,21 @@ export default function App() {
           <Route path="/team">
             <Private>
               <Team />
+            </Private>
+          </Route>
+          <Route path="/alerts">
+            <Private>
+              <Alerts />
+            </Private>
+          </Route>
+          <Route path="/platform/keys">
+            <Private>
+              <EncryptionKeys />
+            </Private>
+          </Route>
+          <Route path="/account">
+            <Private>
+              <Account />
             </Private>
           </Route>
           <Route path="/audit">

@@ -3,11 +3,12 @@ import { z } from "zod";
 import { and, desc, eq, type SQL } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
 import { jobs, servers } from "../../db/schema.js";
-import { requireRole } from "../auth/middleware.js";
+import { hasRole, requireRole } from "../auth/middleware.js";
 import { audit } from "../../lib/audit.js";
-import { ConflictError } from "../../lib/errors.js";
+import { ConflictError, ForbiddenError } from "../../lib/errors.js";
 import { bus, jobEvent, type JobStreamEvent } from "../../lib/bus.js";
 import { cancelJob, getJob, TERMINAL, type JobStatus } from "./service.js";
+import { viewerLeft } from "../live-logs/service.js";
 
 export function jobsRouter(db: Database) {
   const router = Router({ mergeParams: true });
@@ -35,8 +36,15 @@ export function jobsRouter(db: Database) {
     res.json({ jobs: rows.map((r) => ({ ...r.job, serverName: r.serverName })) });
   });
 
+  /** Container output can hold anything the app prints, so it is for developers and up. */
+  const LOG_JOB_TYPES = ["logs", "logs_follow"];
+  const checkLogAccess = (req: Parameters<typeof hasRole>[0], job: { type: string }) => {
+    if (LOG_JOB_TYPES.includes(job.type) && !hasRole(req, "developer")) throw new ForbiddenError("Developers and above can read container logs");
+  };
+
   router.get("/:jobId", async (req, res) => {
     const { job, steps } = await getJob(db, req.params.jobId, req.member!.orgId);
+    checkLogAccess(req, job);
     res.json({ job, steps });
   });
 
@@ -55,6 +63,7 @@ export function jobsRouter(db: Database) {
    */
   router.get("/:jobId/stream", async (req, res) => {
     const { job, steps } = await getJob(db, req.params.jobId, req.member!.orgId);
+    checkLogAccess(req, job);
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
@@ -76,6 +85,8 @@ export function jobsRouter(db: Database) {
       clearInterval(ping);
       bus.off(jobEvent(job.id), listener);
       if (end) res.end();
+      // A live log stream stops when its last viewer leaves.
+      else viewerLeft(db, job);
     };
     bus.on(jobEvent(job.id), listener);
     req.on("close", () => cleanup(false));

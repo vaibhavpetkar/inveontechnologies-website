@@ -1,11 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation, useParams } from "wouter";
 import { Cloud } from "lucide-react";
-import { api } from "../lib/api";
+import { api, ApiError } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { ErrorNote, Field, useAction } from "../components/ui";
 
-function AuthFrame({ title, children }: { title: string; children: React.ReactNode }) {
+export function AuthFrame({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="auth">
       <div className="auth-card">
@@ -20,18 +20,76 @@ function AuthFrame({ title, children }: { title: string; children: React.ReactNo
 }
 
 export function Login() {
-  const { login } = useAuth();
+  const { login, completeLogin } = useAuth();
   const [, navigate] = useLocation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const { busy, error, run } = useAction();
+  const [challenge, setChallenge] = useState<string | null>(null);
+  const [useRecovery, setUseRecovery] = useState(false);
+  const [code, setCode] = useState("");
+  const { busy, error, setError, run } = useAction();
   const submit = (e: FormEvent) => {
     e.preventDefault();
     void run(async () => {
-      await login(email, password);
+      const next = await login(email, password);
+      if (next) {
+        setChallenge(next.challengeToken);
+        setCode("");
+        return;
+      }
       navigate("/servers");
     });
   };
+  const submitCode = (e: FormEvent) => {
+    e.preventDefault();
+    void run(async () => {
+      try {
+        await completeLogin(challenge!, useRecovery ? { recoveryCode: code.trim() } : { code: code.replace(/\s/g, "") });
+        navigate("/servers");
+      } catch (err) {
+        // An expired step sends you back to the password.
+        if (err instanceof ApiError && err.code === "INVALID_CHALLENGE") setChallenge(null);
+        throw err;
+      }
+    });
+  };
+  if (challenge) {
+    return (
+      <AuthFrame title="Two-factor authentication">
+        <form onSubmit={submitCode} className="form">
+          {useRecovery ? (
+            <Field label="Recovery code" hint="One of the codes you saved when you turned on two-factor. Each works once.">
+              <input autoComplete="off" required autoFocus value={code} onChange={(e) => setCode(e.target.value)} placeholder="xxxx-xxxx-xxxx" />
+            </Field>
+          ) : (
+            <Field label="Code from your authenticator app">
+              <input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9 ]{6,7}" maxLength={7} required autoFocus value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" />
+            </Field>
+          )}
+          <ErrorNote error={error} />
+          <button className="btn btn-primary btn-block" disabled={busy}>
+            {busy ? "Checking…" : "Verify"}
+          </button>
+        </form>
+        <p className="muted small center">
+          <button
+            type="button"
+            className="btn btn-ghost btn-small"
+            onClick={() => {
+              setUseRecovery((v) => !v);
+              setCode("");
+              setError(null);
+            }}
+          >
+            {useRecovery ? "Use a code from the app" : "Use a recovery code"}
+          </button>
+          <button type="button" className="btn btn-ghost btn-small" onClick={() => setChallenge(null)}>
+            Start again
+          </button>
+        </p>
+      </AuthFrame>
+    );
+  }
   return (
     <AuthFrame title="Sign in">
       <form onSubmit={submit} className="form">

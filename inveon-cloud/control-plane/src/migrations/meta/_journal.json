@@ -8,6 +8,69 @@
       "when": 1791714752613,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791823101776,
+      "tag": "0001_release_command",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791823391196,
+      "tag": "0002_build_on_server",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791823799186,
+      "tag": "0003_preview_environments",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791824998963,
+      "tag": "0004_alerts",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791825377943,
+      "tag": "0005_backup_retention",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791825632368,
+      "tag": "0006_release_archive",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791825971704,
+      "tag": "0007_maintenance_windows",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791826661091,
+      "tag": "0008_two_factor",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791827518455,
+      "tag": "0009_aws_servers",
+      "breakpoints": true
     }
   ]
 }

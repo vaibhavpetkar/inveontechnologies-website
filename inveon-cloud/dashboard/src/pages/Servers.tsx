@@ -1,9 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Cpu, HardDrive, KeyRound, MemoryStick, Plus, Server as ServerIcon, Trash2 } from "lucide-react";
+import { Cloud, Cpu, HardDrive, KeyRound, MemoryStick, Plus, Power, RefreshCw, Server as ServerIcon, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useAuth, useOrgPath } from "../context/AuthContext";
-import type { Server } from "../lib/types";
+import type { AwsInfo, Server } from "../lib/types";
+import { AwsConnectionModal, CreateAwsServerModal, TerminateModal } from "./servers/Aws";
 import { bytes, timeAgo } from "../lib/format";
 import { CopyField, Empty, ErrorNote, Field, Loading, Modal, PageHeader, StatusBadge, useAction } from "../components/ui";
 
@@ -45,6 +46,17 @@ export default function Servers() {
   const [editing, setEditing] = useState<Server | null>(null);
   const [ip, setIp] = useState("");
   const action = useAction();
+  const aws = useApi<AwsInfo>(can("admin") ? orgPath("/aws") : null);
+  const [awsOpen, setAwsOpen] = useState(false);
+  const [launching, setLaunching] = useState(false);
+  const [terminating, setTerminating] = useState<Server | null>(null);
+  const awsConnected = !!aws.data?.connection?.connected;
+
+  const refresh = (s: Server) =>
+    void action.run(async () => {
+      await api(orgPath(`/servers/${s.id}/refresh`), { method: "POST" });
+      await reload();
+    });
 
   const create = (e: FormEvent) => {
     e.preventDefault();
@@ -70,9 +82,19 @@ export default function Servers() {
         subtitle="Hosts running the Inveon agent."
         actions={
           can("admin") && (
-            <button className="btn btn-primary" onClick={() => setAdding(true)}>
-              <Plus size={16} /> Add server
-            </button>
+            <>
+              <button className="btn btn-ghost" onClick={() => setAwsOpen(true)}>
+                <Cloud size={16} /> AWS account{awsConnected ? "" : "…"}
+              </button>
+              {awsConnected && (
+                <button className="btn btn-ghost" onClick={() => setLaunching(true)}>
+                  <Plus size={16} /> Create on AWS
+                </button>
+              )}
+              <button className="btn btn-primary" onClick={() => setAdding(true)}>
+                <Plus size={16} /> Add server
+              </button>
+            </>
           )
         }
       />
@@ -88,8 +110,17 @@ export default function Servers() {
           <div className="card" key={s.id}>
             <div className="card-head">
               <h3>{s.name}</h3>
-              <StatusBadge status={s.status} />
+              <StatusBadge status={s.provider === "aws" && s.provisionState && s.provisionState !== "agent_online" ? s.provisionState : s.status} />
             </div>
+            {s.provider === "aws" && (
+              <p className="muted small">
+                EC2 {s.awsInstanceType} · {s.awsRegion} · {s.awsInstanceId ?? "launching"}
+                {s.awsState && s.awsState !== "running" ? ` · ${s.awsState}` : ""}
+                {s.provisionState === "running" && " · installing the agent (a few minutes)"}
+                {s.provisionState === "terminated" && s.terminatedAt ? ` · terminated ${timeAgo(s.terminatedAt)}` : ""}
+              </p>
+            )}
+            {s.provisionError && <ErrorNote error={s.provisionError} />}
             {s.registeredAt ? (
               <>
                 <p className="muted small">
@@ -112,7 +143,7 @@ export default function Servers() {
                   <li>Agent {s.agentVersion ?? "?"}</li>
                 </ul>
               </>
-            ) : (
+            ) : s.provisionState === "terminated" || s.provisionState === "terminating" ? null : (
               <p className="muted small">Waiting for the agent to register.</p>
             )}
             {can("admin") && (
@@ -129,8 +160,23 @@ export default function Servers() {
                 >
                   Public IP
                 </button>
+                {s.provider === "aws" && s.provisionState !== "terminated" && (
+                  <>
+                    <button className="btn btn-small btn-ghost" onClick={() => refresh(s)} disabled={action.busy} title="Check the instance in AWS now">
+                      <RefreshCw size={14} /> Refresh
+                    </button>
+                    {s.provisionState !== "terminating" && (
+                      <button className="btn btn-small btn-ghost btn-danger" onClick={() => setTerminating(s)}>
+                        <Power size={14} /> Terminate
+                      </button>
+                    )}
+                  </>
+                )}
                 <button
                   className="btn btn-small btn-ghost btn-danger"
+                  aria-label={`Remove ${s.name}`}
+                  title={s.provider === "aws" && s.provisionState !== "terminated" && s.provisionState !== "failed" ? "Terminate the instance first" : "Remove"}
+                  disabled={s.provider === "aws" && s.provisionState !== "terminated" && s.provisionState !== "failed"}
                   onClick={() => {
                     if (confirm(`Remove ${s.name}? The agent on it stops being accepted.`)) void action.run(async () => (await api(orgPath(`/servers/${s.id}`), { method: "DELETE" }), reload()));
                   }}
@@ -142,6 +188,17 @@ export default function Servers() {
           </div>
         ))}
       </div>
+
+      <AwsConnectionModal open={awsOpen} info={aws.data} onClose={() => setAwsOpen(false)} onSaved={() => void aws.reload()} />
+      {aws.data && (
+        <CreateAwsServerModal
+          open={launching}
+          info={aws.data}
+          onClose={() => setLaunching(false)}
+          onCreated={() => void reload()}
+        />
+      )}
+      <TerminateModal server={terminating} onClose={() => setTerminating(null)} onDone={() => void reload()} />
 
       <Modal open={adding} title="Add server" onClose={() => setAdding(false)}>
         <form onSubmit={create} className="form">

@@ -27,9 +27,9 @@ export async function loadServer(db: Database, orgId: string, id: string) {
   return s;
 }
 
-async function issueBootstrapToken(db: Database, env: Env, serverId: string, userId: string) {
+export async function issueBootstrapToken(db: Database, env: Env, serverId: string, userId: string, ttlMs = BOOTSTRAP_TTL_MS) {
   const token = randomToken(32);
-  const expiresAt = new Date(Date.now() + BOOTSTRAP_TTL_MS);
+  const expiresAt = new Date(Date.now() + ttlMs);
   // A new token replaces any unused one for this server.
   await db.delete(serverBootstrapTokens).where(eq(serverBootstrapTokens.serverId, serverId));
   await db.insert(serverBootstrapTokens).values({ serverId, tokenHash: sha256Hex(token), expiresAt, createdBy: userId });
@@ -80,6 +80,9 @@ export function serversRouter(db: Database, env: Env) {
     const server = await loadServer(db, req.member!.orgId, req.params.id);
     const inUse = await db.query.environments.findFirst({ where: eq(environments.serverId, server.id) });
     if (inUse) throw new ConflictError("Remove the environments on this server first");
+    if (server.provider === "aws" && server.awsInstanceId && server.provisionState !== "terminated" && server.provisionState !== "failed") {
+      throw new ConflictError("Terminate the EC2 instance first, so it isn't left running");
+    }
     await db.delete(servers).where(eq(servers.id, server.id));
     await audit(db, req, "server.delete", "server", server.id, { name: server.name });
     res.json({ ok: true });

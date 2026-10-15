@@ -1,17 +1,18 @@
 import "dotenv/config";
-import { loadEnv } from "./env.js";
+import { loadEnv, masterKeyConfig } from "./env.js";
 import { createDb, runMigrations } from "./db/client.js";
-import { configureMasterKey } from "./lib/crypto.js";
+import { configureMasterKeys } from "./lib/crypto.js";
 import { configureMailer } from "./lib/mailer.js";
 import { logger } from "./lib/logger.js";
 import { createApp } from "./app.js";
 import { startScheduler } from "./scheduler.js";
+import { warnAboutMissingKeys } from "./modules/keys/service.js";
 
 const env = loadEnv();
 try {
-  configureMasterKey(env.INVEON_MASTER_KEY);
+  configureMasterKeys(masterKeyConfig(env));
 } catch (err) {
-  logger.fatal({ err }, "Invalid INVEON_MASTER_KEY");
+  logger.fatal({ err }, "Invalid master key configuration (INVEON_MASTER_KEY, INVEON_MASTER_KEYS, INVEON_MASTER_KEY_CURRENT)");
   process.exit(1);
 }
 configureMailer(env);
@@ -25,6 +26,8 @@ if (env.INVEON_AUTO_MIGRATE === "true") {
     process.exit(1);
   }
 }
+
+await warnAboutMissingKeys(db).catch((err) => logger.error({ err }, "Could not check encrypted values against the master keys"));
 
 const app = createApp(db, pool, env);
 const server = app.listen(env.INVEON_PORT, () => {

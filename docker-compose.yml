@@ -165,6 +165,62 @@ services:
       - events-web-static:/usr/share/nginx/html
     restart: "no"
 
+  # --- Inveon Cloud (./inveon-cloud) --- the deploy platform's control
+  #     plane: API, dashboard and the agent installer in one container, at
+  #     https://cloud.inveontechnologies.in. Its secrets come from this
+  #     server's .env (see inveon-cloud/.env.example); until they are set
+  #     only these two containers fail to start, nothing else is affected.
+  inveon-cloud-postgres:
+    image: postgres:16-alpine
+    container_name: inveon_cloud_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: inveon_cloud
+      POSTGRES_USER: inveon
+      POSTGRES_PASSWORD: ${INVEON_POSTGRES_PASSWORD:-}
+    volumes:
+      - inveon-cloud-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inveon -d inveon_cloud"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - inveon_cloud_internal
+    # No published ports — only inveon-cloud (same network) can reach it.
+
+  inveon-cloud:
+    build: ./inveon-cloud
+    container_name: inveon_cloud
+    restart: unless-stopped
+    depends_on:
+      inveon-cloud-postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      INVEON_DATABASE_URL: postgres://inveon:${INVEON_POSTGRES_PASSWORD:-}@inveon_cloud_postgres:5432/inveon_cloud
+      INVEON_JWT_SECRET: ${INVEON_JWT_SECRET:-}
+      INVEON_MASTER_KEY: ${INVEON_MASTER_KEY:-}
+      INVEON_MASTER_KEYS: ${INVEON_MASTER_KEYS:-}
+      INVEON_MASTER_KEY_CURRENT: ${INVEON_MASTER_KEY_CURRENT:-}
+      INVEON_PLATFORM_ADMINS: ${INVEON_PLATFORM_ADMINS:-}
+      INVEON_PUBLIC_URL: ${INVEON_PUBLIC_URL:-https://cloud.inveontechnologies.in}
+      INVEON_OPEN_SIGNUP: ${INVEON_OPEN_SIGNUP:-false}
+      INVEON_GITHUB_TOKEN: ${INVEON_GITHUB_TOKEN:-}
+      INVEON_ACME_EMAIL: ${INVEON_ACME_EMAIL:-}
+      INVEON_SMTP_HOST: ${INVEON_SMTP_HOST:-}
+      INVEON_SMTP_PORT: ${INVEON_SMTP_PORT:-587}
+      INVEON_SMTP_SECURE: ${INVEON_SMTP_SECURE:-false}
+      INVEON_SMTP_USER: ${INVEON_SMTP_USER:-}
+      INVEON_SMTP_PASSWORD: ${INVEON_SMTP_PASSWORD:-}
+      INVEON_MAIL_FROM: ${INVEON_MAIL_FROM:-Inveon Cloud <no-reply@inveontechnologies.in>}
+      INVEON_ALERT_PRIVATE_HOSTS: ${INVEON_ALERT_PRIVATE_HOSTS:-}
+    networks:
+      - crm_network
+      - inveon_cloud_internal
+    # Reached only via the shared nginx reverse proxy (crm_network) on port
+    # 4100 — no ports published to the host.
+
 volumes:
   certbot-conf:
   certbot-www:
@@ -174,6 +230,7 @@ volumes:
   events-web-static:
   events-uploads:
   events-backups:
+  inveon-cloud-postgres-data:
 
 networks:
   crm_network:
@@ -182,4 +239,6 @@ networks:
   portal_internal:
     driver: bridge
   events_internal:
+    driver: bridge
+  inveon_cloud_internal:
     driver: bridge

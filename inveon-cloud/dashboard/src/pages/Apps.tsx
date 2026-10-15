@@ -97,7 +97,8 @@ export default function Apps() {
           <div className="stack">
             <p>
               In GitHub, open <strong>{created.app.repoOwner}/{created.app.repoName}</strong> → Settings → Webhooks → Add webhook. Use content type{" "}
-              <code>application/json</code> and the "Just the push event" option.
+              <code>application/json</code>, choose "Let me select individual events" and tick <strong>Pushes</strong> (and <strong>Pull requests</strong> if you'll use preview
+              environments).
             </p>
             <CopyField label="Payload URL" value={created.app.webhookUrl} />
             <CopyField label="Secret" value={created.webhookSecret} />

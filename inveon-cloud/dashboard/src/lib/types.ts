@@ -8,11 +8,22 @@ export interface OrgSummary {
   role: Role;
 }
 
+export interface TwoFactorStatus {
+  enabled: boolean;
+  enabledAt: string | null;
+  recoveryCodesLeft: number;
+  /** An owner somewhere, or an admin where the organization requires it. */
+  required: boolean;
+}
+
 export interface User {
   id: string;
   email: string;
   name: string | null;
   organizations: OrgSummary[];
+  twoFactor: TwoFactorStatus;
+  /** Runs the installation itself (encryption keys). */
+  platformAdmin: boolean;
 }
 
 export interface Server {
@@ -31,6 +42,37 @@ export interface Server {
   lastSeenAt: string | null;
   registeredAt: string | null;
   createdAt: string;
+  provider: "manual" | "aws";
+  provisionState: "pending" | "running" | "agent_online" | "terminating" | "terminated" | "failed" | null;
+  provisionError: string | null;
+  awsRegion: string | null;
+  awsInstanceId: string | null;
+  awsInstanceType: string | null;
+  awsAmiId: string | null;
+  awsState: string | null;
+  awsSecurityGroupId: string | null;
+  awsCreatedSecurityGroup: boolean;
+  terminatedAt: string | null;
+}
+
+export interface AwsConnection {
+  connected: boolean;
+  authType: "role" | "keys" | null;
+  roleArn: string | null;
+  externalId: string;
+  accessKeyId: string | null;
+  hasSecret: boolean;
+  defaultRegion: string;
+  accountId: string | null;
+  verifiedAt: string | null;
+  updatedAt: string;
+}
+
+export interface AwsInfo {
+  connection: AwsConnection | null;
+  regions: string[];
+  instanceTypes: { id: string; arch: "x86_64" | "arm64"; vcpu: number; memoryGb: number }[];
+  disk: { min: number; max: number };
 }
 
 export interface App {
@@ -43,6 +85,15 @@ export interface App {
   branch: string;
   composePath: string;
   imageRegistry: string | null;
+  buildOnServer: boolean;
+  dockerfilePath: string;
+  buildContext: string;
+  registryCredentials: { server: string; username: string | null; password: string } | null;
+  deployKey: { publicKey: string } | null;
+  previewsEnabled: boolean;
+  previewServerId: string | null;
+  previewBaseDomain: string | null;
+  previewVarsFromEnvironmentId: string | null;
   webhookUrl: string;
   environmentCount?: number;
   createdAt: string;
@@ -62,6 +113,13 @@ export interface Environment {
   currentReleaseId: string | null;
   previousReleaseId: string | null;
   autoDeploy: boolean;
+  releaseCommand: string | null;
+  releaseService: string | null;
+  previewPr: number | null;
+  keepReleases: number;
+  maintenanceWindows: MaintenanceWindow[];
+  queuedReleaseId: string | null;
+  queuedAt: string | null;
   createdAt: string;
   serverName?: string;
   serverIp?: string | null;
@@ -72,7 +130,7 @@ export interface Release {
   id: string;
   commitSha: string;
   commitMessage: string | null;
-  source: "webhook" | "manual";
+  source: "webhook" | "manual" | "pull_request";
   createdAt: string;
 }
 
@@ -114,6 +172,10 @@ export interface Deployment {
   finishedAt: string | null;
   commitSha: string;
   commitMessage: string | null;
+  error: string | null;
+  releaseOutput: string | null;
+  backupId: string | null;
+  backupStatus: JobStatus | null;
 }
 
 export interface EnvVar {
@@ -158,11 +220,14 @@ export interface BackupConfig {
   s3Bucket: string | null;
   s3Prefix: string;
   s3Region: string;
+  keepDaily: number | null;
+  keepWeekly: number;
+  lastPrunedAt?: string | null;
 }
 
 export interface Backup {
   id: string;
-  kind: "scheduled" | "manual" | "pre_restore";
+  kind: "scheduled" | "manual" | "pre_restore" | "pre_deploy";
   status: JobStatus;
   s3Bucket: string;
   s3Key: string;
@@ -172,7 +237,28 @@ export interface Backup {
   finishedAt: string | null;
 }
 
+export interface MaintenanceWindow {
+  /** 0 = Sunday. */
+  day: number;
+  /** HH:MM, UTC. */
+  start: string;
+  durationMin: number;
+}
+
+export interface MaintenanceState {
+  windows: MaintenanceWindow[];
+  restricted: boolean;
+  open: boolean;
+  current: { start: string; end: string } | null;
+  next: { start: string; end: string } | null;
+  nextLabel: string | null;
+  queuedReleaseId: string | null;
+  queuedAt: string | null;
+  queuedRelease: Release | null;
+}
+
 export interface EnvironmentDetail {
+  maintenance: MaintenanceState;
   environment: Environment;
   app: App;
   server: Server;
@@ -189,6 +275,7 @@ export interface Member {
   name: string | null;
   role: Role;
   joinedAt: string;
+  twoFactorEnabled: boolean;
 }
 
 export interface Invite {
@@ -212,3 +299,53 @@ export interface AuditEntry {
 }
 
 export const ROLE_RANK: Record<Role, number> = { viewer: 0, developer: 1, admin: 2, owner: 3 };
+
+export type AlertChannelType = "slack" | "webhook" | "email";
+
+export interface AlertChannel {
+  id: string;
+  name: string;
+  type: AlertChannelType;
+  /** Scheme and host only; the rest of the URL is write-only. */
+  url: string | null;
+  signingSecret: string | null;
+  emails: string[];
+  events: string[];
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AlertEventInfo {
+  id: string;
+  label: string;
+  default: boolean;
+}
+
+export interface AlertDelivery {
+  id: string;
+  channelId: string;
+  channelName: string;
+  channelType: AlertChannelType;
+  event: string;
+  payload: { title?: string; text?: string };
+  status: "pending" | "success" | "failure";
+  attempts: number;
+  maxAttempts: number;
+  nextAttemptAt: string;
+  responseStatus: number | null;
+  lastError: string | null;
+  detail: string | null;
+  createdAt: string;
+  deliveredAt: string | null;
+}
+
+export interface DeployedRelease {
+  releaseId: string;
+  commitSha: string;
+  commitMessage: string | null;
+  lastDeployedAt: string;
+  archivedAt: string | null;
+  current: boolean;
+  previous: boolean;
+}

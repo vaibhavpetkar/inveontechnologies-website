@@ -50,9 +50,12 @@ export class ControlPlaneClient {
     return this.post("/heartbeat", { facts });
   }
 
-  /** Long poll: the control plane holds the request until a job arrives or ~25s pass. */
-  async claim(): Promise<AgentJob | null> {
-    const data = (await this.post("/jobs/claim", {}, 70000)) as { job: AgentJob } | null;
+  /**
+   * Long poll: the control plane holds the request until a job arrives or ~25s
+   * pass. The "stream" lane only hands out live log streams; "main" everything else.
+   */
+  async claim(lane: "main" | "stream" = "main"): Promise<AgentJob | null> {
+    const data = (await this.post("/jobs/claim", { lane }, 70000)) as { job: AgentJob } | null;
     return data?.job ?? null;
   }
 

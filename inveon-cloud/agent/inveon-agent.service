@@ -10,13 +10,14 @@ ExecStart=/usr/bin/node /opt/inveon-agent/dist/index.js run --config /etc/inveon
 Restart=always
 RestartSec=5
 # Root is needed for docker, nginx and certbot. The agent itself only runs
-# the allow-listed programs (docker, nginx, systemctl, certbot, aws, tar).
+# the allow-listed programs (docker, nginx, systemctl, certbot, aws, tar, git).
 User=root
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=read-only
 ProtectSystem=full
-ReadWritePaths=/etc/nginx/conf.d /etc/letsencrypt /var/lib/letsencrypt /var/log/letsencrypt /srv/inveon /var/www/inveon-acme /var/lib/inveon-agent /etc/inveon-agent
+# /root/.docker: docker build (buildx) keeps its state there.
+ReadWritePaths=/etc/nginx/conf.d /etc/letsencrypt /var/lib/letsencrypt /var/log/letsencrypt /srv/inveon /var/www/inveon-acme /var/lib/inveon-agent /etc/inveon-agent -/root/.docker
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

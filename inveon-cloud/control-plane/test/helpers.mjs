@@ -16,7 +16,7 @@ export const JWT_SECRET = "test-jwt-secret-".padEnd(48, "x");
 export const MASTER_KEY = Buffer.alloc(32, 7).toString("base64");
 const DATABASE_URL = process.env.TEST_DATABASE_URL;
 
-function freePort() {
+export function freePort() {
   return new Promise((resolve) => {
     const srv = createNetServer();
     srv.listen(0, () => {
@@ -59,7 +59,7 @@ async function startFakeGithub() {
   };
 }
 
-export async function startServer(extraEnv = {}) {
+export async function startServer(extraEnv = {}, { nodeArgs = [] } = {}) {
   if (!DATABASE_URL) throw new Error("Set TEST_DATABASE_URL to run the API tests");
   const github = await startFakeGithub();
   const env = {
@@ -81,7 +81,7 @@ export async function startServer(extraEnv = {}) {
   execFileSync(process.execPath, ["dist/migrate.js"], { env, stdio: "inherit" });
 
   const port = await freePort();
-  const child = spawn(process.execPath, ["dist/index.js"], { env: { ...env, INVEON_PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [...nodeArgs, "dist/index.js"], { env: { ...env, INVEON_PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"] });
   let logs = "";
   child.stdout.on("data", (d) => (logs += d));
   child.stderr.on("data", (d) => (logs += d));
@@ -120,10 +120,14 @@ export async function startServer(extraEnv = {}) {
 
   const tokenFor = (userId) => jwt.sign({ sub: userId }, JWT_SECRET, { expiresIn: "15m" });
 
-  /** A user directly in the DB (no rate-limited sign-up), optionally a member of orgId. */
-  async function createUser({ orgId, role, email } = {}) {
+  /**
+   * A user directly in the DB (no rate-limited sign-up), optionally a member
+   * of orgId. Owners need two-factor, so they get it marked as on (the
+   * two-factor tests enrol for real through the API).
+   */
+  async function createUser({ orgId, role, email, twoFactor = role === "owner" } = {}) {
     email ??= `user-${randomUUID()}@test.local`;
-    const { rows } = await pool.query("INSERT INTO users (email, name, password_hash) VALUES ($1, 'Test', 'x') RETURNING id", [email]);
+    const { rows } = await pool.query("INSERT INTO users (email, name, password_hash, totp_enabled_at) VALUES ($1, 'Test', 'x', $2) RETURNING id", [email, twoFactor ? new Date() : null]);
     const id = rows[0].id;
     if (orgId) await pool.query("INSERT INTO memberships (org_id, user_id, role) VALUES ($1, $2, $3)", [orgId, id, role]);
     return { id, email, token: tokenFor(id) };
@@ -158,19 +162,29 @@ export async function startServer(extraEnv = {}) {
     return { app: app.json.app, webhookSecret: app.json.webhookSecret, environment: environment.json.environment, repoOwner: owner_, repo };
   }
 
-  /** Plays the agent: claims a job and reports every step with the given outcome. */
-  async function runClaimedJob(agentToken, { fail = false, results = {} } = {}) {
+  /**
+   * Plays the agent: claims a job and reports every step with the given
+   * outcome. `failAt` fails the first step with that action (after the
+   * earlier ones succeed); `logs` appends extra output per action.
+   */
+  async function runClaimedJob(agentToken, { fail = false, failAt = null, results = {}, logs = {} } = {}) {
     const claim = await call("POST", "/agent/jobs/claim", { token: agentToken });
     if (claim.status !== 200) return null;
     const job = claim.json.job;
+    let failed = false;
     for (const step of job.steps) {
-      await call("POST", `/agent/jobs/${job.id}/steps/${step.id}`, { token: agentToken, body: { status: "running", append: `running ${step.action}\n` } });
+      const failing = fail || step.action === failAt;
+      await call("POST", `/agent/jobs/${job.id}/steps/${step.id}`, { token: agentToken, body: { status: "running", append: `running ${step.action}\n${logs[step.action] ?? ""}` } });
       const result = results[step.action]?.(step) ?? (step.action === "compose.validate" ? { appRoot: `/srv/inveon/apps/${step.params.slug}`, model: { services: { web: { image: "nginx" } } } } : undefined);
-      const r = await call("POST", `/agent/jobs/${job.id}/steps/${step.id}`, { token: agentToken, body: { status: fail ? "failure" : "success", result } });
+      const r = await call("POST", `/agent/jobs/${job.id}/steps/${step.id}`, { token: agentToken, body: { status: failing ? "failure" : "success", result } });
       if (r.status !== 200) throw new Error(`step report failed: ${JSON.stringify(r.json)}`);
-      if (fail) break;
+      if (failing) {
+        failed = true;
+        break;
+      }
     }
-    const fin = await call("POST", `/agent/jobs/${job.id}/finish`, { token: agentToken, body: { status: fail ? "failure" : "success" } });
+    const error = failed ? `${job.steps.find((s) => fail || s.action === failAt)?.name}: failed` : undefined;
+    const fin = await call("POST", `/agent/jobs/${job.id}/finish`, { token: agentToken, body: { status: failed ? "failure" : "success", error } });
     return { job, finish: fin.json };
   }
 
@@ -182,3 +196,69 @@ export async function startServer(extraEnv = {}) {
 
   return { origin, base, call, createUser, createOrg, registerServer, createAppWithEnvironment, runClaimedJob, tokenFor, github, pool, stop, logs: () => logs };
 }
+
+/**
+ * Opens an SSE stream with fetch (like the dashboard) and collects its
+ * events. waitFor(pred) resolves with the first event matching pred.
+ */
+export async function openStream(base, path, token) {
+  const controller = new AbortController();
+  const res = await fetch(base + path, { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal });
+  const events = [];
+  let ended = false;
+  if (res.ok && res.body) {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    (async () => {
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let i;
+          while ((i = buf.indexOf("\n\n")) >= 0) {
+            const block = buf.slice(0, i);
+            buf = buf.slice(i + 2);
+            let event = "message";
+            let data = "";
+            for (const line of block.split("\n")) {
+              if (line.startsWith("event: ")) event = line.slice(7);
+              else if (line.startsWith("data: ")) data += line.slice(6);
+            }
+            if (data) events.push({ event, data: JSON.parse(data) });
+          }
+        }
+      } catch {
+        // aborted
+      } finally {
+        ended = true;
+      }
+    })();
+  }
+  return {
+    status: res.status,
+    events,
+    ended: () => ended,
+    close: () => controller.abort(),
+    async waitFor(pred, ms = 4000) {
+      const until = Date.now() + ms;
+      while (Date.now() < until) {
+        const hit = events.find(pred);
+        if (hit) return hit;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      throw new Error(`event not seen; got ${JSON.stringify(events.map((e) => e.event))}`);
+    },
+  };
+}
+
+export const waitUntil = async (fn, ms = 6000, every = 100) => {
+  const until = Date.now() + ms;
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() > until) throw new Error("condition not met in time");
+    await new Promise((r) => setTimeout(r, every));
+  }
+};

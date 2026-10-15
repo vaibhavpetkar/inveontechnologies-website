@@ -11,6 +11,7 @@ import { authRateLimiter } from "../auth/middleware.js";
 import { bus, serverJobsEvent } from "../../lib/bus.js";
 import { buildAgentPayload, claimNextJob, finishJob, reportStep } from "../jobs/service.js";
 import { asc } from "drizzle-orm";
+import { dashboardLink, emitAlert } from "../alerts/service.js";
 
 const factsSchema = z
   .object({
@@ -72,6 +73,7 @@ export function agentRouter(db: Database, env: Env) {
         ipAddress: current?.ipAddress ?? req.ip ?? null,
         registeredAt: new Date(),
         lastSeenAt: new Date(),
+        ...(current?.provider === "aws" && current.provisionState !== "terminating" && current.provisionState !== "terminated" ? { provisionState: "agent_online" as const } : {}),
       })
       .where(eq(servers.id, used.serverId))
       .returning();
@@ -83,19 +85,23 @@ export function agentRouter(db: Database, env: Env) {
 
   router.post("/heartbeat", async (req, res) => {
     const { facts } = z.object({ facts: factsSchema }).parse(req.body ?? {});
+    await markBackOnline(db, req.server!.id);
     await db.update(servers).set({ ...facts, status: "online", lastSeenAt: new Date() }).where(eq(servers.id, req.server!.id));
-    res.json({ ok: true });
+    // Tells the agent it may poll the separate lane for live log streams.
+    res.json({ ok: true, features: ["stream_lane"] });
   });
 
   // Long poll: waits up to INVEON_AGENT_POLL_TIMEOUT_MS for a job, else 204.
   router.post("/jobs/claim", async (req, res) => {
     const serverId = req.server!.id;
+    const { lane } = z.object({ lane: z.enum(["main", "stream"]).default("main") }).parse(req.body ?? {});
+    await markBackOnline(db, serverId);
     await db.update(servers).set({ lastSeenAt: new Date(), status: "online" }).where(eq(servers.id, serverId));
     const deadline = Date.now() + env.INVEON_AGENT_POLL_TIMEOUT_MS;
     let closed = false;
     req.on("close", () => (closed = true));
     for (;;) {
-      const job = await claimNextJob(db, serverId);
+      const job = await claimNextJob(db, serverId, lane);
       if (job) {
         const steps = await db.select().from(jobSteps).where(eq(jobSteps.jobId, job.id)).orderBy(asc(jobSteps.position));
         res.json({ job: await buildAgentPayload(db, job, steps) });
@@ -131,6 +137,32 @@ export function agentRouter(db: Database, env: Env) {
   return router;
 }
 
+/** Scheduler: no heartbeat for timeoutSec means offline (one alert per transition). */
 export async function markOfflineServers(db: Database, timeoutSec: number) {
-  await db.execute(sql`UPDATE servers SET status = 'offline' WHERE status = 'online' AND last_seen_at < now() - make_interval(secs => ${timeoutSec})`);
+  const result = await db.execute(
+    sql`UPDATE servers SET status = 'offline' WHERE status = 'online' AND last_seen_at < now() - make_interval(secs => ${timeoutSec}) RETURNING id, org_id, name, last_seen_at`,
+  );
+  for (const s of result.rows as { id: string; org_id: string; name: string; last_seen_at: Date | string | null }[]) {
+    const seen = s.last_seen_at ? new Date(s.last_seen_at).toISOString() : null;
+    await emitAlert(db, s.org_id, "server.offline", {
+      title: `Server offline: ${s.name}`,
+      text: `${s.name} has not checked in for more than ${timeoutSec} seconds. Deploys and other jobs for it wait until its agent is back.`,
+      severity: "critical",
+      url: dashboardLink("/servers"),
+      details: { server: s.name, lastSeen: seen },
+    });
+  }
+  return result.rows.length;
+}
+
+/** An offline server whose agent checks in again is online (one alert per transition). */
+async function markBackOnline(db: Database, serverId: string) {
+  const [back] = await db
+    .update(servers)
+    .set({ status: "online", lastSeenAt: new Date() })
+    .where(and(eq(servers.id, serverId), eq(servers.status, "offline")))
+    .returning();
+  if (back) {
+    await emitAlert(db, back.orgId, "server.online", { title: `Server back online: ${back.name}`, text: `The agent on ${back.name} is checking in again.`, severity: "info", url: dashboardLink("/servers"), details: { server: back.name } });
+  }
 }

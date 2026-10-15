@@ -7,7 +7,9 @@ import { requireRole } from "../auth/middleware.js";
 import { audit, writeAudit } from "../../lib/audit.js";
 import { AppError, ConflictError, NotFoundError } from "../../lib/errors.js";
 import { loadEnvironment } from "../apps/routes.js";
-import { createJob, notifyServer, registerJobEffect, type StepInput } from "../jobs/service.js";
+import { createJob, notifyServer, registerJobEffect, type StepInput, type Tx } from "../jobs/service.js";
+import { dashboardLink, emitAlert } from "../alerts/service.js";
+import { pruneEnvironmentBackups } from "./retention.js";
 
 type Environment = typeof environments.$inferSelect;
 type App = typeof apps.$inferSelect;
@@ -29,7 +31,11 @@ const configSchema = z
     s3Bucket: z.string().regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/, "Invalid S3 bucket name").nullable().optional(),
     s3Prefix: z.string().regex(/^[A-Za-z0-9._\/-]{0,200}$/).transform((p) => p.replace(/^\/+|\/+$/g, "")),
     s3Region: z.string().regex(/^[a-z]{2}(-[a-z]+)+-\d$/, "Invalid AWS region"),
+    // Retention (omit to leave unchanged; null keeps every backup).
+    keepDaily: z.number().int().min(1).max(366).nullable().optional(),
+    keepWeekly: z.number().int().min(0).max(260).optional(),
   })
+  .refine((c) => !c.keepWeekly || c.keepDaily !== null, { message: "Weekly backups are kept on top of daily ones: set how many daily backups to keep", path: ["keepDaily"] })
   .refine((c) => c.dbType === "none" || (c.dbService && c.dbName && c.dbUser), { message: "Database backups need the compose service, database name and user", path: ["dbService"] })
   .refine((c) => !c.enabled || !!c.s3Bucket, { message: "Set an S3 bucket to enable backups", path: ["s3Bucket"] });
 
@@ -37,7 +43,7 @@ function stamp(d = new Date()) {
   return d.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
 }
 
-function backupParams(environment: Environment, app: App, cfg: Config, backup: Backup) {
+export function backupParams(environment: Environment, app: App, cfg: Config, backup: Backup) {
   return {
     slug: environment.slug,
     slot: environment.activeSlot,
@@ -50,7 +56,7 @@ function backupParams(environment: Environment, app: App, cfg: Config, backup: B
   };
 }
 
-async function newBackupRow(db: Database, environment: Environment, cfg: Config, kind: Backup["kind"], userId: string | null) {
+export async function newBackupRow(db: Database | Tx, environment: Environment, cfg: Config, kind: Backup["kind"], userId: string | null) {
   if (!cfg.s3Bucket) throw new AppError("NO_BUCKET", "Configure an S3 bucket for backups first", 400);
   const id = crypto.randomUUID();
   const key = [cfg.s3Prefix, environment.slug, `${stamp()}-${kind}-${id.slice(0, 8)}.tar.gz`].filter(Boolean).join("/");
@@ -109,6 +115,16 @@ export function backupsRouter(db: Database) {
     res.json({ backups: rows });
   });
 
+  // Applies the retention rule now instead of waiting for the daily run.
+  router.post("/environments/:envId/backups/prune", requireRole("admin"), async (req, res) => {
+    const { environment } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
+    const cfg = await db.query.backupConfigs.findFirst({ where: eq(backupConfigs.environmentId, environment.id) });
+    if (!cfg || cfg.keepDaily === null) throw new AppError("NO_RETENTION", "Set how many backups to keep first", 400);
+    const { job, count } = await pruneEnvironmentBackups(db, environment, cfg, req.user!.sub);
+    if (job) await audit(db, req, "backup.prune", "environment", environment.id, { jobId: job.id, count, source: "manual" });
+    res.status(job ? 201 : 200).json({ job, count });
+  });
+
   router.post("/environments/:envId/backups", requireRole("developer"), async (req, res) => {
     const { environment, app } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
     const cfg = await db.query.backupConfigs.findFirst({ where: eq(backupConfigs.environmentId, environment.id) });
@@ -153,15 +169,41 @@ export function backupsRouter(db: Database) {
   return router;
 }
 
-async function onBackupJobFinished(db: Database, job: typeof jobs.$inferSelect, steps: { action: string; status: string; result: Record<string, unknown> | null }[]) {
+type StepRow = { action: string; status: string; result: Record<string, unknown> | null };
+
+/** A backup is only as good as its backup.create step. A step that never ran is "cancelled". */
+export async function recordBackupStep(db: Database, backupId: string, step: StepRow) {
+  const size = typeof step.result?.sizeBytes === "number" && step.result.sizeBytes >= 0 ? step.result.sizeBytes : null;
+  const status = step.status === "success" ? "success" : step.status === "cancelled" ? "cancelled" : "failure";
+  const [row] = await db.update(backups).set({ status, sizeBytes: size, finishedAt: new Date() }).where(eq(backups.id, backupId)).returning();
+  if (row && status === "failure") await alertBackupFailed(db, row);
+}
+
+async function alertBackupFailed(db: Database, backup: Backup) {
+  const environment = await db.query.environments.findFirst({ where: eq(environments.id, backup.environmentId) });
+  const app = environment ? await db.query.apps.findFirst({ where: eq(apps.id, environment.appId) }) : null;
+  if (!environment || !app) return;
+  const job = backup.jobId ? await db.query.jobs.findFirst({ where: eq(jobs.id, backup.jobId), columns: { error: true } }) : null;
+  const label = `${app.name} / ${environment.name}`;
+  await emitAlert(db, environment.orgId, "backup.failed", {
+    title: `Backup failed: ${label}`,
+    text: `The ${backup.kind.replace("_", " ")} backup of ${label} failed.${job?.error ? `\n${job.error.slice(0, 500)}` : ""}`,
+    severity: "critical",
+    url: dashboardLink(`/apps/${app.id}?env=${environment.id}`),
+    details: { app: app.name, environment: environment.name, kind: backup.kind, key: backup.s3Key },
+  });
+}
+
+async function onBackupJobFinished(db: Database, job: typeof jobs.$inferSelect, steps: StepRow[]) {
   const ids = Array.isArray(job.meta.backupIds) ? (job.meta.backupIds as string[]) : [];
   const step = steps.find((s) => s.action === "backup.create");
   if (!ids.length || !step) return;
-  const size = typeof step.result?.sizeBytes === "number" && step.result.sizeBytes >= 0 ? step.result.sizeBytes : null;
-  await db
-    .update(backups)
-    .set({ status: step.status === "success" ? "success" : "failure", sizeBytes: size, finishedAt: new Date() })
-    .where(eq(backups.id, ids[0]));
+  await recordBackupStep(db, ids[0], step);
+}
+
+/** Backups only make sense once there is a bucket and something to back up. */
+export function backupConfigured(cfg: Config | null | undefined): cfg is Config {
+  return !!cfg?.s3Bucket && (cfg.dbType !== "none" || cfg.volumePaths.length > 0);
 }
 
 registerJobEffect("backup", onBackupJobFinished);

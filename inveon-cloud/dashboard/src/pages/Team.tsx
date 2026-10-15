@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { MailPlus, Trash2, UserMinus, Users } from "lucide-react";
+import { MailPlus, ShieldCheck, ShieldOff, Trash2, UserMinus, Users } from "lucide-react";
 import { api } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useAuth, useOrgPath } from "../context/AuthContext";
@@ -19,6 +19,7 @@ export default function Team() {
   const { user, org, can, reloadMe } = useAuth();
   const members = useApi<{ members: Member[] }>(orgPath("/members"));
   const invites = useApi<{ invites: Invite[] }>(can("admin") ? orgPath("/invites") : null);
+  const settings = useApi<{ organization: { require2faForAdmins: boolean } }>(orgPath(""));
   const [inviting, setInviting] = useState(false);
   const [form, setForm] = useState<{ email: string; role: Role }>({ email: "", role: "developer" });
   const [inviteUrl, setInviteUrl] = useState<string | null>(null);
@@ -58,6 +59,20 @@ export default function Team() {
       await invites.reload();
     });
 
+  const resetTwoFactor = (m: Member) => {
+    if (!confirm(`Reset two-factor for ${m.email}? Use this when they lost their phone and recovery codes. They'll be signed out and have to set it up again.`)) return;
+    void action.run(async () => {
+      await api(orgPath(`/members/${m.userId}/2fa/reset`), { method: "POST" });
+      await members.reload();
+    });
+  };
+
+  const setRequireAdmins = (value: boolean) =>
+    void action.run(async () => {
+      await api(orgPath(""), { method: "PATCH", body: { require2faForAdmins: value } });
+      await settings.reload();
+    });
+
   const myRank = org ? ROLE_RANK[org.role] : 0;
 
   return (
@@ -85,6 +100,9 @@ export default function Team() {
                   {m.userId === user?.id && <span className="muted small"> (you)</span>}
                   <div className="muted small truncate">{m.email}</div>
                 </div>
+                <span className={`badge ${m.twoFactorEnabled ? "badge-ok" : "badge-muted"}`} title={m.twoFactorEnabled ? "Two-factor on" : "Two-factor off"}>
+                  {m.twoFactorEnabled ? <ShieldCheck size={12} /> : <ShieldOff size={12} />} 2FA
+                </span>
                 <div className="member-actions">
                   {can("owner") ? (
                     <select aria-label={`Role for ${m.email}`} value={m.role} disabled={action.busy} onChange={(e) => changeRole(m, e.target.value as Role)}>
@@ -96,6 +114,11 @@ export default function Team() {
                     </select>
                   ) : (
                     <span className="badge badge-muted">{m.role}</span>
+                  )}
+                  {can("owner") && m.twoFactorEnabled && m.userId !== user?.id && (
+                    <button className="btn btn-ghost btn-small" disabled={action.busy} onClick={() => resetTwoFactor(m)}>
+                      Reset 2FA
+                    </button>
                   )}
                   {(can("owner") || m.userId === user?.id) && (
                     <button className="icon-btn" title={m.userId === user?.id ? "Leave organization" : "Remove member"} aria-label={m.userId === user?.id ? "Leave organization" : `Remove ${m.email}`} disabled={action.busy} onClick={() => remove(m)}>
@@ -131,6 +154,19 @@ export default function Team() {
               ))}
             </ul>
           )}
+        </div>
+      )}
+
+      {settings.data && (
+        <div className="card">
+          <h3 className="card-title">
+            <ShieldCheck size={16} /> Two-factor authentication
+          </h3>
+          <p className="muted small">Owners always need two-factor. Members without it are asked to set it up before they can use this organization.</p>
+          <label className="check">
+            <input type="checkbox" checked={settings.data.organization.require2faForAdmins} disabled={!can("owner") || action.busy} onChange={(e) => setRequireAdmins(e.target.checked)} />
+            Require two-factor for admins too
+          </label>
         </div>
       )}
 

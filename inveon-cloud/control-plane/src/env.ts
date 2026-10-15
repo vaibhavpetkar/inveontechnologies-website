@@ -13,7 +13,16 @@ const envSchema = z.object({
   INVEON_REFRESH_TOKEN_TTL_DAYS: z.coerce.number().default(30),
   // 32 random bytes, base64 (openssl rand -base64 32). Wraps every data key.
   // Kept only in the environment, never in the database.
-  INVEON_MASTER_KEY: z.string().min(1, "INVEON_MASTER_KEY is required"),
+  // INVEON_MASTER_KEY is the original single key (key id "legacy").
+  // INVEON_MASTER_KEYS adds more as "id:key,id:key", and
+  // INVEON_MASTER_KEY_CURRENT picks the one new values use (default: the
+  // last listed, else legacy). See "Rotating the master key" in the README.
+  INVEON_MASTER_KEY: z.string().optional(),
+  INVEON_MASTER_KEYS: z.string().optional(),
+  INVEON_MASTER_KEY_CURRENT: z.string().optional(),
+  // Comma-separated emails of platform admins (encryption keys). Unset: the
+  // first account created on this installation.
+  INVEON_PLATFORM_ADMINS: z.string().optional(),
   // Public HTTPS URL of this control plane: used in the install command,
   // webhook URLs and email links.
   INVEON_PUBLIC_URL: z.string().url().default("http://localhost:4100"),
@@ -47,12 +56,25 @@ const envSchema = z.object({
   INVEON_SMTP_USER: z.string().optional(),
   INVEON_SMTP_PASSWORD: z.string().optional(),
   INVEON_MAIL_FROM: z.string().default("Inveon Cloud <no-reply@inveontechnologies.in>"),
+  // Alert webhooks: comma-separated hosts that may be private addresses or
+  // plain http (internal endpoints on a trusted network). Empty = none.
+  INVEON_ALERT_PRIVATE_HOSTS: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
 
+export const masterKeyConfig = (env: Env) => ({ legacy: env.INVEON_MASTER_KEY, keys: env.INVEON_MASTER_KEYS, current: env.INVEON_MASTER_KEY_CURRENT });
+
+/**
+ * Docker Compose passes unset optional settings as empty strings
+ * (`${INVEON_ACME_EMAIL:-}`), so an empty value counts as not set.
+ */
+export function parseEnv(source: NodeJS.ProcessEnv) {
+  return envSchema.safeParse(Object.fromEntries(Object.entries(source).filter(([, v]) => v !== "")));
+}
+
 export function loadEnv(): Env {
-  const parsed = envSchema.safeParse(process.env);
+  const parsed = parseEnv(process.env);
   if (!parsed.success) {
     // eslint-disable-next-line no-console
     console.error("Invalid environment configuration:", parsed.error.flatten().fieldErrors);

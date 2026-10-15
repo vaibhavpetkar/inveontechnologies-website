@@ -1,6 +1,6 @@
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync, writeFileSync, mkdirSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, existsSync, writeFileSync, mkdirSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ACTIONS, isAllowedAction, runAction } from "../dist/actions.js";
@@ -48,23 +48,32 @@ afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 test("the action allow-list is exactly the documented set", () => {
   assert.deepEqual(Object.keys(ACTIONS).sort(), [
+    "app.remove_folder",
     "backup.create",
+    "backup.delete",
     "backup.restore",
+    "certbot.delete",
     "certbot.issue",
     "certbot.renew",
     "compose.down",
     "compose.logs",
+    "compose.logs_follow",
     "compose.ps",
     "compose.pull",
     "compose.up",
     "compose.validate",
     "health.check",
+    "image.build",
+    "image.remove",
     "nginx.reload",
+    "nginx.remove_site",
+    "nginx.remove_upstream",
     "nginx.write_site",
     "nginx.write_upstream",
     "release.prepare",
+    "release.run",
   ]);
-  assert.deepEqual([...ALLOWED_BINARIES].sort(), ["aws", "certbot", "docker", "nginx", "systemctl", "tar"]);
+  assert.deepEqual([...ALLOWED_BINARIES].sort(), ["aws", "certbot", "docker", "git", "nginx", "systemctl", "tar"]);
   assert.equal(isAllowedBinary("bash"), false);
   assert.equal(isAllowedBinary("sh"), false);
 });
@@ -230,6 +239,266 @@ test("env file, upstream and URL helpers", () => {
   assert.equal(checkControlPlaneUrl("https://cloud.example.com/"), "https://cloud.example.com");
   assert.equal(checkControlPlaneUrl("http://localhost:4100"), "http://localhost:4100");
   assert.throws(() => checkControlPlaneUrl("http://cloud.example.com"));
+});
+
+test("release.run runs the validated argv with compose run in the new slot", async () => {
+  const ref = { slug: "site-prod-ab12", slot: "green", composePath: "docker-compose.yml" };
+  const dir = join(config.appsRoot, ref.slug, "green");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "docker-compose.yml"), "services: {}\n");
+  await runAction("release.run", { ...ref, service: "web", command: ["npm", "run", "db:migrate"], timeoutSec: 1800 }, ctx());
+  assert.deepEqual(calls[0].args, [
+    "compose", "-p", "site-prod-ab12-green", "-f", join(dir, "docker-compose.yml"), "--project-directory", dir,
+    "run", "--rm", "-T", "web", "npm", "run", "db:migrate",
+  ]);
+  assert.equal(calls[0].bin, "docker");
+  assert.equal(calls[0].opts.timeoutMs, 1800_000);
+
+  // A failing command fails the step with a clear message.
+  runnerImpl = async (_bin, _args, _opts, log) => (log("relation already exists\n"), { code: 1, stdout: "" });
+  const c = ctx();
+  await assert.rejects(runAction("release.run", { ...ref, service: "web", command: ["python", "manage.py", "migrate"], timeoutSec: 60 }, c), /Release command failed.*live release keeps serving/);
+
+  // Shell syntax, options first, bad services and missing files are refused before anything runs.
+  calls = [];
+  const bad = [
+    { ...ref, service: "web", command: ["sh", "-c", "rm -rf /"], timeoutSec: 60 },
+    { ...ref, service: "web", command: ["npm;reboot"], timeoutSec: 60 },
+    { ...ref, service: "web", command: ["$(id)"], timeoutSec: 60 },
+    { ...ref, service: "web", command: ["--entrypoint=/bin/sh"], timeoutSec: 60 },
+    { ...ref, service: "web", command: [], timeoutSec: 60 },
+    { ...ref, service: "web", command: "npm run migrate", timeoutSec: 60 },
+    { ...ref, service: "-v/:/host", command: ["npm"], timeoutSec: 60 },
+    { ...ref, service: "web", command: ["npm"], timeoutSec: 99999 },
+    { ...ref, slot: "blue", service: "web", command: ["npm"], timeoutSec: 60 },
+  ];
+  for (const params of bad) await assert.rejects(runAction("release.run", params, ctx()), undefined, JSON.stringify(params));
+  assert.equal(calls.length, 0);
+});
+
+const BUILD = {
+  repoOwner: "inveon-technologies",
+  repoName: "website",
+  commitSha: SHA,
+  dockerfilePath: "deploy/Dockerfile",
+  context: ".",
+  image: `inveon-build/website-1a2b3c4d:${SHA}`,
+  gitAuth: null,
+  registryAuth: null,
+};
+const DEPLOY_KEY = "-----BEGIN OPENSSH PRIVATE KEY-----\n" + "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW".repeat(3) + "\n-----END OPENSSH PRIVATE KEY-----\n";
+
+/** A fake git/docker: git init makes the folder, checkout writes the repo, rev-parse answers. */
+function fakeBuildRunner({ head = SHA, files = { "deploy/Dockerfile": "FROM nginx:alpine\n" }, onRun } = {}) {
+  let src;
+  return async (bin, args, opts, log) => {
+    onRun?.(bin, args, opts);
+    if (bin === "git" && args[0] === "init") {
+      src = args.at(-1);
+      mkdirSync(src, { recursive: true });
+    }
+    if (bin === "git" && args.includes("checkout")) {
+      for (const [f, content] of Object.entries(files)) {
+        mkdirSync(join(src, f, ".."), { recursive: true });
+        if (content.symlink) symlinkSync(content.symlink, join(src, f));
+        else writeFileSync(join(src, f), content);
+      }
+    }
+    if (bin === "git" && args.includes("rev-parse")) return { code: 0, stdout: head + "\n" };
+    log("ok\n");
+    return { code: 0, stdout: "" };
+  };
+}
+
+test("image.build clones exactly the commit with the deploy key and builds with the app's Dockerfile", async () => {
+  let keyOnDisk = null;
+  runnerImpl = fakeBuildRunner({
+    onRun: (bin, args, opts) => {
+      const m = opts.env?.GIT_SSH_COMMAND?.match(/-i (\S+)/);
+      if (m && args.includes("fetch")) keyOnDisk = { content: readFileSync(m[1], "utf8"), mode: statSync(m[1]).mode & 0o777 };
+    },
+  });
+  const c = ctx();
+  const res = await runAction("image.build", { ...BUILD, gitAuth: { type: "deploy_key", privateKey: DEPLOY_KEY } }, c);
+  assert.deepEqual(res, { image: BUILD.image });
+  const src = calls[0].args.at(-1);
+  assert.deepEqual(calls.map((x) => [x.bin, ...x.args]), [
+    ["git", "init", "--quiet", src],
+    ["git", "-C", src, "-c", "core.hooksPath=/dev/null", "fetch", "--depth", "1", "--no-tags", "--quiet", "git@github.com:inveon-technologies/website.git", SHA],
+    ["git", "-C", src, "-c", "core.hooksPath=/dev/null", "-c", "advice.detachedHead=false", "checkout", "--quiet", "--detach", "FETCH_HEAD"],
+    ["git", "-C", src, "rev-parse", "HEAD"],
+    ["docker", "build", "--pull", "--file", join(src, "deploy/Dockerfile"), "--tag", BUILD.image, "--label", `org.opencontainers.image.revision=${SHA}`, src],
+  ]);
+  const env = calls[1].opts.env;
+  assert.equal(env.GIT_TERMINAL_PROMPT, "0");
+  assert.equal(env.GIT_CONFIG_GLOBAL, "/dev/null");
+  assert.match(env.GIT_SSH_COMMAND, /-o IdentitiesOnly=yes .*-o StrictHostKeyChecking=yes -o UserKnownHostsFile=\S+known_hosts$/);
+  assert.deepEqual(keyOnDisk, { content: DEPLOY_KEY, mode: 0o600 });
+  // The key is never in argv or the log, and the clone is removed afterwards.
+  assert.ok(!JSON.stringify(calls.map((x) => x.args)).includes("PRIVATE KEY"));
+  assert.ok(!c.logs.join("").includes("PRIVATE KEY"));
+  assert.ok(!existsSync(src));
+  assert.equal(readdirCount(join(config.workDir, "tmp")), 0);
+});
+
+test("image.build: public repos clone over https; a token goes in the environment, not argv", async () => {
+  runnerImpl = fakeBuildRunner();
+  await runAction("image.build", BUILD, ctx());
+  assert.equal(calls[1].args.at(-2), "https://github.com/inveon-technologies/website.git");
+  assert.equal(calls[1].opts.env.GIT_SSH_COMMAND, undefined);
+
+  calls = [];
+  runnerImpl = fakeBuildRunner();
+  const token = "ghs_" + "a".repeat(36);
+  await runAction("image.build", { ...BUILD, gitAuth: { type: "token", token } }, ctx());
+  assert.equal(calls[1].args.at(-2), "https://github.com/inveon-technologies/website.git");
+  assert.equal(calls[1].opts.env.GIT_CONFIG_KEY_0, "http.https://github.com/.extraheader");
+  assert.equal(calls[1].opts.env.GIT_CONFIG_VALUE_0, `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${token}`).toString("base64")}`);
+  assert.ok(!JSON.stringify(calls.map((x) => x.args)).includes(token));
+});
+
+test("image.build logs in to the registry for the build and always logs out", async () => {
+  const auth = { server: "ghcr.io", username: "inveon-bot", password: "ghp_secret$value'" };
+  let stdinPassword = null;
+  let failBuild = true;
+  const inner = fakeBuildRunner();
+  runnerImpl = async (bin, args, opts, log) => {
+    if (bin === "docker" && args[0] === "login") stdinPassword = readFileSync(opts.stdinFile, "utf8");
+    if (bin === "docker" && args[0] === "build" && failBuild) return { code: 1, stdout: "" };
+    return inner(bin, args, opts, log);
+  };
+  const c = ctx();
+  await assert.rejects(runAction("image.build", { ...BUILD, registryAuth: auth }, c), /docker build exited/);
+  const docker = calls.filter((x) => x.bin === "docker");
+  assert.deepEqual(docker.map((x) => x.args.slice(0, 2)), [["login", "ghcr.io"], ["build", "--pull"], ["logout", "ghcr.io"]]);
+  assert.deepEqual(docker[0].args, ["login", "ghcr.io", "--username", "inveon-bot", "--password-stdin"]);
+  assert.equal(stdinPassword, auth.password);
+  // One throwaway DOCKER_CONFIG for login, build and logout; never root's.
+  const dockerConfig = docker[0].opts.env.DOCKER_CONFIG;
+  assert.ok(dockerConfig.startsWith(join(config.workDir, "tmp")));
+  assert.ok(docker.every((x) => x.opts.env.DOCKER_CONFIG === dockerConfig));
+  assert.ok(!existsSync(dockerConfig));
+  assert.ok(!JSON.stringify(calls).includes("ghp_secret"));
+  assert.ok(!c.logs.join("").includes("ghp_secret"));
+  assert.equal(readdirCount(join(config.workDir, "tmp")), 0);
+});
+
+test("image.build refuses bad parameters, a different HEAD and Dockerfiles outside the repo", async () => {
+  const bad = [
+    { ...BUILD, repoOwner: "../evil" },
+    { ...BUILD, repoName: ".." },
+    { ...BUILD, repoName: "site --upload-pack=touch" },
+    { ...BUILD, commitSha: "main" },
+    { ...BUILD, dockerfilePath: "../../etc/passwd" },
+    { ...BUILD, dockerfilePath: "/etc/passwd" },
+    { ...BUILD, context: "../" },
+    { ...BUILD, image: "nginx:alpine" },
+    { ...BUILD, image: `inveon-build/x:latest` },
+    { ...BUILD, gitAuth: { type: "deploy_key", privateKey: "-----BEGIN RSA PRIVATE KEY-----\nx\n" } },
+    { ...BUILD, gitAuth: { type: "password", password: "x" } },
+    { ...BUILD, gitAuth: { type: "token", token: "short" } },
+    { ...BUILD, registryAuth: { server: "ghcr.io --password x", username: "u", password: "p" } },
+    { ...BUILD, registryAuth: { server: "ghcr.io", username: "u", password: "line1\nline2" } },
+  ];
+  for (const params of bad) await assert.rejects(runAction("image.build", params, ctx()), undefined, JSON.stringify(params));
+  assert.equal(calls.length, 0);
+
+  runnerImpl = fakeBuildRunner({ head: "f".repeat(40) });
+  await assert.rejects(runAction("image.build", BUILD, ctx()), /expected 0123456789ab/);
+  assert.ok(!calls.some((x) => x.bin === "docker"));
+
+  calls = [];
+  runnerImpl = fakeBuildRunner({ files: { "deploy/Dockerfile": { symlink: "/etc/hostname" } } });
+  await assert.rejects(runAction("image.build", BUILD, ctx()), /outside the repo/);
+  assert.ok(!calls.some((x) => x.bin === "docker"));
+
+  calls = [];
+  runnerImpl = fakeBuildRunner({ files: {} });
+  await assert.rejects(runAction("image.build", BUILD, ctx()), /not found in the repo/);
+});
+
+test("compose.pull logs in with the app's credentials and only pulls missing images for local builds", async () => {
+  const ref = { slug: "site-prod-ab12", slot: "blue", composePath: "docker-compose.yml" };
+  const dir = join(config.appsRoot, ref.slug, "blue");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "docker-compose.yml"), "services: {}\n");
+  await runAction("compose.pull", { ...ref, missingOnly: true, registryAuth: null }, ctx());
+  assert.deepEqual(calls[0].args.slice(-5), ["pull", "--quiet", "--ignore-buildable", "--policy", "missing"]);
+  assert.deepEqual(calls[0].opts.env, {}, "no DOCKER_CONFIG without credentials");
+
+  calls = [];
+  await runAction("compose.pull", { ...ref, environmentId: "e", registryAuth: { server: "123456789012.dkr.ecr.ap-south-1.amazonaws.com", username: "AWS", password: "token" } }, ctx());
+  assert.deepEqual(calls.map((x) => x.args[0] === "compose" ? x.args.at(-3) : x.args[0]), ["login", "pull", "logout"]);
+  assert.deepEqual(calls[1].args.slice(-3), ["pull", "--quiet", "--ignore-buildable"]);
+  assert.ok(calls[1].opts.env.DOCKER_CONFIG);
+  assert.equal(readdirCount(join(config.workDir, "tmp")), 0);
+  await assert.rejects(runAction("compose.pull", { ...ref, missingOnly: "yes" }, ctx()));
+});
+
+test("release.prepare points INVEON_IMAGE at the image built on the server", async () => {
+  const ref = { slug: "site-prod-ab12", slot: "main", composePath: "docker-compose.yml" };
+  const image = `inveon-build/website-1a2b3c4d:${SHA}`;
+  await runAction("release.prepare", { ...ref, composeContent: "services: {}\n", env: {}, commitSha: SHA, port: 20000, builtImage: image }, ctx());
+  const env = readFileSync(join(config.appsRoot, ref.slug, "main", ".env"), "utf8");
+  assert.match(env, new RegExp(`^INVEON_IMAGE='${image}'$`, "m"));
+  await assert.rejects(runAction("release.prepare", { ...ref, composeContent: "x", env: {}, commitSha: SHA, port: 20000, builtImage: "alpine:latest" }, ctx()));
+});
+
+test("preview teardown: down with volumes, remove nginx files (restored if nginx -t fails), delete cert and folder", async () => {
+  const ref = { slug: "site-pr-12-ab12", slot: "blue", composePath: "docker-compose.yml" };
+  const dir = join(config.appsRoot, ref.slug, "blue");
+  mkdirSync(dir, { recursive: true });
+  mkdirSync(join(config.appsRoot, ref.slug, "data", "uploads"), { recursive: true });
+  writeFileSync(join(dir, "docker-compose.yml"), "services: {}\n");
+  await runAction("compose.down", { ...ref, removeVolumes: true }, ctx());
+  assert.deepEqual(calls[0].args.slice(-3), ["down", "--remove-orphans", "--volumes"]);
+  calls = [];
+  await runAction("compose.down", ref, ctx());
+  assert.deepEqual(calls[0].args.slice(-2), ["down", "--remove-orphans"]);
+
+  // nginx files: removed, then put back when nginx -t fails.
+  const host = "pr-12.preview.example.com";
+  await runAction("nginx.write_site", { hostname: host, slug: ref.slug, tls: false }, ctx());
+  await runAction("nginx.write_upstream", { slug: ref.slug, port: 20010 }, ctx());
+  const site = join(config.nginxConfDir, `inveon-site-${host}.conf`);
+  const upstream = join(config.nginxConfDir, `inveon-upstream-${ref.slug}.conf`);
+  runnerImpl = async (bin) => ({ code: bin === "nginx" ? 1 : 0, stdout: "" });
+  await assert.rejects(runAction("nginx.remove_upstream", { slug: ref.slug }, ctx()), /nginx/);
+  assert.ok(existsSync(upstream), "restored after a failed nginx -t");
+  runnerImpl = async () => ({ code: 0, stdout: "" });
+  calls = [];
+  await runAction("nginx.remove_site", { hostname: host }, ctx());
+  await runAction("nginx.remove_upstream", { slug: ref.slug }, ctx());
+  assert.ok(!existsSync(site) && !existsSync(upstream));
+  assert.deepEqual(calls.map((c) => [c.bin, ...c.args]), [["nginx", "-t"], ["nginx", "-t"]]);
+  calls = [];
+  await runAction("nginx.remove_site", { hostname: host }, ctx()); // already gone: nothing to do
+  assert.equal(calls.length, 0);
+
+  // certbot delete only when a certificate exists.
+  await runAction("certbot.delete", { hostname: host }, ctx());
+  assert.equal(calls.length, 0);
+  mkdirSync(join(config.letsencryptDir, "live", host), { recursive: true });
+  await runAction("certbot.delete", { hostname: host }, ctx());
+  assert.deepEqual(calls.map((c) => [c.bin, ...c.args]), [["certbot", "delete", "--cert-name", host, "--non-interactive"]]);
+
+  await runAction("app.remove_folder", { slug: ref.slug }, ctx());
+  assert.ok(!existsSync(join(config.appsRoot, ref.slug)));
+  assert.ok(existsSync(config.appsRoot), "only the environment's own folder goes");
+
+  calls = [];
+  for (const [name, params] of [
+    ["app.remove_folder", { slug: ".." }],
+    ["app.remove_folder", { slug: "" }],
+    ["app.remove_folder", { slug: "a/../../etc" }],
+    ["nginx.remove_site", { hostname: "../../etc/nginx/nginx" }],
+    ["nginx.remove_upstream", { slug: "../x" }],
+    ["certbot.delete", { hostname: "--all" }],
+    ["compose.down", { ...ref, removeVolumes: "yes" }],
+  ]) {
+    await assert.rejects(runAction(name, params, ctx()), undefined, `${name} ${JSON.stringify(params)}`);
+  }
+  assert.equal(calls.length, 0);
 });
 
 function readdirCount(dir) {

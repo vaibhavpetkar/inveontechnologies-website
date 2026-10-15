@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Rocket, RotateCcw } from "lucide-react";
+import { DatabaseBackup, Rocket, RotateCcw } from "lucide-react";
 import { api } from "../../lib/api";
 import { useApi } from "../../lib/useApi";
 import { useAuth, useOrgPath } from "../../context/AuthContext";
@@ -7,6 +7,45 @@ import type { Deployment, EnvironmentDetail, Job } from "../../lib/types";
 import { dateTime, shortSha, timeAgo } from "../../lib/format";
 import { Empty, ErrorNote, Field, StatusBadge, useAction } from "../../components/ui";
 import { JobView } from "../../components/JobView";
+import { ReleaseCommandCard } from "./ReleaseCommand";
+import { ReleasesCard } from "./ReleasesCard";
+import { MaintenanceCard, windowSummary } from "./MaintenanceCard";
+
+/** A failed deploy: why, the release command's output, and the backup taken before it. */
+function FailedDeploy({ d, onRestore, busy }: { d: Deployment; onRestore: (backupId: string) => void; busy: boolean }) {
+  const { can } = useAuth();
+  if (d.status !== "failure") return null;
+  return (
+    <div className="card failed-deploy">
+      <h3 className="card-title">Deploy {shortSha(d.commitSha)} failed. The live release was not changed.</h3>
+      {d.error && <p className="note note-bad">{d.error}</p>}
+      {d.releaseOutput && (
+        <>
+          <div className="muted small">Release command output</div>
+          <pre className="log">{d.releaseOutput}</pre>
+        </>
+      )}
+      {d.backupId && (
+        <div className="btn-row align-center">
+          <span className="muted small">
+            <DatabaseBackup size={14} /> Backup taken before the release command: <strong>{d.backupStatus ?? "unknown"}</strong>
+          </span>
+          {d.backupStatus === "success" && can("admin") && (
+            <button
+              className="btn btn-small btn-ghost"
+              disabled={busy}
+              onClick={() => {
+                if (confirm("Restore the database to the backup taken before this deploy? A fresh backup of the current state is taken first.")) onRestore(d.backupId!);
+              }}
+            >
+              <RotateCcw size={14} /> Restore this backup
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function DeploysTab({ detail, reload }: { detail: EnvironmentDetail; reload: () => void }) {
   const orgPath = useOrgPath();
@@ -15,17 +54,28 @@ export function DeploysTab({ detail, reload }: { detail: EnvironmentDetail; relo
   const list = useApi<{ deployments: Deployment[] }>(orgPath(`/environments/${env.id}/deployments`), 8000);
   const [jobId, setJobId] = useState<string | null>(null);
   const [sha, setSha] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
   const action = useAction();
 
-  const deploy = (kind: "deploy" | "rollback") =>
+  const deploy = (kind: "deploy" | "rollback") => {
+    // Manual deploys may run outside a maintenance window, after a warning.
+    const m = detail.maintenance;
+    if (kind === "deploy" && m.restricted && !m.open && !confirm(`This is outside the maintenance window. ${windowSummary(m) ?? ""}.\n\nDeploy now anyway?`)) return;
     void action.run(async () => {
       const r = await api<{ job: Job }>(orgPath(`/environments/${env.id}/${kind}`), { method: "POST", body: kind === "deploy" && sha ? { commitSha: sha.trim() } : {} });
       setJobId(r.job.id);
       setSha("");
       void list.reload();
     });
+  };
 
   const shown = jobId ?? list.data?.deployments[0]?.jobId ?? null;
+  const shownDeploy = list.data?.deployments.find((d) => d.jobId === shown) ?? null;
+  const restore = (backupId: string) =>
+    void action.run(async () => {
+      const r = await api<{ job: Job }>(orgPath(`/backups/${backupId}/restore`), { method: "POST" });
+      setJobId(r.job.id);
+    });
 
   return (
     <div className="stack">
@@ -74,22 +124,34 @@ export function DeploysTab({ detail, reload }: { detail: EnvironmentDetail; relo
             </div>
           </div>
         )}
+        {detail.maintenance.restricted && !detail.maintenance.open && can("developer") && (
+          <p className="note note-warn">Outside the maintenance window: pushes are waiting for it. A manual deploy runs now. {windowSummary(detail.maintenance)}.</p>
+        )}
         <ErrorNote error={action.error} />
       </div>
 
+      {shownDeploy && <FailedDeploy d={shownDeploy} onRestore={restore} busy={action.busy} />}
+
       {shown && (
         <div className="card">
-          <h3 className="card-title">{jobId ? "Deploy log" : "Latest deploy"}</h3>
+          <h3 className="card-title">{shownDeploy ? (jobId ? "Deploy log" : "Latest deploy") : "Job log"}</h3>
           <JobView
             key={shown}
             jobId={shown}
             onFinished={() => {
               reload();
               void list.reload();
+              setRefreshKey((k) => k + 1);
             }}
           />
         </div>
       )}
+
+      <ReleasesCard detail={detail} reload={reload} onJob={setJobId} refreshKey={refreshKey} />
+
+      <MaintenanceCard detail={detail} reload={reload} />
+
+      <ReleaseCommandCard detail={detail} reload={reload} />
 
       <div className="card">
         <h3 className="card-title">History</h3>

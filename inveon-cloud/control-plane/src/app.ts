@@ -22,8 +22,17 @@ import { jobsRouter } from "./modules/jobs/routes.js";
 import { domainsRouter } from "./modules/domains/routes.js";
 import { healthRouter } from "./modules/health/routes.js";
 import { backupsRouter } from "./modules/backups/routes.js";
+import { registerPreviewHooks } from "./modules/previews/service.js";
+import { alertsRouter } from "./modules/alerts/routes.js";
+import { configureAlerts } from "./modules/alerts/service.js";
+import { configureOutbound } from "./lib/outbound.js";
+import { platformRouter } from "./modules/keys/routes.js";
+import { awsRouter } from "./modules/aws/routes.js";
 
 export function createApp(db: Database, pool: pg.Pool, env: Env) {
+  registerPreviewHooks(env);
+  configureOutbound(env.INVEON_ALERT_PRIVATE_HOSTS);
+  configureAlerts(env.INVEON_PUBLIC_URL);
   const app = express();
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
@@ -67,9 +76,11 @@ export function createApp(db: Database, pool: pg.Pool, env: Env) {
 
   app.use("/api/v1/auth", authRouter(db, env));
   app.use("/api/v1/orgs", requireAuth(env), orgCreateRouter(db));
+  app.use("/api/v1/platform", requireAuth(env), platformRouter(db, env));
 
   const org = Router({ mergeParams: true });
   org.use(requireAuth(env), requireMember(db));
+  org.use("/", awsRouter(db, env));
   org.use("/servers", serversRouter(db, env));
   org.use("/apps", appsRouter(db, env));
   org.use("/environments", environmentsRouter(db, env));
@@ -78,6 +89,7 @@ export function createApp(db: Database, pool: pg.Pool, env: Env) {
   org.use("/jobs", jobsRouter(db));
   org.use("/", domainsRouter(db, env));
   org.use("/", backupsRouter(db));
+  org.use("/", alertsRouter(db));
   org.use("/", orgRouter(db, env));
   app.use("/api/v1/orgs/:orgId", org);
 
