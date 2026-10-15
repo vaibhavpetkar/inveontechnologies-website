@@ -26,8 +26,8 @@ inveon-cloud/
     needs no open port apart from 80 and 443 for your sites. This also
     works behind NAT.
   - It long-polls for jobs, heartbeats every 30 seconds with host facts
-    (OS, CPU, memory, disk, Docker version), and reports each step's
-    output and result. It polls two lanes: the main lane runs one job at a
+    (OS, CPU, memory, disk, Docker version), samples [metrics](#monitoring)
+    every 30 seconds, and reports each step's output and result. It polls two lanes: the main lane runs one job at a
     time (deploys, backups and the rest), and the stream lane runs up to 4
     [live log streams](#live-logs) next to them, so following logs never
     holds up a deploy.
@@ -42,6 +42,7 @@ inveon-cloud/
     action fails the job before anything runs.
 - **Scheduler.** It runs inside the control plane. Every 30 seconds it:
   - marks servers offline after 90 seconds without a heartbeat;
+  - evaluates [threshold alerts](#threshold-alerts) on server metrics;
   - fails jobs that have been stuck for more than 60 minutes, and ends live
     log streams past their 10 minutes;
   - runs due health checks;
@@ -52,8 +53,9 @@ inveon-cloud/
 
   Once a day it queues certificate renewals, alerts about certificates that
   expire within 14 days, applies [backup retention](#backup-retention),
-  [archives old releases](#release-archiving) and clears alert deliveries
-  older than 30 days. Run only **one** control-plane instance.
+  [archives old releases](#release-archiving), clears alert deliveries
+  older than 30 days, and rolls [metrics](#monitoring) older than 24 hours
+  up into 5-minute buckets (kept 30 days). Run only **one** control-plane instance.
 
 ### Deploy flow
 
@@ -291,6 +293,7 @@ channels. Each channel picks its events:
 | `server.offline` / `server.online` | No heartbeat for 90 seconds / the agent checks in again. |
 | `backup.failed` | A nightly, manual, pre-deploy or pre-restore backup failed. |
 | `cert.expiring` | A certificate expires within 14 days (once per certificate and expiry date). |
+| `server.threshold` / `server.threshold_cleared` | A [threshold rule](#threshold-alerts) (CPU, memory, disk, offline) was crossed / cleared. |
 
 - **Slack:** an incoming-webhook URL. Messages are plain `text` with a link
   back to the dashboard, so Slack-compatible receivers work too.
@@ -384,14 +387,96 @@ and length; a window can run past midnight). With at least one window:
 
 Preview environments have no windows.
 
+### Monitoring
+
+Inveon Cloud keeps its own metrics instead of running Prometheus, Grafana
+and Loki next to it.
+
+- **Sampling.** Every 30 seconds the agent reads CPU (from `/proc/stat`),
+  the load average, memory used (total minus available, from
+  `/proc/meminfo`), disk used and size for `/` and for Docker's data root
+  (`statfs`; the path comes from `docker info --format {{.DockerRootDir}}`,
+  checked hourly), network bytes per second over the physical interfaces
+  (`/proc/net/dev`, without loopback, Docker bridges and veth pairs), and
+  per-container CPU and memory from `docker stats --no-stream --format json`
+  with the compose project and service from `docker ps --format json`. All
+  three are fixed argument lists; nothing goes through a shell.
+- **Sending.** Samples are buffered (up to an hour) and sent in batches of
+  up to 20 to `POST /api/v1/agent/metrics` once the heartbeat says the
+  control plane accepts them. The control plane takes at most 120 samples
+  and 100 containers per sample, validates every field, refuses unknown
+  ones, and always stores them for the server the agent token belongs to.
+  Samples more than an hour old or 5 minutes in the future are skipped, and
+  a re-sent sample is ignored.
+- **Storage.** Raw samples (`server_metrics`) are kept 24 hours. The daily
+  run folds older ones into 5-minute rollups (`server_metric_rollups`:
+  averages plus the CPU and memory peak, per container too), kept 30 days.
+- **Charts.** A server's page has a **Metrics** tab (1 hour, 24 hours, 7
+  days, 30 days) with CPU, memory, disk and network charts and a table of
+  its containers (now, plus the average and peak over the range). An app's
+  **Resources** tab shows its environment's containers (both colours) on
+  their server. Each chart has a text summary and a data table.
+
+#### Threshold alerts
+
+**Alerts, Server thresholds** (admins) sets the organization's default
+rules; a server's **Thresholds** tab overrides one for that server (or
+turns it off there):
+
+| Rule | Fires when |
+|---|---|
+| CPU | every sample of the last N minutes is above X % (0 minutes: the latest sample). |
+| Memory | the same, on memory used. |
+| Disk | the same, on the fuller of `/` and Docker's data root. |
+| Offline | no heartbeat for the heartbeat timeout plus N minutes. |
+
+Every scheduler tick evaluates the rules in effect. Crossing one opens an
+**incident** and sends one `server.threshold` alert through the
+organization's [alert channels](#alerts); when the latest sample is back at
+or below the threshold (or the agent checks in again), the incident is
+resolved and one `server.threshold_cleared` alert is sent. At most one
+incident per server and metric is open at a time (a unique index), so a
+condition that lasts sends nothing more. Samples older than 3 minutes
+change nothing (the offline rule covers that). Removing or turning off a
+rule closes its incident without an alert. Open incidents show on the
+server's page and as a badge on the server list; resolved ones are kept 90
+days.
+
+#### Prometheus export
+
+`GET /metrics` returns the latest values of an organization's servers in
+the Prometheus text format: `inveon_server_up`, `inveon_server_info`,
+`inveon_server_cpu_percent`, `inveon_server_load1|5|15`,
+`inveon_server_memory_used_bytes` and `_total_bytes`,
+`inveon_server_disk_used_bytes` and `_total_bytes` (`mount="/"` or
+`"docker"`), `inveon_server_network_receive|transmit_bytes_per_second`,
+`inveon_container_cpu_percent`, `inveon_container_memory_bytes` and
+`_limit_bytes`, and `inveon_server_alert_open` per open incident. It needs a
+**scrape token** (Alerts, Prometheus scrape tokens; admins): `ics_…`, shown
+once, stored as a SHA-256 hash, revocable, and scoped to one
+organization. It can only read. To point Prometheus (and Grafana) at it:
+
+```yaml
+- job_name: inveon-cloud
+  scheme: https
+  metrics_path: /metrics
+  authorization: { type: Bearer, credentials: <scrape token> }
+  static_configs: [{ targets: ["cloud.inveontechnologies.in"] }]
+```
+
+Failed attempts count towards `INVEON_AUTH_RATE_LIMIT` per IP; successful
+scrapes don't.
+
 ### Upgrading servers for these features
 
-Live logs, backup retention and release archiving need the new agent on
-each server: copy the new bundle to `/opt/inveon-agent` and run
+Live logs, backup retention, release archiving and metrics need the new
+agent on each server: copy the new bundle to `/opt/inveon-agent` and run
 `systemctl restart inveon-agent` (or run the installer again with a new
 install token). An older agent keeps working for everything else; a live
 log stream to it fails after 30 seconds with a message, and prune and
-archive jobs fail with "Action not allowed" until it is updated. Give the
+archive jobs fail with "Action not allowed" until it is updated. An older
+agent sends no metrics: its charts stay empty and only the offline rule
+works for it. Give the
 server's AWS role `s3:DeleteObject` on its backup prefix before turning on
 retention.
 
@@ -682,6 +767,10 @@ run `journalctl -u inveon-agent -f`.
   inputs are checked against allow-lists, user data only carries the
   installer URL and a single-use token, instances require IMDSv2, and
   terminate checks the instance's tag first.
+- **Metrics:** an agent can only write samples for its own server, every
+  field is validated and batches are capped. The `/metrics` export is
+  read-only and needs a per-organization scrape token, stored hashed and
+  revocable; dashboard sessions and agent tokens don't work there.
 - **Live logs** are relayed, never stored, and stop when the viewer leaves.
   Image removal for archived releases never forces and only names images
   tagged with a full commit SHA.
@@ -692,7 +781,8 @@ run `journalctl -u inveon-agent -f`.
   keys (never their values), preview creation and teardown, alert channels
   (create, update, test, secret rotation, delete; never the URL or secret),
   master key rotations started from the dashboard, AWS connections, EC2
-  launches and terminations,
+  launches and terminations, threshold rules, threshold incidents opening and
+  resolving, scrape tokens (created and revoked; never the token),
   release archiving, and deploys queued for, discarded from or started by a
   maintenance window. It records the actor, the IP and the time. Admins and owners can read it under Audit log.
 
@@ -826,7 +916,14 @@ a fake GitHub API, and act as the agent. They cover:
   rollbacks to archived releases, and un-archiving on redeploy;
 - maintenance windows: the window maths (past midnight and across the
   week), queuing and replacing pushes, deploying when the window opens,
-  and manual deploys flagged but allowed.
+  and manual deploys flagged but allowed;
+- monitoring: metric batches only for the agent's own server (unknown
+  fields refused), the batch, value and container caps, skipped old and
+  duplicate samples, charts and an environment's containers, the rollup
+  (averages, peaks, containers, raw kept 24 hours, rollups 30 days) and
+  the 7- and 30-day series across both, threshold rules (the window,
+  overrides, disk and offline) with one alert when an incident opens and
+  one when it clears, and the scrape token and Prometheus text format.
 
 The EC2 tests run the control plane with a fake AWS (`test/fake-aws.mjs`,
 preloaded with `node --import`) and never call AWS. They cover the
@@ -843,7 +940,10 @@ fails, health retries, backups, the release command, the clone and build
 (deploy key, token, symlinks, `HEAD` check), registry login and logout,
 preview teardown, every unsafe-compose rule, the exact `logs -f`,
 `aws s3 rm` and `docker image rm` argument lists with their parameter
-checks, and cancelling a live log stream while it is quiet.
+checks, cancelling a live log stream while it is quiet, and metrics: the
+`/proc` parsers (CPU, memory, network), `docker stats` and `docker ps`
+parsing, the exact docker argument lists, and the send buffer (batches,
+retries, refused batches dropped, size cap).
 
 ## Moving the portal, the website and the CRM onto Inveon Cloud
 
@@ -914,6 +1014,7 @@ rollback.
 - A KMS-backed master key (the keyring already takes one), and mTLS for
   agents.
 - SSO, and WebAuthn security keys next to TOTP.
-- Metrics (Prometheus + Grafana) and central logs (Loki).
+- Central log search across servers (live logs and the last lines are
+  per environment today), and metric history beyond 30 days.
 - Maintenance windows in a chosen time zone (they are UTC today).
 - Many servers behind one proxy, and wildcard certificates (DNS-01).
