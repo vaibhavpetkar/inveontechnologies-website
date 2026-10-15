@@ -1,9 +1,10 @@
-import type { AgentConfig } from "./config.js";
+import { saveConfig, type AgentConfig } from "./config.js";
 import type { Runner } from "./exec.js";
 import { ControlPlaneClient, HttpError, type AgentJob } from "./client.js";
 import { STREAMING_ACTIONS, runAction } from "./actions.js";
 import { collectFacts } from "./facts.js";
 import { MetricsBuffer, MetricsSampler, SAMPLE_INTERVAL_MS } from "./metrics.js";
+import { defaultKeyPath, loadOrCreateSigningKey, type RequestSigner } from "./signing.js";
 
 const log = (msg: string, extra: Record<string, unknown> = {}) => console.log(JSON.stringify({ time: new Date().toISOString(), msg, ...extra }));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -157,12 +158,39 @@ function startMetrics(client: ControlPlaneClient, runner: Runner) {
   setInterval(() => void round(), SAMPLE_INTERVAL_MS).unref();
 }
 
-export async function runAgent(config: AgentConfig, runner: Runner) {
-  const client = new ControlPlaneClient(config.controlPlaneUrl, config.token);
+/**
+ * An agent installed before request signing makes its key on the first
+ * start after the upgrade and enrols it (POST /signing-key); until the
+ * control plane has it, enrolment is retried with every heartbeat. A
+ * control plane from before signing answers 404 and ignores the headers.
+ */
+export async function enrolSigningKey(client: ControlPlaneClient, signer: RequestSigner, config: AgentConfig, configPath: string | null) {
+  if (config.signingKeyRegistered) return true;
+  try {
+    await client.registerSigningKey(signer.publicKey());
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) return false;
+    log("could not register the signing key; will retry", { error: String(err) });
+    return false;
+  }
+  config.signingKeyRegistered = true;
+  if (configPath) saveConfig(configPath, config);
+  log("request signing key registered", {});
+  return true;
+}
+
+export async function runAgent(config: AgentConfig, runner: Runner, opts: { configPath?: string } = {}) {
+  const configPath = opts.configPath ?? null;
+  const { signer, created } = loadOrCreateSigningKey(config.signingKeyPath ?? defaultKeyPath(configPath ?? "/etc/inveon-agent/config.json"));
+  // A new key file means whatever the config says about an older one is stale.
+  if (created) config.signingKeyRegistered = false;
+  const client = new ControlPlaneClient(config.controlPlaneUrl, config.token, signer);
   log("inveon-agent started", { controlPlane: config.controlPlaneUrl, serverId: config.serverId });
+  await enrolSigningKey(client, signer, config, configPath);
 
   const beat = async () => {
     try {
+      await enrolSigningKey(client, signer, config, configPath);
       const res = (await client.heartbeat(await collectFacts(runner))) as { features?: unknown } | null;
       if (Array.isArray(res?.features) && res.features.includes("stream_lane")) streamLaneSupported = true;
       if (Array.isArray(res?.features) && res.features.includes("metrics")) metricsSupported = true;

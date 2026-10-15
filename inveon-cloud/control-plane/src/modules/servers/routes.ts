@@ -15,10 +15,11 @@ type Server = typeof servers.$inferSelect;
 
 /** Never expose the token hash. Status is derived from the last heartbeat. */
 export function publicServer(s: Server, heartbeatTimeoutSec: number) {
-  const { tokenHash: _t, ...rest } = s;
+  const { tokenHash: _t, signingPublicKey, ...rest } = s;
   let status = s.status;
   if (s.registeredAt) status = s.lastSeenAt && Date.now() - s.lastSeenAt.getTime() < heartbeatTimeoutSec * 1000 ? "online" : "offline";
-  return { ...rest, status };
+  // "unsigned": an agent from before request signing; upgrade it before requiring signatures.
+  return { ...rest, status, requestSigning: signingPublicKey ? ("signed" as const) : s.registeredAt ? ("unsigned" as const) : null };
 }
 
 export async function loadServer(db: Database, orgId: string, id: string) {

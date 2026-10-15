@@ -39,6 +39,9 @@ export interface Server {
   diskFreeBytes: number | null;
   dockerVersion: string | null;
   agentVersion: string | null;
+  /** "unsigned": the agent predates request signing; null until it registers. */
+  requestSigning?: "signed" | "unsigned" | null;
+  signingKeyAt?: string | null;
   lastSeenAt: string | null;
   registeredAt: string | null;
   createdAt: string;

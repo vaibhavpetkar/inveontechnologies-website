@@ -33,13 +33,14 @@ export function orgRouter(db: Database, env: Env) {
 
   router.get("/", async (req, res) => {
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, req.member!.orgId) });
-    res.json({ organization: { ...org, role: req.member!.role } });
+    // agentSignatures "required": the control plane requires signed agent requests everywhere.
+    res.json({ organization: { ...org, role: req.member!.role }, agentSignatures: env.INVEON_AGENT_SIGNATURES });
   });
 
   router.patch("/", requireRole("owner"), async (req, res) => {
     const body = z
-      .object({ name: z.string().trim().min(2).max(80).optional(), require2faForAdmins: z.boolean().optional() })
-      .refine((b) => b.name !== undefined || b.require2faForAdmins !== undefined, { message: "Nothing to change" })
+      .object({ name: z.string().trim().min(2).max(80).optional(), require2faForAdmins: z.boolean().optional(), requireSignedAgents: z.boolean().optional() })
+      .refine((b) => b.name !== undefined || b.require2faForAdmins !== undefined || b.requireSignedAgents !== undefined, { message: "Nothing to change" })
       .parse(req.body);
     const [org] = await db.update(organizations).set(body).where(eq(organizations.id, req.member!.orgId)).returning();
     await audit(db, req, "org.update", "organization", org.id, body);

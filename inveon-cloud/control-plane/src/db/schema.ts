@@ -65,6 +65,9 @@ export const organizations = pgTable("organizations", {
   slug: text("slug").notNull().unique(),
   // Owners always need two-factor; this extends the requirement to admins.
   require2faForAdmins: boolean("require_2fa_for_admins").notNull().default(false),
+  // Refuse agent requests that aren't signed with the server's Ed25519 key
+  // (INVEON_AGENT_SIGNATURES=required does this for every organization).
+  requireSignedAgents: boolean("require_signed_agents").notNull().default(false),
   createdAt: createdAt(),
 });
 
@@ -130,6 +133,10 @@ export const servers = pgTable("servers", {
   diskFreeBytes: bigint("disk_free_bytes", { mode: "number" }),
   dockerVersion: text("docker_version"),
   agentVersion: text("agent_version"),
+  // The agent's Ed25519 public key (SPKI DER, base64). Once set, every agent
+  // request must be signed with it; null means an agent from before signing.
+  signingPublicKey: text("signing_public_key"),
+  signingKeyAt: ts("signing_key_at"),
   lastSeenAt: ts("last_seen_at"),
   registeredAt: ts("registered_at"),
   // "aws" when Inveon Cloud launched the EC2 instance itself.
@@ -172,6 +179,20 @@ export const awsConnections = pgTable("aws_connections", {
   createdAt: createdAt(),
   updatedAt: ts("updated_at").notNull().defaultNow(),
 });
+
+/**
+ * Nonces of signed agent requests, kept until their timestamp can no longer
+ * pass the 5-minute window, so a captured request can't be replayed.
+ */
+export const agentRequestNonces = pgTable(
+  "agent_request_nonces",
+  {
+    serverId: uuid("server_id").notNull().references(() => servers.id, { onDelete: "cascade" }),
+    nonce: text("nonce").notNull(),
+    expiresAt: ts("expires_at").notNull(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.serverId, t.nonce] }), byExpiry: index("agent_request_nonces_expires_idx").on(t.expiresAt) }),
+);
 
 export const serverBootstrapTokens = pgTable("server_bootstrap_tokens", {
   id: uuid("id").primaryKey().defaultRandom(),

@@ -50,6 +50,11 @@ const envSchema = z.object({
   INVEON_HEARTBEAT_TIMEOUT_SEC: z.coerce.number().int().min(10).default(90),
   // Running jobs older than this are marked failed.
   INVEON_JOB_TIMEOUT_MIN: z.coerce.number().int().min(1).default(60),
+  // "required": every agent must sign its requests (Ed25519, see
+  // lib/agent-signature.ts), in every organization. "optional": agents
+  // without a signing key still work unless their organization requires it.
+  // An agent that has registered a key must always sign.
+  INVEON_AGENT_SIGNATURES: z.enum(["optional", "required"]).default("optional"),
   // GitHub: token for private repos (contents read), and API base (tests).
   INVEON_GITHUB_TOKEN: z.string().optional(),
   INVEON_GITHUB_API_BASE: z.string().default("https://api.github.com"),

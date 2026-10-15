@@ -2,7 +2,7 @@ import { sql } from "drizzle-orm";
 import type { Database } from "./db/client.js";
 import type { Env } from "./env.js";
 import { logger } from "./lib/logger.js";
-import { markOfflineServers } from "./modules/agent/routes.js";
+import { markOfflineServers, pruneAgentNonces } from "./modules/agent/routes.js";
 import { failStaleJobs } from "./modules/jobs/service.js";
 import { runDueChecks } from "./modules/health/service.js";
 import { alertExpiringCertificates, queueRenewals } from "./modules/domains/routes.js";
@@ -38,6 +38,7 @@ export async function tick(db: Database, env: Env) {
     ["offline servers", () => markOfflineServers(db, env.INVEON_HEARTBEAT_TIMEOUT_SEC)],
     ["metric threshold alerts", () => evaluateMetricAlerts(db, env.INVEON_HEARTBEAT_TIMEOUT_SEC)],
     ["EC2 servers being launched or terminated", () => pollAwsServers(db)],
+    ["agent request nonces", () => pruneAgentNonces(db)],
     ["stale jobs", () => failStaleJobs(db, env.INVEON_JOB_TIMEOUT_MIN)],
     ["live log time limits", () => expireLogFollows(db)],
     ["health checks", () => runDueChecks(db, env.INVEON_PUBLIC_URL)],

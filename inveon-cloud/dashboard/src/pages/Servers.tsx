@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Cloud, Cpu, HardDrive, KeyRound, MemoryStick, Plus, Power, RefreshCw, Server as ServerIcon, Trash2 } from "lucide-react";
+import { Cloud, Cpu, HardDrive, KeyRound, MemoryStick, Plus, Power, RefreshCw, Server as ServerIcon, ShieldCheck, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useAuth, useOrgPath } from "../context/AuthContext";
@@ -21,6 +21,44 @@ function Countdown({ until }: { until: string }) {
     <span>
       expires in {Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")}
     </span>
+  );
+}
+
+/**
+ * Agent request signing: which servers still send unsigned requests (agents
+ * from before signing), and the owner's switch to refuse them.
+ */
+function RequestSigningCard({ servers }: { servers: Server[] }) {
+  const orgPath = useOrgPath();
+  const { can } = useAuth();
+  const org = useApi<{ organization: { requireSignedAgents?: boolean }; agentSignatures?: "optional" | "required" }>(orgPath(""));
+  const action = useAction();
+  const registered = servers.filter((s) => s.registeredAt && s.provisionState !== "terminated");
+  const unsigned = registered.filter((s) => s.requestSigning === "unsigned");
+  const global = org.data?.agentSignatures === "required";
+  const required = global || !!org.data?.organization.requireSignedAgents;
+  if (!org.data || registered.length === 0) return null;
+  const toggle = (value: boolean) => {
+    if (value && unsigned.length && !confirm(`${unsigned.length} server(s) still use unsigned requests and will be cut off until their agent is upgraded. Continue?`)) return;
+    void action.run(async () => {
+      await api(orgPath(""), { method: "PATCH", body: { requireSignedAgents: value } });
+      await org.reload();
+    });
+  };
+  return (
+    <div className={`note ${unsigned.length && required ? "note-bad" : unsigned.length ? "note-warn" : "note-info"}`}>
+      <p>
+        <ShieldCheck size={14} /> <strong>Signed agent requests.</strong>{" "}
+        {unsigned.length === 0
+          ? "Every server's agent signs its requests with its own Ed25519 key."
+          : `${unsigned.length} of ${registered.length} servers still use unsigned requests (${unsigned.map((s) => s.name).join(", ")}). Upgrade their agent: copy the new bundle to /opt/inveon-agent and restart inveon-agent, or run the installer again.`}
+      </p>
+      <label className="check">
+        <input type="checkbox" checked={required} disabled={global || !can("owner") || action.busy} onChange={(e) => toggle(e.target.checked)} />
+        Refuse unsigned agent requests{global ? " (required for every organization on this control plane)" : can("owner") ? "" : " (owners)"}
+      </label>
+      <ErrorNote error={action.error} />
+    </div>
   );
 }
 
@@ -103,6 +141,7 @@ export default function Servers() {
       />
       <ErrorNote error={error ?? action.error} />
       {loading && !data && <Loading />}
+      {data && <RequestSigningCard servers={data.servers} />}
       {data && data.servers.length === 0 && (
         <Empty icon={<ServerIcon size={28} />} title="No servers yet">
           {can("admin") ? "Add a server to get a one-line install command." : "Ask an admin to add a server."}
@@ -151,6 +190,16 @@ export default function Servers() {
                   </li>
                   <li>Docker {s.dockerVersion ?? "not detected"}</li>
                   <li>Agent {s.agentVersion ?? "?"}</li>
+                  {s.requestSigning === "signed" && (
+                    <li title="Every request from this agent is signed with its Ed25519 key">
+                      <ShieldCheck size={14} /> Signed requests
+                    </li>
+                  )}
+                  {s.requestSigning === "unsigned" && (
+                    <li className="text-bad" title="This agent predates request signing; upgrade it">
+                      Unsigned requests
+                    </li>
+                  )}
                 </ul>
               </>
             ) : s.provisionState === "terminated" || s.provisionState === "terminating" ? null : (
