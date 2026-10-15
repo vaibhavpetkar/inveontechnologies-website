@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation, useParams } from "wouter";
-import { Cloud } from "lucide-react";
+import { Cloud, Fingerprint } from "lucide-react";
+import { passkeysSupported } from "../lib/webauthn";
 import { api, ApiError } from "../lib/api";
 import { useAuth } from "../context/AuthContext";
 import { ErrorNote, Field, useAction } from "../components/ui";
@@ -20,11 +21,12 @@ export function AuthFrame({ title, children }: { title: string; children: React.
 }
 
 export function Login() {
-  const { login, completeLogin } = useAuth();
+  const { login, completeLogin, loginWithPasskey } = useAuth();
   const [, navigate] = useLocation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [challenge, setChallenge] = useState<string | null>(null);
+  const [methods, setMethods] = useState<string[]>([]);
   const [useRecovery, setUseRecovery] = useState(false);
   const [code, setCode] = useState("");
   const { busy, error, setError, run } = useAction();
@@ -34,6 +36,7 @@ export function Login() {
       const next = await login(email, password);
       if (next) {
         setChallenge(next.challengeToken);
+        setMethods(next.methods);
         setCode("");
         return;
       }
@@ -53,36 +56,59 @@ export function Login() {
       }
     });
   };
+  const withPasskey = (challengeToken?: string) =>
+    void run(async () => {
+      try {
+        await loginWithPasskey(challengeToken);
+        navigate("/servers");
+      } catch (err) {
+        if (err instanceof ApiError && err.code === "INVALID_CHALLENGE") setChallenge(null);
+        throw err;
+      }
+    });
   if (challenge) {
+    const totp = methods.includes("totp");
     return (
       <AuthFrame title="Two-factor authentication">
-        <form onSubmit={submitCode} className="form">
-          {useRecovery ? (
-            <Field label="Recovery code" hint="One of the codes you saved when you turned on two-factor. Each works once.">
-              <input autoComplete="off" required autoFocus value={code} onChange={(e) => setCode(e.target.value)} placeholder="xxxx-xxxx-xxxx" />
-            </Field>
-          ) : (
-            <Field label="Code from your authenticator app">
-              <input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9 ]{6,7}" maxLength={7} required autoFocus value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" />
-            </Field>
+        {methods.includes("passkey") && passkeysSupported() && (
+          <>
+            <button type="button" className={`btn btn-block ${totp ? "btn-ghost" : "btn-primary"}`} disabled={busy} onClick={() => withPasskey(challenge)}>
+              <Fingerprint size={16} /> Use your passkey
+            </button>
+            {!totp && <ErrorNote error={error} />}
+          </>
+        )}
+        {totp && (
+          <form onSubmit={submitCode} className="form">
+            {useRecovery ? (
+              <Field label="Recovery code" hint="One of the codes you saved when you turned on two-factor. Each works once.">
+                <input autoComplete="off" required autoFocus value={code} onChange={(e) => setCode(e.target.value)} placeholder="xxxx-xxxx-xxxx" />
+              </Field>
+            ) : (
+              <Field label="Code from your authenticator app">
+                <input inputMode="numeric" autoComplete="one-time-code" pattern="[0-9 ]{6,7}" maxLength={7} required autoFocus value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456" />
+              </Field>
           )}
           <ErrorNote error={error} />
           <button className="btn btn-primary btn-block" disabled={busy}>
             {busy ? "Checking…" : "Verify"}
           </button>
         </form>
+        )}
         <p className="muted small center">
-          <button
-            type="button"
-            className="btn btn-ghost btn-small"
-            onClick={() => {
-              setUseRecovery((v) => !v);
-              setCode("");
-              setError(null);
-            }}
-          >
-            {useRecovery ? "Use a code from the app" : "Use a recovery code"}
-          </button>
+          {totp && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-small"
+              onClick={() => {
+                setUseRecovery((v) => !v);
+                setCode("");
+                setError(null);
+              }}
+            >
+              {useRecovery ? "Use a code from the app" : "Use a recovery code"}
+            </button>
+          )}
           <button type="button" className="btn btn-ghost btn-small" onClick={() => setChallenge(null)}>
             Start again
           </button>
@@ -104,6 +130,11 @@ export function Login() {
           {busy ? "Signing in…" : "Sign in"}
         </button>
       </form>
+      {passkeysSupported() && (
+        <button type="button" className="btn btn-ghost btn-block" disabled={busy} onClick={() => withPasskey()}>
+          <Fingerprint size={16} /> Sign in with a passkey
+        </button>
+      )}
       <p className="muted small center">
         New here? <Link href="/signup">Create an account</Link>
       </p>

@@ -22,7 +22,7 @@ function Private({ children }: { children: ReactNode }) {
   const { user, loading, org } = useAuth();
   if (loading) return <div className="page-loading"><Loading /></div>;
   if (!user) return <Redirect to="/login" />;
-  if (user.twoFactor.required && !user.twoFactor.enabled) return <TwoFactorGate />;
+  if (user.twoFactor.required && !(user.twoFactor.satisfied ?? user.twoFactor.enabled)) return <TwoFactorGate />;
   if (!org) return <NoOrganization />;
   // Remount pages when the organization changes so no data leaks across.
   return <Shell key={org.id}>{children}</Shell>;

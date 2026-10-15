@@ -12,8 +12,23 @@ export interface TwoFactorStatus {
   enabled: boolean;
   enabledAt: string | null;
   recoveryCodesLeft: number;
+  /** Passkeys registered (missing on control planes from before passkeys). */
+  passkeys?: number;
+  /** TOTP or a passkey: what the owner requirement checks. */
+  satisfied?: boolean;
   /** An owner somewhere, or an admin where the organization requires it. */
   required: boolean;
+}
+
+export interface Passkey {
+  id: string;
+  name: string;
+  alg: number;
+  aaguid: string | null;
+  transports: string[];
+  backedUp: boolean;
+  createdAt: string;
+  lastUsedAt: string | null;
 }
 
 export interface User {
