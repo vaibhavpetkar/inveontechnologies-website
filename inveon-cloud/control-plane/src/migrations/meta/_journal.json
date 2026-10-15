@@ -71,6 +71,13 @@
       "when": 1791827518455,
       "tag": "0009_aws_servers",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792024567410,
+      "tag": "0010_monitoring",
+      "breakpoints": true
     }
   ]
 }

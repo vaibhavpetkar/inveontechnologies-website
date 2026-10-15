@@ -24,7 +24,8 @@ test("heartbeat tells the agent about the stream lane", async () => {
   const { orgId, owner } = await api.createOrg();
   const srv = await api.registerServer(orgId, owner);
   const hb = await api.call("POST", "/agent/heartbeat", { token: srv.agentToken, body: { facts: {} } });
-  assert.deepEqual(hb.json, { ok: true, features: ["stream_lane"] });
+  assert.equal(hb.json.ok, true);
+  assert.ok(hb.json.features.includes("stream_lane"));
 });
 
 test("follow: roles and validation, stream lane only, output relayed live and never stored, audited", async () => {

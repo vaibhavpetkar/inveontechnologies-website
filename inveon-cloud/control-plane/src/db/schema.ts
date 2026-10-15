@@ -1,4 +1,5 @@
-import { pgTable, uuid, text, timestamp, boolean, jsonb, pgEnum, integer, bigint, unique, index, primaryKey } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { pgTable, uuid, text, timestamp, boolean, jsonb, pgEnum, integer, bigint, doublePrecision, unique, uniqueIndex, index, primaryKey } from "drizzle-orm/pg-core";
 
 /**
  * One record per resource, like Frappe Cloud's press: organizations own
@@ -503,4 +504,158 @@ export const alertDeliveries = pgTable(
     deliveredAt: ts("delivered_at"),
   },
   (t) => ({ due: index("alert_deliveries_due_idx").on(t.status, t.nextAttemptAt), byOrg: index("alert_deliveries_org_created_idx").on(t.orgId, t.createdAt) }),
+);
+
+
+// ---------------------------------------------------------------- monitoring
+
+/** One container in a metrics sample, as the agent read it from `docker stats` and `docker ps`. */
+export interface ContainerSample {
+  name: string;
+  /** Compose project and service labels, when the container has them. */
+  project?: string | null;
+  service?: string | null;
+  /** Percent of one CPU, like `docker stats` (can exceed 100 on several cores). */
+  cpuPct: number | null;
+  memBytes: number | null;
+  memLimitBytes: number | null;
+  /** Rollups only: the highest values in the bucket (the plain fields are averages). */
+  cpuPctMax?: number | null;
+  memBytesMax?: number | null;
+}
+
+const bytesCol = (name: string) => bigint(name, { mode: "number" });
+
+/**
+ * Host metrics the agent samples every 30 seconds (raw, kept 24 hours).
+ * The daily run folds older rows into 5-minute rollups. One row per server
+ * and timestamp, so a batch the agent re-sends after a timeout is ignored.
+ */
+export const serverMetrics = pgTable(
+  "server_metrics",
+  {
+    serverId: uuid("server_id").notNull().references(() => servers.id, { onDelete: "cascade" }),
+    at: ts("at").notNull(),
+    cpuPct: doublePrecision("cpu_pct"),
+    load1: doublePrecision("load1"),
+    load5: doublePrecision("load5"),
+    load15: doublePrecision("load15"),
+    memUsedBytes: bytesCol("mem_used_bytes"),
+    memTotalBytes: bytesCol("mem_total_bytes"),
+    diskRootUsedBytes: bytesCol("disk_root_used_bytes"),
+    diskRootTotalBytes: bytesCol("disk_root_total_bytes"),
+    // Docker's data root (often the same file system as /).
+    diskDockerUsedBytes: bytesCol("disk_docker_used_bytes"),
+    diskDockerTotalBytes: bytesCol("disk_docker_total_bytes"),
+    netRxBps: doublePrecision("net_rx_bps"),
+    netTxBps: doublePrecision("net_tx_bps"),
+    containers: jsonb("containers").$type<ContainerSample[]>().notNull().default([]),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.serverId, t.at] }), byTime: index("server_metrics_at_idx").on(t.at) }),
+);
+
+/**
+ * 5-minute rollups of serverMetrics, kept 30 days. Averages, plus the
+ * highest CPU and memory seen in the bucket; samples weights the averages
+ * when buckets are merged into wider ones for the 7- and 30-day charts.
+ */
+export const serverMetricRollups = pgTable(
+  "server_metric_rollups",
+  {
+    serverId: uuid("server_id").notNull().references(() => servers.id, { onDelete: "cascade" }),
+    bucket: ts("bucket").notNull(),
+    samples: integer("samples").notNull(),
+    cpuPct: doublePrecision("cpu_pct"),
+    cpuPctMax: doublePrecision("cpu_pct_max"),
+    load1: doublePrecision("load1"),
+    load5: doublePrecision("load5"),
+    load15: doublePrecision("load15"),
+    memUsedBytes: bytesCol("mem_used_bytes"),
+    memUsedBytesMax: bytesCol("mem_used_bytes_max"),
+    memTotalBytes: bytesCol("mem_total_bytes"),
+    diskRootUsedBytes: bytesCol("disk_root_used_bytes"),
+    diskRootTotalBytes: bytesCol("disk_root_total_bytes"),
+    diskDockerUsedBytes: bytesCol("disk_docker_used_bytes"),
+    diskDockerTotalBytes: bytesCol("disk_docker_total_bytes"),
+    netRxBps: doublePrecision("net_rx_bps"),
+    netTxBps: doublePrecision("net_tx_bps"),
+    containers: jsonb("containers").$type<ContainerSample[]>().notNull().default([]),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.serverId, t.bucket] }), byTime: index("server_metric_rollups_bucket_idx").on(t.bucket) }),
+);
+
+export type MetricRuleKind = "cpu" | "memory" | "disk" | "offline";
+
+/**
+ * Threshold alert rules. serverId null is the organization's default for
+ * that metric; a row with a serverId overrides it for one server (and can
+ * turn it off there). offline ignores thresholdPct.
+ */
+export const metricAlertRules = pgTable(
+  "metric_alert_rules",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    serverId: uuid("server_id").references(() => servers.id, { onDelete: "cascade" }),
+    metric: text("metric").$type<MetricRuleKind>().notNull(),
+    thresholdPct: integer("threshold_pct"),
+    // How long the condition must hold before an incident opens (0 = at once).
+    forMinutes: integer("for_minutes").notNull().default(0),
+    enabled: boolean("enabled").notNull().default(true),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: ts("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    orgDefault: uniqueIndex("metric_alert_rules_org_default_idx").on(t.orgId, t.metric).where(sql`server_id IS NULL`),
+    serverOverride: uniqueIndex("metric_alert_rules_server_idx").on(t.serverId, t.metric).where(sql`server_id IS NOT NULL`),
+  }),
+);
+
+/**
+ * A threshold that was crossed: open until the condition clears. At most one
+ * open incident per server and metric (a partial unique index), which is
+ * what keeps alerts to one when it starts and one when it clears.
+ */
+export const metricIncidents = pgTable(
+  "metric_incidents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    serverId: uuid("server_id").notNull().references(() => servers.id, { onDelete: "cascade" }),
+    metric: text("metric").$type<MetricRuleKind>().notNull(),
+    ruleId: uuid("rule_id").references(() => metricAlertRules.id, { onDelete: "set null" }),
+    thresholdPct: integer("threshold_pct"),
+    forMinutes: integer("for_minutes").notNull().default(0),
+    startedAt: ts("started_at").notNull(),
+    resolvedAt: ts("resolved_at"),
+    // Value that opened it, the highest seen while open, and the one that cleared it.
+    openValue: doublePrecision("open_value"),
+    peakValue: doublePrecision("peak_value"),
+    clearValue: doublePrecision("clear_value"),
+    // Set when it closed because its rule was removed or turned off, not because it cleared.
+    closedReason: text("closed_reason"),
+  },
+  (t) => ({
+    oneOpen: uniqueIndex("metric_incidents_open_idx").on(t.serverId, t.metric).where(sql`resolved_at IS NULL`),
+    byServer: index("metric_incidents_server_started_idx").on(t.serverId, t.startedAt),
+  }),
+);
+
+/** Read-only tokens for the Prometheus /metrics endpoint, one organization each, stored as SHA-256 hashes. */
+export const scrapeTokens = pgTable(
+  "scrape_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    // The first characters, so people can tell tokens apart.
+    tokenPrefix: text("token_prefix").notNull(),
+    lastUsedAt: ts("last_used_at"),
+    revokedAt: ts("revoked_at"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => ({ byOrg: index("scrape_tokens_org_idx").on(t.orgId) }),
 );

@@ -12,6 +12,7 @@ import { bus, serverJobsEvent } from "../../lib/bus.js";
 import { buildAgentPayload, claimNextJob, finishJob, reportStep } from "../jobs/service.js";
 import { asc } from "drizzle-orm";
 import { dashboardLink, emitAlert } from "../alerts/service.js";
+import { batchSchema, ingestSamples } from "../metrics/service.js";
 
 const factsSchema = z
   .object({
@@ -87,8 +88,15 @@ export function agentRouter(db: Database, env: Env) {
     const { facts } = z.object({ facts: factsSchema }).parse(req.body ?? {});
     await markBackOnline(db, req.server!.id);
     await db.update(servers).set({ ...facts, status: "online", lastSeenAt: new Date() }).where(eq(servers.id, req.server!.id));
-    // Tells the agent it may poll the separate lane for live log streams.
-    res.json({ ok: true, features: ["stream_lane"] });
+    // Tells the agent it may poll the separate lane for live log streams,
+    // and that it may send metrics.
+    res.json({ ok: true, features: ["stream_lane", "metrics"] });
+  });
+
+  // Host metrics, in batches. Always stored for the token's own server.
+  router.post("/metrics", async (req, res) => {
+    const { samples } = batchSchema.parse(req.body);
+    res.json(await ingestSamples(db, req.server!.id, samples));
   });
 
   // Long poll: waits up to INVEON_AGENT_POLL_TIMEOUT_MS for a job, else 204.

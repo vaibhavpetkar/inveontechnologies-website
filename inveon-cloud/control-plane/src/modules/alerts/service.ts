@@ -22,6 +22,8 @@ export const ALERT_EVENTS = {
   "server.online": "Server back online",
   "backup.failed": "Backup failed",
   "cert.expiring": "Certificate expires within 14 days",
+  "server.threshold": "Server threshold crossed (CPU, memory, disk, offline)",
+  "server.threshold_cleared": "Server threshold cleared",
 } as const;
 export type AlertEvent = keyof typeof ALERT_EVENTS;
 export const ALERT_EVENT_NAMES = Object.keys(ALERT_EVENTS) as AlertEvent[];

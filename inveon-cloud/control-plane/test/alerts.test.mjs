@@ -99,7 +99,7 @@ test("channels: admins only, URLs validated, secrets write-only, signed test del
   const secret = created.json.signingSecret;
   assert.match(secret, /^whsec_/);
   const channel = created.json.channel;
-  assert.deepEqual(channel.events.sort(), ["backup.failed", "cert.expiring", "deploy.failed", "health.down", "health.up", "server.offline", "server.online"]);
+  assert.deepEqual(channel.events.sort(), ["backup.failed", "cert.expiring", "deploy.failed", "health.down", "health.up", "server.offline", "server.online", "server.threshold", "server.threshold_cleared"]);
   assert.ok(!JSON.stringify(channel).includes("very-secret"), "the URL path is never returned");
   assert.equal(channel.signingSecret, "••••••••");
   const list = await api.call("GET", base, { token: owner.token });

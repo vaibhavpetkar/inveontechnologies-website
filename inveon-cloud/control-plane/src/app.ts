@@ -28,6 +28,8 @@ import { configureAlerts } from "./modules/alerts/service.js";
 import { configureOutbound } from "./lib/outbound.js";
 import { platformRouter } from "./modules/keys/routes.js";
 import { awsRouter } from "./modules/aws/routes.js";
+import { metricsRouter } from "./modules/metrics/routes.js";
+import { scrapeRouter, scrapeTokensRouter } from "./modules/metrics/prometheus.js";
 
 export function createApp(db: Database, pool: pg.Pool, env: Env) {
   registerPreviewHooks(env);
@@ -90,12 +92,17 @@ export function createApp(db: Database, pool: pg.Pool, env: Env) {
   org.use("/", domainsRouter(db, env));
   org.use("/", backupsRouter(db));
   org.use("/", alertsRouter(db));
+  org.use("/", metricsRouter(db));
+  org.use("/", scrapeTokensRouter(db));
   org.use("/", orgRouter(db, env));
   app.use("/api/v1/orgs/:orgId", org);
 
   app.use("/api/v1", (_req, _res) => {
     throw new NotFoundError("No such endpoint");
   });
+
+  // Prometheus scrape endpoint (read-only, per-organization scrape token).
+  app.use("/", scrapeRouter(db, env));
 
   // install.sh and the agent bundle for the one-line install command.
   const agentDir = env.INVEON_AGENT_DIR ?? resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "agent");
