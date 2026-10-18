@@ -8,6 +8,7 @@ import { requireRole } from "../auth/middleware.js";
 import { randomToken, sha256Hex } from "../../lib/crypto.js";
 import { audit } from "../../lib/audit.js";
 import { ConflictError, NotFoundError } from "../../lib/errors.js";
+import { serverInUse } from "../replicas/pool.js";
 
 export const BOOTSTRAP_TTL_MS = 15 * 60 * 1000;
 
@@ -69,7 +70,7 @@ export function serversRouter(db: Database, env: Env) {
 
   router.patch("/:id", requireRole("admin"), async (req, res) => {
     const body = z
-      .object({ name: z.string().trim().min(1).max(80).optional(), ipAddress: z.string().ip().optional() })
+      .object({ name: z.string().trim().min(1).max(80).optional(), ipAddress: z.string().ip().optional(), privateIpAddress: z.string().ip().nullable().optional() })
       .parse(req.body);
     const server = await loadServer(db, req.member!.orgId, req.params.id);
     const [updated] = await db.update(servers).set(body).where(eq(servers.id, server.id)).returning();
@@ -79,8 +80,7 @@ export function serversRouter(db: Database, env: Env) {
 
   router.delete("/:id", requireRole("admin"), async (req, res) => {
     const server = await loadServer(db, req.member!.orgId, req.params.id);
-    const inUse = await db.query.environments.findFirst({ where: eq(environments.serverId, server.id) });
-    if (inUse) throw new ConflictError("Remove the environments on this server first");
+    if (await serverInUse(db, server.id)) throw new ConflictError("Remove the environments on this server first (or take it out of their replicas and proxies)");
     if ((server.awsInstanceId || server.cloudInstanceId) && server.provisionState !== "terminated" && server.provisionState !== "failed") {
       throw new ConflictError("Terminate the instance first, so it isn't left running");
     }

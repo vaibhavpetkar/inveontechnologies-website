@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
-import { envVars, environments, apps, jobSteps, jobs, releases } from "../../db/schema.js";
+import { envVars, environmentReplicas, environments, apps, jobSteps, jobs, releases } from "../../db/schema.js";
 import { bus, jobEvent, serverJobsEvent, type JobStreamEvent } from "../../lib/bus.js";
 import { decryptValue } from "../../lib/crypto.js";
 import { AppError, ConflictError, NotFoundError } from "../../lib/errors.js";
@@ -118,7 +118,7 @@ export async function buildAgentPayload(db: Database, job: Job, steps: Step[]) {
     if (s.action === "release.prepare") {
       const release = await db.query.releases.findFirst({ where: eq(releases.id, String(params.releaseId)) });
       const environment = await db.query.environments.findFirst({ where: eq(environments.id, String(params.environmentId)) });
-      if (!release || !environment || environment.serverId !== job.serverId) throw new AppError("BAD_JOB", "Release or environment missing", 409);
+      if (!release || !environment || !(await runsOn(db, environment, job.serverId))) throw new AppError("BAD_JOB", "Release or environment missing", 409);
       const app = await db.query.apps.findFirst({ where: eq(apps.id, environment.appId) });
       params.composeContent = release.composeContent;
       params.env = await decryptEnvironmentVars(db, environment.id);
@@ -129,9 +129,19 @@ export async function buildAgentPayload(db: Database, job: Job, steps: Step[]) {
   return { id: job.id, type: job.type, title: job.title, steps: out };
 }
 
+/** The environment runs on this server: its primary, or one of its replicas. */
+async function runsOn(db: Database, environment: typeof environments.$inferSelect, serverId: string) {
+  if (environment.serverId === serverId) return true;
+  const replica = await db.query.environmentReplicas.findFirst({
+    where: and(eq(environmentReplicas.environmentId, environment.id), eq(environmentReplicas.serverId, serverId)),
+    columns: { serverId: true },
+  });
+  return !!replica;
+}
+
 async function ownedEnvironment(db: Database, job: Job, environmentId: string) {
   const environment = await db.query.environments.findFirst({ where: eq(environments.id, environmentId) });
-  if (!environment || environment.serverId !== job.serverId) throw new AppError("BAD_JOB", "Environment missing", 409);
+  if (!environment || !(await runsOn(db, environment, job.serverId))) throw new AppError("BAD_JOB", "Environment missing", 409);
   const app = await db.query.apps.findFirst({ where: eq(apps.id, environment.appId) });
   if (!app) throw new AppError("BAD_JOB", "App missing", 409);
   return { environment, app };

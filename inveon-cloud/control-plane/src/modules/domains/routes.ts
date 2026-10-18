@@ -11,6 +11,7 @@ import { AppError, ConflictError, NotFoundError } from "../../lib/errors.js";
 import { loadEnvironment } from "../apps/routes.js";
 import { createJob, notifyServer, registerJobEffect } from "../jobs/service.js";
 import { dashboardLink, emitAlert } from "../alerts/service.js";
+import { environmentBusy, isPooled, proxyIdOf, replicasOf } from "../replicas/pool.js";
 
 export const HOSTNAME_RE = /^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
@@ -26,15 +27,26 @@ function withDnsRecord(d: Domain, serverIp: string | null) {
   return { ...d, dnsRecord: { type: "A", name: d.hostname, value: serverIp } };
 }
 
-/** HTTP site with the ACME webroot, certbot (webroot), then the HTTPS site. */
-export function issueSteps(hostname: string, slug: string, email: string | null) {
+/**
+ * HTTP site with the ACME webroot, certbot (webroot), then the HTTPS site.
+ * On the environment's proxy; with several servers the sites use the pool.
+ */
+export function issueSteps(hostname: string, slug: string, email: string | null, pool = false) {
+  const p = pool ? { pool: true } : {};
   return [
-    { name: "Write HTTP site", action: "nginx.write_site", params: { hostname, slug, tls: false } },
+    { name: "Write HTTP site", action: "nginx.write_site", params: { hostname, slug, tls: false, ...p } },
     { name: "Reload nginx", action: "nginx.reload", params: {} },
     { name: "Issue certificate", action: "certbot.issue", params: { hostname, email } },
-    { name: "Write HTTPS site", action: "nginx.write_site", params: { hostname, slug, tls: true } },
+    { name: "Write HTTPS site", action: "nginx.write_site", params: { hostname, slug, tls: true, ...p } },
     { name: "Reload nginx", action: "nginx.reload", params: {} },
   ];
+}
+
+/** The server that serves an environment's domains (its proxy) and whether it uses a pool. */
+async function servingServer(db: Database, environment: typeof environments.$inferSelect) {
+  const proxy = await db.query.servers.findFirst({ where: eq(servers.id, proxyIdOf(environment)) });
+  if (!proxy) throw new NotFoundError("Server not found");
+  return { proxy, pooled: isPooled(environment, await replicasOf(db, environment)) };
 }
 
 export async function startIssueJob(db: Database, env: Env, d: Domain, userId: string | null) {
@@ -43,18 +55,21 @@ export async function startIssueJob(db: Database, env: Env, d: Domain, userId: s
   if (!environment.activeSlot) throw new AppError("NOT_DEPLOYED", "Deploy the environment before issuing a certificate (nginx needs its upstream)", 400);
   const busy = await db.query.jobs.findFirst({ where: and(eq(jobs.type, "domain_issue"), inArray(jobs.status, ["pending", "running"]), eq(jobs.environmentId, environment.id)) });
   if (busy && busy.meta.domainId === d.id) throw new ConflictError("A certificate job is already running for this domain");
+  const change = await environmentBusy(db, environment.id);
+  if (change && change !== "deploy" && change !== "rollback") throw new ConflictError("The environment's servers are being changed; issue the certificate when that is done");
+  const { proxy, pooled } = await servingServer(db, environment);
   const job = await createJob(db, {
     orgId: d.orgId,
-    serverId: environment.serverId,
+    serverId: proxy.id,
     environmentId: environment.id,
     type: "domain_issue",
     title: `Certificate for ${d.hostname}`,
     createdBy: userId,
     meta: { domainId: d.id },
-    steps: issueSteps(d.hostname, environment.slug, env.INVEON_ACME_EMAIL ?? null),
+    steps: issueSteps(d.hostname, environment.slug, env.INVEON_ACME_EMAIL ?? null, pooled),
   });
   await db.update(domains).set({ status: "issuing", lastError: null }).where(eq(domains.id, d.id));
-  notifyServer(environment.serverId);
+  notifyServer(proxy.id);
   return job;
 }
 
@@ -63,22 +78,25 @@ export function domainsRouter(db: Database, env: Env) {
 
   router.post("/environments/:envId/domains", requireRole("admin"), async (req, res) => {
     const { hostname } = z.object({ hostname: z.string().trim().toLowerCase().regex(HOSTNAME_RE, "Enter a hostname like app.example.com") }).parse(req.body);
-    const { environment, server } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
+    const { environment } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
+    const { proxy } = await servingServer(db, environment);
     const [d] = await db.insert(domains).values({ orgId: environment.orgId, environmentId: environment.id, hostname }).returning();
     await audit(db, req, "domain.add", "domain", d.id, { hostname, environmentId: environment.id });
-    res.status(201).json({ domain: withDnsRecord(d, server.ipAddress) });
+    res.status(201).json({ domain: withDnsRecord(d, proxy.ipAddress) });
   });
 
   router.get("/environments/:envId/domains", async (req, res) => {
-    const { environment, server } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
+    const { environment } = await loadEnvironment(db, req.member!.orgId, req.params.envId);
+    const { proxy } = await servingServer(db, environment);
     const rows = await db.select().from(domains).where(eq(domains.environmentId, environment.id));
-    res.json({ domains: rows.map((d) => withDnsRecord(d, server.ipAddress)) });
+    res.json({ domains: rows.map((d) => withDnsRecord(d, proxy.ipAddress)) });
   });
 
   // Checks the A record points at the server; if so, starts the certificate job.
   router.post("/domains/:id/verify", requireRole("admin"), async (req, res) => {
     const d = await loadDomain(db, req.member!.orgId, req.params.id);
-    const { server } = await loadEnvironment(db, req.member!.orgId, d.environmentId);
+    const { environment } = await loadEnvironment(db, req.member!.orgId, d.environmentId);
+    const { proxy: server } = await servingServer(db, environment);
     if (!server.ipAddress) throw new AppError("NO_SERVER_IP", "Set the server's public IP first", 400);
     let addresses: string[] = [];
     try {
@@ -139,7 +157,7 @@ registerJobEffect("domain_issue", async (db, job, steps) => {
   }
 });
 
-// Renewal results only update domains that live on the reporting server.
+// Renewal results only update domains served by the reporting server (the environment's proxy).
 registerJobEffect("cert_renew", async (db, job, steps) => {
   if (job.status !== "success") return;
   const result = steps.find((s) => s.action === "certbot.renew")?.result ?? null;
@@ -147,20 +165,20 @@ registerJobEffect("cert_renew", async (db, job, steps) => {
     .select({ id: domains.id, hostname: domains.hostname })
     .from(domains)
     .innerJoin(environments, eq(environments.id, domains.environmentId))
-    .where(and(eq(environments.serverId, job.serverId), eq(domains.status, "active")));
+    .where(and(sql`coalesce(${environments.proxyServerId}, ${environments.serverId}) = ${job.serverId}`, eq(domains.status, "active")));
   for (const r of rows) {
     const at = certExpiry(result, r.hostname);
     if (at) await db.update(domains).set({ certExpiresAt: at }).where(eq(domains.id, r.id));
   }
 });
 
-/** Daily: one renew job per server that has active domains. */
+/** Daily: one renew job per server that serves active domains. */
 export async function queueRenewals(db: Database) {
   const rows = await db
-    .selectDistinct({ serverId: environments.serverId, orgId: environments.orgId, hostname: domains.hostname })
+    .selectDistinct({ serverId: servers.id, orgId: environments.orgId, hostname: domains.hostname })
     .from(domains)
     .innerJoin(environments, eq(environments.id, domains.environmentId))
-    .innerJoin(servers, eq(servers.id, environments.serverId))
+    .innerJoin(servers, eq(servers.id, sql`coalesce(${environments.proxyServerId}, ${environments.serverId})`))
     .where(eq(domains.status, "active"));
   const byServer = new Map<string, { orgId: string; hostnames: string[] }>();
   for (const r of rows) {

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { and, asc, count, desc, eq, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
 import type { Env } from "../../env.js";
-import { apps, backupConfigs, domains, envVars, environments, healthChecks, releases, servers } from "../../db/schema.js";
+import { apps, backupConfigs, domains, envVars, environmentReplicas, environments, healthChecks, releases, servers } from "../../db/schema.js";
 import { requireRole } from "../auth/middleware.js";
 import { decryptValue, encryptValue, randomToken } from "../../lib/crypto.js";
 import { audit } from "../../lib/audit.js";
@@ -19,10 +19,10 @@ import { maintenanceView } from "../deploys/maintenance.js";
 import { slugify } from "../auth/routes.js";
 import { loadServer, publicServer } from "../servers/routes.js";
 import { envVarAad, createJob, notifyServer, type Tx } from "../jobs/service.js";
+import { isPooled, nextPort, proxyIdOf, queueChain, replicasOf, type ChainLink } from "../replicas/pool.js";
 
 export const COMPOSE_PATH_RE = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._\/-]{1,200}\.ya?ml$/;
 export const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
-const PORT_BASE = 20000;
 
 export const REL_PATH_RE = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._\/-]{1,200}$/;
 export const REGISTRY_SERVER_RE = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::\d{1,5})?$/;
@@ -72,8 +72,9 @@ const appBody = z.object({
 
 /**
  * Inserts an environment with two host ports (blue and green) allocated per
- * server, a unique folder slug and an empty backup config. Run it inside a
- * transaction: the advisory lock serialises port allocation per server.
+ * server, a unique folder slug, its primary replica row and an empty backup
+ * config. Run it inside a transaction: the advisory lock serialises port
+ * allocation per server.
  */
 export async function createEnvironmentRecord(
   tx: Tx,
@@ -81,14 +82,13 @@ export async function createEnvironmentRecord(
   serverId: string,
   values: Pick<typeof environments.$inferInsert, "name" | "strategy" | "healthPath" | "autoDeploy" | "releaseCommand" | "releaseService" | "previewPr">,
 ) {
-  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${serverId}))`);
-  const [{ maxPort }] = await tx.select({ maxPort: sql<number | null>`max(${environments.greenPort})` }).from(environments).where(eq(environments.serverId, serverId));
-  const bluePort = maxPort ? maxPort + 1 : PORT_BASE;
+  const bluePort = await nextPort(tx, serverId);
   const slug = `${app.slug}-${values.name}-${randomToken(4).toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 4) || "x"}`.slice(0, 60).replace(/-+$/, "");
   const [row] = await tx
     .insert(environments)
     .values({ ...values, orgId: app.orgId, appId: app.id, serverId, slug, bluePort, greenPort: bluePort + 1 })
     .returning();
+  await tx.insert(environmentReplicas).values({ environmentId: row.id, serverId, bluePort, greenPort: bluePort + 1 });
   await tx.insert(backupConfigs).values({ environmentId: row.id });
   return row;
 }
@@ -335,7 +335,40 @@ export function environmentsRouter(db: Database, env: Env) {
       return;
     }
     let jobId: string | null = null;
-    if (environment.activeSlot) {
+    const replicas = await replicasOf(db, environment);
+    if (isPooled(environment, replicas)) {
+      // Several servers: the proxy drops the sites and the pool first, then each
+      // replica stops its containers and removes its listener and upstream.
+      const hostnames = (await db.select({ hostname: domains.hostname }).from(domains).where(eq(domains.environmentId, environment.id))).map((d) => d.hostname);
+      const label = `${app.name} / ${environment.name}`;
+      const links: ChainLink[] = [
+        {
+          serverId: proxyIdOf(environment),
+          type: "teardown",
+          title: `Remove ${label} from its proxy`,
+          steps: [
+            ...hostnames.map((hostname) => ({ name: `Remove nginx site ${hostname}`, action: "nginx.remove_site", params: { hostname } })),
+            { name: "Remove pool upstream", action: "nginx.remove_pool", params: { slug: environment.slug } },
+            { name: "Reload nginx", action: "nginx.reload", params: {} },
+          ],
+        },
+        ...replicas.map((r) => ({
+          serverId: r.serverId,
+          type: "teardown",
+          title: `Tear down ${label} on ${r.server.name}`,
+          steps: [
+            ...(r.activeSlot ? [{ name: `Stop ${r.activeSlot}`, action: "compose.down", params: { slug: environment.slug, slot: r.activeSlot, composePath: app.composePath } }] : []),
+            { name: "Remove replica listener", action: "nginx.remove_listener", params: { slug: environment.slug } },
+            { name: "Remove nginx upstream", action: "nginx.remove_upstream", params: { slug: environment.slug } },
+            { name: "Reload nginx", action: "nginx.reload", params: {} },
+          ],
+        })),
+      ];
+      // Queued without an environment: the record is deleted now.
+      const job = await queueChain(db, { id: null, orgId: environment.orgId }, links, { createdBy: req.user!.sub });
+      if (job) notifyServer(job.serverId);
+      jobId = job?.id ?? null;
+    } else if (environment.activeSlot) {
       const job = await createJob(db, {
         orgId: environment.orgId,
         serverId: environment.serverId,

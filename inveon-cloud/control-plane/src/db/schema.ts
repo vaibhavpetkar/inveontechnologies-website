@@ -369,7 +369,11 @@ export const environments = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
     appId: uuid("app_id").notNull().references(() => apps.id, { onDelete: "cascade" }),
+    // The primary server: release commands, backups and logs run here, and it
+    // is the first replica a deploy rolls out to (environment_replicas lists all).
     serverId: uuid("server_id").notNull().references(() => servers.id, { onDelete: "restrict" }),
+    // The server whose nginx serves the environment's domains. null: the primary.
+    proxyServerId: uuid("proxy_server_id").references(() => servers.id, { onDelete: "restrict" }),
     name: text("name").notNull(),
     // Globally unique: the agent's folder name and nginx upstream name.
     slug: text("slug").notNull().unique(),
@@ -403,6 +407,31 @@ export const environments = pgTable(
     createdAt: createdAt(),
   },
   (t) => ({ uniqName: unique().on(t.appId, t.name), uniqPort: unique().on(t.serverId, t.bluePort) }),
+);
+
+/**
+ * The servers an environment runs on (always at least its primary). Each
+ * replica has its own colour ports on its server (allocated there), and in
+ * a multi-server environment a listener port the proxy reaches it on. A
+ * deploy rolls out to the active replicas one by one, primary first.
+ */
+export const environmentReplicas = pgTable(
+  "environment_replicas",
+  {
+    environmentId: uuid("environment_id").notNull().references(() => environments.id, { onDelete: "cascade" }),
+    serverId: uuid("server_id").notNull().references(() => servers.id, { onDelete: "restrict" }),
+    bluePort: integer("blue_port").notNull(),
+    greenPort: integer("green_port").notNull(),
+    listenPort: integer("listen_port"),
+    // adding: the current release is being deployed to it; removing: being
+    // taken out of the pool and stopped; failed: adding it failed.
+    status: text("status").$type<"adding" | "active" | "removing" | "failed">().notNull().default("active"),
+    activeSlot: text("active_slot").$type<"blue" | "green" | "main">(),
+    currentReleaseId: uuid("current_release_id"),
+    error: text("error"),
+    createdAt: createdAt(),
+  },
+  (t) => ({ pk: primaryKey({ columns: [t.environmentId, t.serverId] }), uniqPort: unique().on(t.serverId, t.bluePort), byServer: index("environment_replicas_server_idx").on(t.serverId) }),
 );
 
 export const envVars = pgTable(
@@ -494,6 +523,14 @@ export const jobSteps = pgTable(
   (t) => ({ uniq: unique().on(t.jobId, t.position) }),
 );
 
+export interface RolloutState {
+  serverIds: string[];
+  done: string[];
+  // Per server: what it ran before this rollout, and the colour it is moving to.
+  previous: Record<string, { slot: "blue" | "green" | "main" | null; releaseId: string | null; newSlot: "blue" | "green" | "main" }>;
+  failedServerId?: string | null;
+}
+
 export const deployments = pgTable("deployments", {
   id: uuid("id").primaryKey().defaultRandom(),
   environmentId: uuid("environment_id").notNull().references(() => environments.id, { onDelete: "cascade" }),
@@ -508,6 +545,9 @@ export const deployments = pgTable("deployments", {
   releaseOutput: text("release_output"),
   // Backup taken before the release command, offered for restore if it fails.
   backupId: uuid("backup_id").references(() => backups.id, { onDelete: "set null" }),
+  // Multi-server rollouts: the servers in order, the ones already updated
+  // (and what each ran before, for rolling them back), and the one that failed.
+  rollout: jsonb("rollout").$type<RolloutState>(),
   createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: createdAt(),
   finishedAt: ts("finished_at"),

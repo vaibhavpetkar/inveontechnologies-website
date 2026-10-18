@@ -113,6 +113,20 @@
       "when": 1792329550250,
       "tag": "0015_cloud_providers",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1792330157100,
+      "tag": "0016_environment_replicas",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1792330158160,
+      "tag": "0017_backfill_environment_replicas",
+      "breakpoints": true
     }
   ]
 }

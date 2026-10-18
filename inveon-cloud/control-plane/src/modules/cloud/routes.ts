@@ -1,3 +1,4 @@
+import { serverInUse } from "../replicas/pool.js";
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
 import { and, eq, inArray, notInArray } from "drizzle-orm";
@@ -174,7 +175,7 @@ export function cloudRouter(db: Database, env: Env) {
     if (!server.cloudInstanceId) throw new AppError("NOT_PROVIDER_SERVER", "This server has no instance to terminate", 400);
     if (confirm !== server.name) throw new AppError("CONFIRMATION_MISMATCH", "Type the server's name exactly to confirm", 400);
     if (server.provisionState === "terminated") throw new ConflictError("This server is already terminated");
-    if (await db.query.environments.findFirst({ where: eq(environments.serverId, server.id) })) throw new ConflictError("Remove the environments on this server first");
+    if (await serverInUse(db, server.id)) throw new ConflictError("Remove the environments on this server first (or take it out of their replicas and proxies)");
     const { api } = await serverCloud(db, server);
     try {
       const [info] = await api.describe([server.cloudInstanceId]);

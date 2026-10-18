@@ -1,3 +1,4 @@
+import { serverInUse } from "../replicas/pool.js";
 import { Router } from "express";
 import { z } from "zod";
 import { and, eq, notInArray } from "drizzle-orm";
@@ -223,8 +224,7 @@ export function awsRouter(db: Database, env: Env) {
     if (server.provider !== "aws" || !server.awsInstanceId || !server.awsRegion) throw new AppError("NOT_AWS", "Only servers launched from Inveon Cloud can be terminated here", 400);
     if (confirm !== server.name) throw new AppError("CONFIRMATION_MISMATCH", "Type the server's name exactly to confirm", 400);
     if (server.provisionState === "terminated") throw new ConflictError("This instance is already terminated");
-    const inUse = await db.query.environments.findFirst({ where: eq(environments.serverId, server.id) });
-    if (inUse) throw new ConflictError("Remove the environments on this server first");
+    if (await serverInUse(db, server.id)) throw new ConflictError("Remove the environments on this server first (or take it out of their replicas and proxies)");
 
     const api = await apiFor(db, req.member!.orgId, server.awsRegion);
     try {

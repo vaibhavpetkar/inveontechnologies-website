@@ -18,6 +18,7 @@ import { serversRouter } from "./modules/servers/routes.js";
 import { agentRouter } from "./modules/agent/routes.js";
 import { appsRouter, environmentsRouter } from "./modules/apps/routes.js";
 import { deploysRouter, webhookRouter } from "./modules/deploys/routes.js";
+import { replicasRouter } from "./modules/replicas/routes.js";
 import { jobsRouter } from "./modules/jobs/routes.js";
 import { domainsRouter } from "./modules/domains/routes.js";
 import { healthRouter } from "./modules/health/routes.js";
@@ -95,6 +96,7 @@ export function createApp(db: Database, pool: pg.Pool, env: Env) {
   org.use("/apps", appsRouter(db, env));
   org.use("/environments", environmentsRouter(db, env));
   org.use("/environments", deploysRouter(db, env));
+  org.use("/environments", replicasRouter(db));
   org.use("/environments", healthRouter(db, env));
   org.use("/jobs", jobsRouter(db));
   org.use("/", domainsRouter(db, env));

@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, max, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
-import { apps, archivedReleases, deployments, environments, jobs, releases } from "../../db/schema.js";
+import { apps, archivedReleases, deployments, environmentReplicas, environments, jobs, releases } from "../../db/schema.js";
 import { writeAudit } from "../../lib/audit.js";
 import { logger } from "../../lib/logger.js";
 import { createJob, notifyServer, registerJobEffect } from "../jobs/service.js";
@@ -107,9 +107,15 @@ export async function releaseBeingArchived(db: Database, environmentId: string, 
   return !!row;
 }
 
-/** Images every environment on this server still keeps (other than the releases being archived here). */
+/** Images every environment on this server (as primary or replica) still keeps, other than the releases being archived here. */
 async function protectedImages(db: Database, serverId: string, except: { environmentId: string; releaseIds: Set<string> }) {
-  const envs = await db.select().from(environments).where(eq(environments.serverId, serverId));
+  const envs = (
+    await db
+      .selectDistinct({ environment: environments })
+      .from(environments)
+      .leftJoin(environmentReplicas, eq(environmentReplicas.environmentId, environments.id))
+      .where(sql`${environments.serverId} = ${serverId} OR ${environmentReplicas.serverId} = ${serverId}`)
+  ).map((r) => r.environment);
   const keepIds = new Set<string>();
   for (const e of envs) {
     const list = await deployedReleases(db, e.id);
@@ -142,8 +148,28 @@ export async function archiveOldReleases(db: Database, environment: Environment,
   const app = await db.query.apps.findFirst({ where: eq(apps.id, environment.appId) });
   if (!app) return { job: null, archived: 0 };
   const rows = await db.select().from(releases).where(inArray(releases.id, ids));
+  const all = [...new Set(rows.flatMap((r) => releaseImages(app, r)))];
   const keep = await protectedImages(db, environment.serverId, { environmentId: environment.id, releaseIds: new Set(ids) });
-  const images = [...new Set(rows.flatMap((r) => releaseImages(app, r)))].filter((img) => !keep.has(img)).slice(0, 100);
+  const images = all.filter((img) => !keep.has(img)).slice(0, 100);
+  // The other servers of the environment drop the same images (each checked against what it still runs).
+  const others = await db.select({ serverId: environmentReplicas.serverId }).from(environmentReplicas).where(eq(environmentReplicas.environmentId, environment.id));
+  for (const { serverId } of others) {
+    if (serverId === environment.serverId) continue;
+    const keepThere = await protectedImages(db, serverId, { environmentId: environment.id, releaseIds: new Set(ids) });
+    const there = all.filter((img) => !keepThere.has(img)).slice(0, 100);
+    if (!there.length) continue;
+    await createJob(db, {
+      orgId: environment.orgId,
+      serverId,
+      environmentId: environment.id,
+      type: "release_archive_replica",
+      title: `Remove ${there.length} old image${there.length === 1 ? "" : "s"} of ${app.name} / ${environment.name}`,
+      createdBy: userId,
+      meta: { releaseIds: ids },
+      steps: [{ name: `Remove ${there.length} old image${there.length === 1 ? "" : "s"}`, action: "image.remove", params: { images: there } }],
+    });
+    notifyServer(serverId);
+  }
 
   if (!images.length) {
     await db.insert(archivedReleases).values(ids.map((releaseId) => ({ environmentId: environment.id, releaseId }))).onConflictDoNothing();
