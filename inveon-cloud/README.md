@@ -195,7 +195,10 @@ environment's server:
   `image: ${INVEON_IMAGE}`. The pull step then only pulls images that are
   missing (`--policy missing`, Docker Compose 2.22 or later).
 
-Public repos are cloned anonymously. For private repos, generate a
+Public repos are cloned anonymously. When the repo's owner has the
+[GitHub App](#github-app) installed and linked, the clone uses a one-hour
+installation token for that repo only (contents read), sent only in the
+agent's copy of the job. Otherwise, for private repos, generate a
 **deploy key** in the app's settings and add its public half in GitHub under
 Settings, Deploy keys, with write access off. The clone uses it over SSH
 with GitHub's published host keys pinned. Built images stay on the server
@@ -226,8 +229,9 @@ installer again with a new install token does all of this.
   deleted afterwards.
 
 The control plane's own `INVEON_GITHUB_TOKEN` is long-lived and never leaves
-the control plane, so clones don't use it. The agent also accepts a
-short-lived token (kept out of argv), ready for a GitHub App integration.
+the control plane, so clones don't use it. With the [GitHub App](#github-app),
+clones use a short-lived installation token instead (kept out of argv by the
+agent).
 
 ### Preview environments
 
@@ -254,10 +258,18 @@ wildcard DNS record `*.preview.example.com` at that server. Add the
 Pull requests from forks are never deployed, since their code would run on
 your server with the preview's variables. Pushes to the branch never deploy
 previews. If a push lands while the preview's previous deploy is still
-running, that commit is skipped; the next push deploys again. Nothing is
-posted back to GitHub: the GitHub integration only reads repository contents
-and can't comment, so open the preview from the dashboard or the
-`pr-<number>` URL.
+running, that commit is skipped; the next push deploys again.
+
+With the [GitHub App](#github-app) linked for the repo's owner, each pull
+request gets **one comment**, edited in place (a new one if somebody deleted
+it): *Deploying `abc1234`…* when the deploy starts, *Live* with the preview
+URL (`http://` until the certificate is issued, then `https://`) and a
+dashboard link, *failed* with the error, and *Torn down* when the PR is
+closed. The head commit also gets a commit status `inveon-cloud/preview`
+(pending, success with the preview URL, or failure). Updates for one PR are
+sent in order in the background, so GitHub being slow never holds up a
+deploy. Without the app nothing is posted; open the preview from the
+dashboard or the `pr-<number>` URL.
 
 ## Operations
 
@@ -469,14 +481,17 @@ scrapes don't.
 
 ### Upgrading servers for these features
 
-Live logs, backup retention, release archiving and metrics need the new
+Live logs, backup retention, release archiving, metrics and request signing need the new
 agent on each server: copy the new bundle to `/opt/inveon-agent` and run
 `systemctl restart inveon-agent` (or run the installer again with a new
 install token). An older agent keeps working for everything else; a live
 log stream to it fails after 30 seconds with a message, and prune and
 archive jobs fail with "Action not allowed" until it is updated. An older
 agent sends no metrics: its charts stay empty and only the offline rule
-works for it. Give the
+works for it. Request signing also needs the new agent: once restarted it
+enrols its key on its own and the server shows **Signed requests**; turn on
+**Refuse unsigned agent requests** only when no server is listed as
+unsigned. Give the
 server's AWS role `s3:DeleteObject` on its backup prefix before turning on
 retention.
 
@@ -665,6 +680,51 @@ is deleted, and the server can be removed from the list (it can't be
 removed while its instance may still run). Launches, terminations and
 connection changes are audit-logged (never the secret key).
 
+### GitHub App
+
+Optional. Without it, the control plane reads repos with
+`INVEON_GITHUB_TOKEN` (or anonymously), builds clone with deploy keys, and
+each repo needs its own webhook. With it:
+
+- **Reads** (commit lookups and the compose file) and **clones** use
+  installation tokens: minted from an RS256 app JWT (signed with node:crypto,
+  9 minutes), always narrowed to the one repository and the permission
+  needed (`contents: read` for reads and clones, `pull_requests` and
+  `statuses: write` for previews), valid an hour and cached until 5 minutes
+  before they expire. `INVEON_GITHUB_TOKEN` stays the fallback for repos whose
+  owner has no linked installation, or while an installation is suspended.
+- **Previews** get their [pull request comment and commit status](#preview-environments).
+- **The app's webhook** (`/api/v1/webhooks/github-app`, signed with
+  `INVEON_GITHUB_APP_WEBHOOK_SECRET`) delivers pushes and pull requests of
+  every installed repo to the apps of the linked organization with that
+  repo, so per-repo webhooks aren't needed (remove them to avoid double
+  deliveries; a duplicate deploy is refused anyway). Uninstalling the app
+  unlinks it; suspending it stops its use until it is unsuspended.
+
+To set it up, create a GitHub App (your organization's Settings, Developer
+settings, GitHub Apps):
+
+1. **Permissions:** Contents read-only, Metadata read-only, Pull requests
+   read and write, Commit statuses read and write. **Events:** Push, Pull
+   request.
+2. **Webhook URL** `https://<control plane>/api/v1/webhooks/github-app` with a
+   long random secret. **Setup URL**
+   `https://<control plane>/api/v1/github/setup`, with **Request user
+   authorization (OAuth) during installation** ticked.
+3. Generate a private key and set `INVEON_GITHUB_APP_ID`,
+   `INVEON_GITHUB_APP_SLUG`, `INVEON_GITHUB_APP_PRIVATE_KEY` (the PEM, or
+   `base64 -w0` of it), `INVEON_GITHUB_APP_CLIENT_ID`,
+   `INVEON_GITHUB_APP_CLIENT_SECRET` and `INVEON_GITHUB_APP_WEBHOOK_SECRET`,
+   then restart.
+4. In the dashboard, Apps, **Install the GitHub App** (admins). GitHub sends
+   you back with the installation id and an OAuth code. The control plane
+   links the installation only if the signed state (organization and admin,
+   1 hour) checks out, you are still an admin there, and the GitHub user
+   who just authorized can see that installation (`GET /user/installations`),
+   so nobody can link another account's installation by guessing its id.
+   An installation belongs to one organization. Linking and unlinking are
+   audit-logged.
+
 ### Control plane environment variables
 
 | Variable | Default | Notes |
@@ -679,7 +739,11 @@ connection changes are audit-logged (never the secret key).
 | `INVEON_OPEN_SIGNUP` | `true` | `false` means invite-only (after the first account). |
 | `INVEON_DASHBOARD_DIR` | unset | Built dashboard to serve on the same origin (set in the Docker image). |
 | `INVEON_AGENT_DIR` | `../agent` | Folder with `install.sh` and `inveon-agent.tar.gz`. |
-| `INVEON_GITHUB_TOKEN` | unset | Needed for private repos. |
+| `INVEON_GITHUB_TOKEN` | unset | Private repos without the GitHub App (and the fallback with it). |
+| `INVEON_GITHUB_APP_ID`, `_SLUG`, `_PRIVATE_KEY`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_WEBHOOK_SECRET` | unset | The optional [GitHub App](#github-app). The private key is the PEM or base64 of it. |
+| `INVEON_KMS_REGION` | AWS SDK default | Region of the KMS key behind [KMS-backed master keys](#kms-backed-master-keys). |
+| `INVEON_AGENT_SIGNATURES` | `optional` | `required` refuses unsigned agent requests in every organization; see [signed agent requests](#signed-agent-requests). |
+| `INVEON_WEBAUTHN_ORIGINS` | unset | Extra browser origins for [passkeys](#passkeys) on the same host (for example the Vite dev server). |
 | `INVEON_ACME_EMAIL` | unset | Let's Encrypt account email. |
 | `INVEON_SMTP_HOST`, `_PORT`, `_SECURE`, `_USER`, `_PASSWORD`, `INVEON_MAIL_FROM` | unset | Invites, health emails and email alert channels. |
 | `INVEON_ALERT_PRIVATE_HOSTS` | unset | Comma-separated hosts that alert webhooks may reach on a private address or over plain http. Only for trusted internal endpoints. |
@@ -694,7 +758,8 @@ connection changes are audit-logged (never the secret key).
 
 The agent's configuration is in `/etc/inveon-agent/config.json` (mode
 `0600`). It holds the control-plane URL, server ID and agent token, plus
-optional paths (`appsRoot`, `nginxConfDir`, `acmeWebroot`). To read its logs,
+optional paths (its request-signing key is `agent-key.pem` next to it, also
+`0600`): `appsRoot`, `nginxConfDir`, `acmeWebroot`. To read its logs,
 run `journalctl -u inveon-agent -f`.
 
 ## Security
@@ -718,8 +783,9 @@ run `journalctl -u inveon-agent -f`.
   - access tokens live in memory;
   - the refresh token is a rotating `httpOnly` cookie, and reusing an old
     refresh token revokes every session;
-  - [two-factor authentication](#two-factor-authentication) is required for
-    owners (and, per organization, for admins).
+  - [two-factor authentication](#two-factor-authentication) (TOTP or a
+    [passkey](#passkeys)) is required for owners (and, per organization,
+    for admins).
 - **Secrets** use envelope encryption. Each value has its own random
   AES-256-GCM data key, and that key is wrapped with `INVEON_MASTER_KEY`.
   The ciphertext is bound to its environment and key, so copying it to
@@ -735,6 +801,8 @@ run `journalctl -u inveon-agent -f`.
 - **Agents:**
   - the install token is single-use and expires after 15 minutes;
   - each server's agent token is random and stored hashed;
+  - every request is also [signed](#signed-agent-requests) with the
+    server's own Ed25519 key, so a leaked token alone is not enough;
   - an agent can only claim, report on and finish **its own server's** jobs;
   - the control plane re-checks results instead of trusting them: a job
     reported as successful while it still has unfinished steps is marked
@@ -780,6 +848,9 @@ run `journalctl -u inveon-agent -f`.
   streams (with the service), job cancels, registry credentials and deploy
   keys (never their values), preview creation and teardown, alert channels
   (create, update, test, secret rotation, delete; never the URL or secret),
+  passkeys added, removed, failed and suspected clones, agent signing keys
+  enrolled and rotated, GitHub App installations linked, unlinked,
+  suspended and uninstalled,
   master key rotations started from the dashboard, AWS connections, EC2
   launches and terminations, threshold rules, threshold incidents opening and
   resolving, scrape tokens (created and revoked; never the token),
@@ -819,6 +890,34 @@ admins too** on the Team page to extend this to admins.
   where the resetting owner isn't an owner, and for yourself. It's
   audit-logged (`member.2fa_reset`); enabling, disabling, new recovery codes
   and failed codes are logged on the user.
+
+### Passkeys
+
+**Account, Passkeys:** add a passkey (Touch ID, Windows Hello, a phone or a
+security key) after entering your password again, since a passkey can sign
+in on its own; rename or remove it (password again). The login page has
+**Sign in with a passkey**, and after a password a passkey works as the
+second step instead of a code.
+
+- **Server-side checks** (`lib/webauthn.ts`, node:crypto only, with a small
+  CBOR decoder): the challenge (32 random bytes, stored server-side for 5
+  minutes, deleted when used), `type`, the origin (`INVEON_PUBLIC_URL`'s
+  origin), no cross-origin, the rpId hash (`INVEON_PUBLIC_URL`'s host), user
+  presence, and user verification (PIN or biometrics) when the passkey is
+  the only factor. Keys: ES256, EdDSA (Ed25519) and RS256 (2048 bits or
+  more). Attestation is requested as `none`; `none` and `packed` (self
+  attestation, or a signature by the x5c leaf, whose chain isn't checked)
+  are accepted, anything else is refused.
+- **Sign counter:** must go up whenever it isn't 0. A counter that stays or
+  goes back is refused and logged as a possible cloned authenticator.
+  Synced passkeys, which always report 0, work.
+- **Two-factor:** a passkey sign-in with user verification is two factors
+  in one, so having a passkey satisfies the owner (and admin) requirement.
+  Once you have one, a password alone no longer signs in. Failed passkey
+  sign-ins count towards the same lockout as passwords. An owner's
+  **Reset 2FA** removes the member's passkeys too.
+- Only the public key (SPKI) and the counter are stored; the user handle
+  is the account's id, never the email.
 
 ### Rotating the master key
 
@@ -860,10 +959,62 @@ To rotate:
    configured.
 
 To go back, make the old id current again and re-wrap. Keys stay in the
-environment only. A KMS-backed key can be added to the keyring as another
-key id (`registerKeyEncryptionKey` in `lib/crypto.ts` takes anything that
-wraps and unwraps a data key with a context), so moving to AWS KMS is the
-same rotation.
+environment only.
+
+#### KMS-backed master keys
+
+A keyring entry can be a data key encrypted by AWS KMS instead of the key
+itself: `INVEON_MASTER_KEYS=<id>:kms:<base64 CiphertextBlob>`. The control
+plane (and `keys.js`) asks KMS to decrypt it **once at start-up**, bound to
+the encryption context `inveon:purpose=master-key`, and then uses it like
+any other key, so the environment and its backups only hold a ciphertext
+that is useless without `kms:Decrypt` on the control plane's role. If KMS
+refuses, the control plane doesn't start.
+
+```bash
+# needs kms:GenerateDataKey on the key; prints only the encrypted copy
+npm run keys:kms-generate -- arn:aws:kms:ap-south-1:<account>:key/<key id> --id kms-2026-10
+# -> INVEON_MASTER_KEYS=kms-2026-10:kms:AQIDAHh…
+```
+
+Add that entry to `INVEON_MASTER_KEYS` (comma-separated with the others; it
+becomes current as the last one listed), restart, and run the usual
+`keys:rotate`. The command accepts a key id, ARN or `alias/<name>`; the
+region comes from the ARN, else `INVEON_KMS_REGION`, else the AWS SDK's
+default. Keep a second key (or the KMS key itself) recoverable: losing access
+to the KMS key loses the values wrapped with it. The dashboard's
+**Encryption keys** page marks KMS-backed ids.
+
+### Signed agent requests
+
+Every agent request carries, next to the bearer token:
+
+```
+X-Inveon-Timestamp: <unix seconds>
+X-Inveon-Nonce: <16 random bytes, base64url>
+X-Inveon-Signature: base64(Ed25519 over "inveon-agent-v1\n<METHOD>\n<path and query>\n<timestamp>\n<nonce>\n<hex SHA-256 of the body>")
+```
+
+The agent makes its key (`agent-key.pem`, `0600`, next to its config) when
+it registers and sends the public half with the install token; an agent
+upgraded from before signing makes one on its next start and enrols it
+(`POST /api/v1/agent/signing-key`, accepted on the bearer token only while
+the server has no key; replacing a key needs a request signed with the
+current one; running the installer again replaces it). The control plane
+refuses a missing or invalid signature, a timestamp more than 5 minutes off
+(keep the servers' clocks in sync) and a nonce it has already seen (kept in
+`agent_request_nonces` until it expires). A server with a key must always
+sign. Servers without one keep working, and **Servers** shows which still
+send unsigned requests, until an owner ticks **Refuse unsigned agent
+requests** (or `INVEON_AGENT_SIGNATURES=required` turns it on everywhere).
+
+**Why not mTLS:** the control plane sits behind a shared nginx that also
+serves browser sites. Client certificates would have to be requested on
+that shared TLS endpoint (browsers then prompt for, or fail on,
+certificates), and TLS ends at nginx, so the control plane would only see a
+header nginx forwards. Signing at the application layer works through any
+proxy, binds each request's method, path and body to the server's key, and
+stops replays, which mTLS alone doesn't.
 
 ## Tests
 
@@ -883,10 +1034,28 @@ a fake GitHub API, and act as the agent. They cover:
   owner requirement (and admins when the organization asks), the two-step
   sign-in, refusing a replayed code, single-use recovery codes, expired and
   forged challenges, the lockout, turning it off, and an owner's reset;
+- passkeys: the CBOR decoder, ES256, EdDSA and RS256 with `none` and
+  `packed` attestation, every client-data and authenticator-data check,
+  registration (password again, single-use and user-bound challenges,
+  duplicates), passwordless sign-in with user verification, replays,
+  expired challenges, a cloned counter, synced passkeys, the passkey as the
+  second step, the owner requirement, removal and an owner's reset, all
+  with a software authenticator built from generated keys;
+- signed agent requests: the shared fixed vector, refusing unsigned, old,
+  replayed, re-pathed and re-bodied requests, the per-organization and
+  global switch, enrolling a key on upgrade and rotating it;
+- the GitHub App: the app JWT, the setup state, linking (OAuth user must see
+  the installation, one organization per installation), scoped and cached
+  installation tokens for reads and clones with the fallback, the single
+  PR comment through deploy, failure, redeploy, deletion and teardown,
+  commit statuses, and the app webhook (pushes, PRs, suspend, uninstall);
 - bootstrap tokens: single use and 15-minute expiry;
 - agent authentication, and that one server can't claim, report on or finish
   another server's job;
 - secret encryption round trip, masking and write-only reads;
+- KMS-backed master keys (against a fake KMS in `test/fake-aws.mjs`):
+  `keys:kms-generate`, decrypting once at start-up, rotating onto and off a
+  KMS key with `keys:rotate`, and a bad blob stopping start-up;
 - master key rotation: old `v1` values still decrypt next to a new key, the
   key id is authenticated, every `*_enc` column in the schema is covered, a
   partial run resumes, a second run changes nothing, values decrypt with
@@ -940,7 +1109,8 @@ fails, health retries, backups, the release command, the clone and build
 (deploy key, token, symlinks, `HEAD` check), registry login and logout,
 preview teardown, every unsafe-compose rule, the exact `logs -f`,
 `aws s3 rm` and `docker image rm` argument lists with their parameter
-checks, cancelling a live log stream while it is quiet, and metrics: the
+checks, cancelling a live log stream while it is quiet, request signing
+(the fixed vector, the `0600` key, enrolment and its retry), and metrics: the
 `/proc` parsers (CPU, memory, network), `docker stats` and `docker ps`
 parsing, the exact docker argument lists, and the send buffer (batches,
 retries, refused batches dropped, size cap).
@@ -1009,11 +1179,8 @@ rollback.
 - Other clouds (DigitalOcean, Hetzner) behind the same provider interface as
   EC2, and resizing or stopping instances from the dashboard.
 - Build on a separate build host (builds run on each environment's server
-  today), and a GitHub App integration for short-lived clone tokens and
-  preview links posted on pull requests.
-- A KMS-backed master key (the keyring already takes one), and mTLS for
-  agents.
-- SSO, and WebAuthn security keys next to TOTP.
+  today).
+- SSO.
 - Central log search across servers (live logs and the last lines are
   per environment today), and metric history beyond 30 days.
 - Maintenance windows in a chosen time zone (they are UTC today).
