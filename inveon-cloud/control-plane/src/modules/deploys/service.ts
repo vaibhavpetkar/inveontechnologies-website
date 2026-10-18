@@ -9,6 +9,7 @@ import { logger } from "../../lib/logger.js";
 import { createJob, notifyServer, registerJobEffect, type StepInput } from "../jobs/service.js";
 import { backupConfigured, backupParams, newBackupRow, recordBackupStep } from "../backups/routes.js";
 import { dashboardLink, emitAlert } from "../alerts/service.js";
+import { repoReadToken } from "../github/service.js";
 
 type App = typeof apps.$inferSelect;
 type Environment = typeof environments.$inferSelect;
@@ -24,14 +25,16 @@ export async function resolveRelease(
 ): Promise<Release> {
   let sha = input.commitSha;
   let message = input.commitMessage ?? null;
+  // A GitHub App installation token for this repo when there is one, else INVEON_GITHUB_TOKEN.
+  const token = await repoReadToken(db, env, app);
   if (!sha) {
-    const head = await fetchHeadCommit(env, app.repoOwner, app.repoName, app.branch);
+    const head = await fetchHeadCommit(env, app.repoOwner, app.repoName, app.branch, token);
     sha = head.sha;
     message = head.message;
   }
   const existing = await db.query.releases.findFirst({ where: and(eq(releases.appId, app.id), eq(releases.commitSha, sha)) });
   if (existing) return existing;
-  const composeContent = await fetchFileAtCommit(env, app.repoOwner, app.repoName, app.composePath, sha);
+  const composeContent = await fetchFileAtCommit(env, app.repoOwner, app.repoName, app.composePath, sha, token);
   const [release] = await db
     .insert(releases)
     .values({ appId: app.id, commitSha: sha, commitMessage: message?.slice(0, 2000) ?? null, composeContent, source: input.source, createdBy: input.userId ?? null })
@@ -188,6 +191,13 @@ async function onDeployFinished(db: Database, job: typeof jobs.$inferSelect, ste
   const environment = await db.query.environments.findFirst({ where: eq(environments.id, deployment.environmentId) });
   if (!environment) return;
   await alertDeployOutcome(db, job, environment, deployment);
+  for (const [name, hook] of finishHooks) {
+    try {
+      await hook(db, environment, deployment, job);
+    } catch (err) {
+      logger.error({ err, hook: name, environmentId: environment.id }, "Deploy hook failed");
+    }
+  }
   if (job.status !== "success") {
     await cleanUpFailedDeploy(db, job, steps, environment, deployment);
     return;
@@ -228,6 +238,14 @@ async function alertDeployOutcome(db: Database, job: typeof jobs.$inferSelect, e
   } else {
     await emitAlert(db, environment.orgId, "deploy.succeeded", { title: `${verb} succeeded: ${label}`, text: `${sha} is live on ${label}.`, severity: "info", url, details });
   }
+}
+
+type FinishHook = (db: Database, environment: Environment, deployment: typeof deployments.$inferSelect, job: typeof jobs.$inferSelect) => Promise<void>;
+const finishHooks = new Map<string, FinishHook>();
+
+/** Runs after every deploy or rollback, whatever the outcome (job.status), before the environment is switched. */
+export function onDeployDone(name: string, fn: FinishHook) {
+  finishHooks.set(name, fn);
 }
 
 type SuccessHook = (db: Database, environment: Environment) => Promise<void>;

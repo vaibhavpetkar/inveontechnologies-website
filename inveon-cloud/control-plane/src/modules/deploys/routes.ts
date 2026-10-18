@@ -15,7 +15,8 @@ import { createDeployment, resolveRelease } from "./service.js";
 import { archiveOldReleases, deployedReleases, releaseBeingArchived } from "./archive.js";
 import { maintenanceView, outsideWindow, queueForWindow } from "./maintenance.js";
 import { LOG_FOLLOW_MAX_SEC, startLogFollow } from "../live-logs/service.js";
-import { previewName, previewsReady, startPreviewTeardown, upsertPreviewEnvironment } from "../previews/service.js";
+import { previewHostname, previewName, previewsReady, startPreviewTeardown, upsertPreviewEnvironment } from "../previews/service.js";
+import { notifyPreview } from "../github/service.js";
 
 export function deploysRouter(db: Database, env: Env) {
   const router = Router({ mergeParams: true });
@@ -193,40 +194,55 @@ export function webhookRouter(db: Database, env: Env) {
       res.status(202).json({ ok: true, ...result });
       return;
     }
-    const payload = body as { ref?: string; after?: string; deleted?: boolean; head_commit?: { message?: string } | null };
-    if (payload.ref !== `refs/heads/${app.branch}` || payload.deleted || !payload.after || !/^[0-9a-f]{40}$/.test(payload.after)) {
-      res.status(202).json({ ok: true, ignored: "not a push to the deploy branch" });
-      return;
-    }
-    const release = await resolveRelease(db, env, app, { commitSha: payload.after, commitMessage: payload.head_commit?.message ?? null, source: "webhook" });
-    await writeAudit(db, { orgId: app.orgId, action: "release.create", entityType: "app", entityId: app.id, metadata: { commitSha: release.commitSha, source: "webhook" }, ipAddress: req.ip });
-
-    const targets = await db.select().from(environments).where(eq(environments.appId, app.id));
-    const started: string[] = [];
-    const queued: string[] = [];
-    // Previews are deployed only by their own pull request.
-    for (const environment of targets.filter((e) => e.autoDeploy && e.previewPr === null)) {
-      // Outside its maintenance window the release waits; a newer push replaces it.
-      if (outsideWindow(environment)) {
-        await queueForWindow(db, environment, release.id);
-        queued.push(environment.id);
-        await writeAudit(db, { orgId: app.orgId, action: "deploy.queued", entityType: "environment", entityId: environment.id, metadata: { commitSha: release.commitSha, source: "webhook", until: maintenanceView(environment).next?.start ?? null } });
-        continue;
-      }
-      try {
-        const { job } = await createDeployment(db, { environment, app, release, kind: "deploy" });
-        started.push(job.id);
-        await writeAudit(db, { orgId: app.orgId, action: "deploy.create", entityType: "environment", entityId: environment.id, metadata: { jobId: job.id, commitSha: release.commitSha, source: "webhook" } });
-      } catch (err) {
-        logger.warn({ err, environmentId: environment.id }, "Webhook deploy skipped");
-      }
-    }
-    res.status(202).json({ ok: true, releaseId: release.id, jobIds: started, queuedEnvironmentIds: queued });
+    const result = await handlePush(db, env, app, body as PushPayload, req.ip);
+    res.status(202).json({ ok: true, ...result });
   });
   return router;
 }
 
-interface PullRequestPayload {
+export interface PushPayload {
+  ref?: string;
+  after?: string;
+  deleted?: boolean;
+  head_commit?: { message?: string } | null;
+}
+
+/**
+ * A push to the app's branch creates a release and deploys every
+ * environment with auto-deploy on (or queues it for the maintenance
+ * window). Used by the app's own webhook and by the GitHub App's.
+ */
+export async function handlePush(db: Database, env: Env, app: typeof apps.$inferSelect, payload: PushPayload, ip: string | undefined) {
+  if (payload.ref !== `refs/heads/${app.branch}` || payload.deleted || !payload.after || !/^[0-9a-f]{40}$/.test(payload.after)) {
+    return { ignored: "not a push to the deploy branch" };
+  }
+  const release = await resolveRelease(db, env, app, { commitSha: payload.after, commitMessage: payload.head_commit?.message ?? null, source: "webhook" });
+  await writeAudit(db, { orgId: app.orgId, action: "release.create", entityType: "app", entityId: app.id, metadata: { commitSha: release.commitSha, source: "webhook" }, ipAddress: ip });
+
+  const targets = await db.select().from(environments).where(eq(environments.appId, app.id));
+  const started: string[] = [];
+  const queued: string[] = [];
+  // Previews are deployed only by their own pull request.
+  for (const environment of targets.filter((e) => e.autoDeploy && e.previewPr === null)) {
+    // Outside its maintenance window the release waits; a newer push replaces it.
+    if (outsideWindow(environment)) {
+      await queueForWindow(db, environment, release.id);
+      queued.push(environment.id);
+      await writeAudit(db, { orgId: app.orgId, action: "deploy.queued", entityType: "environment", entityId: environment.id, metadata: { commitSha: release.commitSha, source: "webhook", until: maintenanceView(environment).next?.start ?? null } });
+      continue;
+    }
+    try {
+      const { job } = await createDeployment(db, { environment, app, release, kind: "deploy" });
+      started.push(job.id);
+      await writeAudit(db, { orgId: app.orgId, action: "deploy.create", entityType: "environment", entityId: environment.id, metadata: { jobId: job.id, commitSha: release.commitSha, source: "webhook" } });
+    } catch (err) {
+      logger.warn({ err, environmentId: environment.id }, "Webhook deploy skipped");
+    }
+  }
+  return { releaseId: release.id, jobIds: started, queuedEnvironmentIds: queued };
+}
+
+export interface PullRequestPayload {
   action?: string;
   number?: number;
   pull_request?: {
@@ -242,7 +258,7 @@ interface PullRequestPayload {
  * requests from forks are never deployed: their code would run on our
  * server with the preview's variables.
  */
-async function handlePullRequest(db: Database, env: Env, app: typeof apps.$inferSelect, payload: PullRequestPayload, ip: string | undefined) {
+export async function handlePullRequest(db: Database, env: Env, app: typeof apps.$inferSelect, payload: PullRequestPayload, ip: string | undefined) {
   if (!previewsReady(app)) return { ignored: "previews are off for this app" };
   const pr = payload.number;
   const action = payload.action ?? "";
@@ -279,6 +295,7 @@ async function handlePullRequest(db: Database, env: Env, app: typeof apps.$infer
   try {
     const { job } = await createDeployment(db, { environment, app, release, kind: "deploy" });
     await writeAudit(db, { orgId: app.orgId, action: "deploy.create", entityType: "environment", entityId: environment.id, metadata: { jobId: job.id, commitSha: release.commitSha, source: "pull_request", pr } });
+    void notifyPreview(db, { app, pr: pr!, state: "deploying", commitSha: release.commitSha, environmentId: environment.id, hostname: previewHostname(app, pr!) });
     return { environmentId: environment.id, releaseId: release.id, jobIds: [job.id] };
   } catch (err) {
     if (err instanceof ConflictError) return { environmentId: environment.id, releaseId: release.id, jobIds: [], skipped: err.message };

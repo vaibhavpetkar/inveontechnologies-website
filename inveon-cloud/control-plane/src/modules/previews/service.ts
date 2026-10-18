@@ -1,14 +1,15 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
 import type { Env } from "../../env.js";
-import { apps, domains, envVars, environments, jobs, servers } from "../../db/schema.js";
+import { apps, domains, envVars, environments, jobs, releases, servers } from "../../db/schema.js";
 import { decryptValue, encryptValue } from "../../lib/crypto.js";
 import { logger } from "../../lib/logger.js";
 import { AppError, ConflictError } from "../../lib/errors.js";
 import { createEnvironmentRecord } from "../apps/routes.js";
 import { HOSTNAME_RE, startIssueJob } from "../domains/routes.js";
 import { completeJob, createJob, envVarAad, notifyServer, registerJobEffect, type StepInput } from "../jobs/service.js";
-import { onDeploySucceeded } from "../deploys/service.js";
+import { onDeployDone, onDeploySucceeded } from "../deploys/service.js";
+import { notifyPreview } from "../github/service.js";
 
 type App = typeof apps.$inferSelect;
 type Environment = typeof environments.$inferSelect;
@@ -135,6 +136,9 @@ export async function startPreviewTeardown(db: Database, environment: Environmen
 registerJobEffect("preview_teardown", async (db, job) => {
   if (job.status !== "success") return;
   const environmentId = String(job.meta.environmentId ?? "");
+  const environment = await db.query.environments.findFirst({ where: eq(environments.id, environmentId) });
+  const app = environment ? await db.query.apps.findFirst({ where: eq(apps.id, environment.appId) }) : undefined;
+  if (app && environment?.previewPr) void notifyPreview(db, { app, pr: environment.previewPr, state: "removed" });
   const queued = await db.select({ id: jobs.id }).from(jobs).where(and(eq(jobs.environmentId, environmentId), eq(jobs.status, "pending")));
   for (const q of queued) await completeJob(db, q.id, "cancelled", "The preview was torn down");
   await db.delete(environments).where(and(eq(environments.id, environmentId), eq(environments.serverId, job.serverId)));
@@ -147,6 +151,23 @@ registerJobEffect("preview_teardown", async (db, job) => {
  * HTTP site first, so the preview works over HTTP even if certbot fails.
  */
 export function registerPreviewHooks(env: Env) {
+  // The pull request's comment and commit status follow every preview deploy.
+  onDeployDone("preview-comment", async (db, environment, deployment, job) => {
+    if (environment.previewPr === null || (job.status !== "success" && job.status !== "failure")) return;
+    const app = await db.query.apps.findFirst({ where: eq(apps.id, environment.appId) });
+    const release = await db.query.releases.findFirst({ where: eq(releases.id, deployment.releaseId), columns: { commitSha: true } });
+    if (!app || !previewsReady(app)) return;
+    void notifyPreview(db, {
+      app,
+      pr: environment.previewPr,
+      state: job.status === "success" ? "live" : "failed",
+      commitSha: release?.commitSha,
+      environmentId: environment.id,
+      hostname: previewHostname(app, environment.previewPr),
+      error: job.error,
+    });
+  });
+
   onDeploySucceeded("previews", async (db, environment) => {
     if (environment.previewPr === null) return;
     if (await teardownPending(db, environment.id)) return;

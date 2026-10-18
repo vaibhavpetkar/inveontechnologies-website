@@ -30,6 +30,7 @@ import { platformRouter } from "./modules/keys/routes.js";
 import { awsRouter } from "./modules/aws/routes.js";
 import { metricsRouter } from "./modules/metrics/routes.js";
 import { scrapeRouter, scrapeTokensRouter } from "./modules/metrics/prometheus.js";
+import { githubAppWebhookRouter, githubRouter, githubSetupRouter } from "./modules/github/routes.js";
 
 export function createApp(db: Database, pool: pg.Pool, env: Env) {
   registerPreviewHooks(env);
@@ -61,6 +62,7 @@ export function createApp(db: Database, pool: pg.Pool, env: Env) {
 
   // Raw-body and agent routes parse their own bodies.
   app.use("/api/v1/webhooks", webhookRouter(db, env));
+  app.use("/api/v1/webhooks", githubAppWebhookRouter(db, env));
   app.use("/api/v1/agent", agentRouter(db, env));
 
   app.use(express.json({ limit: "256kb" }));
@@ -79,6 +81,7 @@ export function createApp(db: Database, pool: pg.Pool, env: Env) {
   app.use("/api/v1/auth", authRouter(db, env));
   app.use("/api/v1/orgs", requireAuth(env), orgCreateRouter(db));
   app.use("/api/v1/platform", requireAuth(env), platformRouter(db, env));
+  app.use("/api/v1/github", githubSetupRouter(db, env));
 
   const org = Router({ mergeParams: true });
   org.use(requireAuth(env), requireMember(db));
@@ -94,6 +97,7 @@ export function createApp(db: Database, pool: pg.Pool, env: Env) {
   org.use("/", alertsRouter(db));
   org.use("/", metricsRouter(db));
   org.use("/", scrapeTokensRouter(db));
+  org.use("/", githubRouter(db));
   org.use("/", orgRouter(db, env));
   app.use("/api/v1/orgs/:orgId", org);
 

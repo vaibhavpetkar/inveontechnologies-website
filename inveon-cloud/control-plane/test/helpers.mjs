@@ -8,7 +8,7 @@
 import { spawn, execFileSync } from "node:child_process";
 import { createServer as createNetServer } from "node:net";
 import { createServer as createHttpServer } from "node:http";
-import { randomUUID, randomBytes } from "node:crypto";
+import { randomUUID, randomBytes, verify } from "node:crypto";
 import pg from "pg";
 import jwt from "jsonwebtoken";
 
@@ -28,33 +28,128 @@ export function freePort() {
 
 export const sha = () => randomBytes(20).toString("hex");
 
-/** Minimal GitHub API: commit lookup and raw file contents per (repo, sha). */
+/**
+ * Minimal GitHub: commit lookup and raw file contents per (repo, sha), and
+ * the GitHub App side (app JWTs checked against the app's public key,
+ * installation tokens, the OAuth code exchange, the user's installations,
+ * PR comments and commit statuses). Every request is recorded in `calls`.
+ */
 async function startFakeGithub() {
   const heads = new Map(); // "owner/repo@branch" -> { sha, message }
   const files = new Map(); // "owner/repo@sha:path" -> text
+  const calls = []; // { method, path, auth, body }
+  const app = { appId: null, publicKey: null };
+  const installations = new Map(); // id -> { id, account: { login, type } }
+  const tokens = new Map(); // installation token -> { installationId, repositories, permissions, expiresAt }
+  const oauthCodes = new Map(); // code -> user token
+  const userInstallations = new Map(); // user token -> [installation ids]
+  const comments = new Map(); // id -> { repo, pr, body }
+  const statuses = []; // { repo, sha, state, target_url, context, description }
+  let nextComment = 1000;
   const defaultCompose = "services:\n  web:\n    image: nginx:alpine\n    ports:\n      - \"127.0.0.1:${INVEON_HTTP_PORT}:80\"\n";
+
+  /** Checks an app JWT: RS256 with the app's key, iss = app id, not expired. */
+  const appJwtOk = (auth) => {
+    const m = /^Bearer (.+)\.(.+)\.(.+)$/.exec(auth ?? "");
+    if (!m || !app.publicKey) return false;
+    const header = JSON.parse(Buffer.from(m[1], "base64url").toString());
+    const payload = JSON.parse(Buffer.from(m[2], "base64url").toString());
+    const ok = verify("sha256", Buffer.from(`${m[1]}.${m[2]}`), app.publicKey, Buffer.from(m[3], "base64url"));
+    const now = Date.now() / 1000;
+    return ok && header.alg === "RS256" && String(payload.iss) === String(app.appId) && payload.exp > now && payload.iat <= now && payload.exp - payload.iat <= 600;
+  };
+  const tokenFor = (auth) => tokens.get((auth ?? "").replace(/^Bearer /, ""));
+
   const server = createHttpServer((req, res) => {
-    const url = new URL(req.url, "http://x");
-    let m = url.pathname.match(/^\/repos\/([^/]+)\/([^/]+)\/commits\/(.+)$/);
-    if (m) {
-      const head = heads.get(`${m[1]}/${m[2]}@${decodeURIComponent(m[3])}`);
-      if (!head) return res.writeHead(404).end("{}");
-      res.writeHead(200, { "Content-Type": "application/json" });
-      return res.end(JSON.stringify({ sha: head.sha, commit: { message: head.message } }));
-    }
-    m = url.pathname.match(/^\/repos\/([^/]+)\/([^/]+)\/contents\/(.+)$/);
-    if (m) {
-      const key = `${m[1]}/${m[2]}@${url.searchParams.get("ref")}:${decodeURIComponent(m[3])}`;
-      res.writeHead(200, { "Content-Type": "text/plain" });
-      return res.end(files.get(key) ?? defaultCompose);
-    }
-    res.writeHead(404).end("{}");
+    let raw = "";
+    req.on("data", (d) => (raw += d));
+    req.on("end", () => {
+      const url = new URL(req.url, "http://x");
+      const auth = req.headers.authorization;
+      const body = raw ? JSON.parse(raw) : undefined;
+      calls.push({ method: req.method, path: url.pathname, auth, body });
+      const json = (status, v) => res.writeHead(status, { "Content-Type": "application/json" }).end(JSON.stringify(v));
+      let m;
+      if ((m = url.pathname.match(/^\/app\/installations\/(\d+)\/access_tokens$/)) && req.method === "POST") {
+        if (!appJwtOk(auth)) return json(401, { message: "Bad credentials" });
+        if (!installations.has(Number(m[1]))) return json(404, {});
+        const token = `ghs_${randomBytes(18).toString("hex")}`;
+        const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString();
+        tokens.set(token, { installationId: Number(m[1]), repositories: body?.repositories ?? null, permissions: body?.permissions ?? {}, expiresAt });
+        return json(201, { token, expires_at: expiresAt });
+      }
+      if ((m = url.pathname.match(/^\/app\/installations\/(\d+)$/)) && req.method === "GET") {
+        if (!appJwtOk(auth)) return json(401, { message: "Bad credentials" });
+        const inst = installations.get(Number(m[1]));
+        return inst ? json(200, inst) : json(404, {});
+      }
+      if (url.pathname === "/login/oauth/access_token" && req.method === "POST") {
+        const token = oauthCodes.get(body?.code);
+        if (!token || body?.client_id !== app.clientId || body?.client_secret !== app.clientSecret) return json(200, { error: "bad_verification_code" });
+        oauthCodes.delete(body.code);
+        return json(200, { access_token: token, token_type: "bearer" });
+      }
+      if (url.pathname === "/user/installations") {
+        const ids = userInstallations.get((auth ?? "").replace(/^Bearer /, ""));
+        if (!ids) return json(401, {});
+        return json(200, { total_count: ids.length, installations: ids.map((id) => ({ id })) });
+      }
+      if ((m = url.pathname.match(/^\/repos\/([^/]+)\/([^/]+)\/issues\/(\d+)\/comments$/)) && req.method === "POST") {
+        const t = tokenFor(auth);
+        if (!t || t.permissions.pull_requests !== "write" || (t.repositories && !t.repositories.includes(m[2]))) return json(403, {});
+        const id = nextComment++;
+        comments.set(id, { repo: `${m[1]}/${m[2]}`, pr: Number(m[3]), body: body.body });
+        return json(201, { id });
+      }
+      if ((m = url.pathname.match(/^\/repos\/([^/]+)\/([^/]+)\/issues\/comments\/(\d+)$/)) && req.method === "PATCH") {
+        const t = tokenFor(auth);
+        if (!t || t.permissions.pull_requests !== "write") return json(403, {});
+        const c = comments.get(Number(m[3]));
+        if (!c) return json(404, {});
+        c.body = body.body;
+        return json(200, { id: Number(m[3]) });
+      }
+      if ((m = url.pathname.match(/^\/repos\/([^/]+)\/([^/]+)\/statuses\/([0-9a-f]{40})$/)) && req.method === "POST") {
+        const t = tokenFor(auth);
+        if (!t || t.permissions.statuses !== "write") return json(403, {});
+        statuses.push({ repo: `${m[1]}/${m[2]}`, sha: m[3], ...body });
+        return json(201, {});
+      }
+      m = url.pathname.match(/^\/repos\/([^/]+)\/([^/]+)\/commits\/(.+)$/);
+      if (m) {
+        const head = heads.get(`${m[1]}/${m[2]}@${decodeURIComponent(m[3])}`);
+        if (!head) return res.writeHead(404).end("{}");
+        res.writeHead(200, { "Content-Type": "application/json" });
+        return res.end(JSON.stringify({ sha: head.sha, commit: { message: head.message } }));
+      }
+      m = url.pathname.match(/^\/repos\/([^/]+)\/([^/]+)\/contents\/(.+)$/);
+      if (m) {
+        const key = `${m[1]}/${m[2]}@${url.searchParams.get("ref")}:${decodeURIComponent(m[3])}`;
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        return res.end(files.get(key) ?? defaultCompose);
+      }
+      res.writeHead(404).end("{}");
+    });
   });
   const port = await new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server.address().port)));
   return {
     url: `http://127.0.0.1:${port}`,
     setHead: (owner, repo, branch, commitSha, message = "commit") => heads.set(`${owner}/${repo}@${branch}`, { sha: commitSha, message }),
     setFile: (owner, repo, commitSha, path, text) => files.set(`${owner}/${repo}@${commitSha}:${path}`, text),
+    calls,
+    tokens,
+    comments,
+    statuses,
+    /** The GitHub App the control plane is configured with. */
+    configureApp: ({ appId, publicKey, clientId, clientSecret }) => Object.assign(app, { appId, publicKey, clientId, clientSecret }),
+    addInstallation: (id, login, type = "Organization") => installations.set(id, { id, account: { login, type } }),
+    /** The next setup redirect's OAuth code: it gives a user token that sees these installations. */
+    authorizeUser: (code, installationIds) => {
+      const token = `ghu_${randomBytes(12).toString("hex")}`;
+      oauthCodes.set(code, token);
+      userInstallations.set(token, installationIds);
+      return token;
+    },
     close: () => new Promise((r) => server.close(r)),
   };
 }
@@ -74,6 +169,7 @@ export async function startServer(extraEnv = {}, { nodeArgs = [] } = {}) {
     INVEON_AGENT_POLL_TIMEOUT_MS: "300",
     INVEON_AUTH_RATE_LIMIT: "1000",
     INVEON_GITHUB_API_BASE: github.url,
+    INVEON_GITHUB_WEB_BASE: github.url,
     INVEON_AUTO_MIGRATE: "false",
     ...extraEnv,
   };

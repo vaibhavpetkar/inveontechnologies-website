@@ -244,6 +244,42 @@ export const serverBootstrapTokens = pgTable("server_bootstrap_tokens", {
   createdAt: createdAt(),
 });
 
+// ---------------------------------------------------------------- GitHub App
+
+/**
+ * A GitHub App installation linked to an organization (one organization
+ * per installation). Its short-lived tokens read repositories owned by the
+ * installation's account and comment on their pull requests.
+ */
+export const githubInstallations = pgTable(
+  "github_installations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    installationId: bigint("installation_id", { mode: "number" }).notNull().unique(),
+    // The GitHub user or organization the app is installed on.
+    accountLogin: text("account_login").notNull(),
+    accountType: text("account_type"),
+    suspendedAt: ts("suspended_at"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => ({ byOrg: index("github_installations_org_idx").on(t.orgId) }),
+);
+
+/** The one comment per pull request that shows its preview, updated in place. */
+export const githubPrComments = pgTable(
+  "github_pr_comments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    appId: uuid("app_id").notNull().references(() => apps.id, { onDelete: "cascade" }),
+    prNumber: integer("pr_number").notNull(),
+    commentId: bigint("comment_id", { mode: "number" }).notNull(),
+    updatedAt: ts("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({ uniq: unique().on(t.appId, t.prNumber) }),
+);
+
 // ---------------------------------------------------------------- apps
 
 export const apps = pgTable(

@@ -62,6 +62,19 @@ const envSchema = z.object({
   // GitHub: token for private repos (contents read), and API base (tests).
   INVEON_GITHUB_TOKEN: z.string().optional(),
   INVEON_GITHUB_API_BASE: z.string().default("https://api.github.com"),
+  // Optional GitHub App (see "GitHub App" in the README): its id, slug (the
+  // name in github.com/apps/<slug>), private key (PEM, or base64 of the PEM),
+  // OAuth client id and secret (to check who installed it), and the secret
+  // of the app's own webhook. With it, installation tokens replace
+  // INVEON_GITHUB_TOKEN for repos on linked installations.
+  INVEON_GITHUB_APP_ID: z.string().regex(/^\d{1,12}$/, "The GitHub App's numeric id").optional(),
+  INVEON_GITHUB_APP_SLUG: z.string().regex(/^[a-z0-9][a-z0-9-]{0,99}$/, "The app's slug from github.com/apps/<slug>").optional(),
+  INVEON_GITHUB_APP_PRIVATE_KEY: z.string().optional(),
+  INVEON_GITHUB_APP_CLIENT_ID: z.string().max(100).optional(),
+  INVEON_GITHUB_APP_CLIENT_SECRET: z.string().max(200).optional(),
+  INVEON_GITHUB_APP_WEBHOOK_SECRET: z.string().min(16, "Use a long random webhook secret").optional(),
+  // github.com itself (installation and OAuth pages); changed only in tests.
+  INVEON_GITHUB_WEB_BASE: z.string().url().default("https://github.com"),
   // Let's Encrypt account email for certbot.
   INVEON_ACME_EMAIL: z.string().email().optional(),
   // Health alerts and invites. Without SMTP_HOST, email is only logged.

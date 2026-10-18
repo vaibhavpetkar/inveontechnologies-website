@@ -7,6 +7,7 @@ import { AppError, ConflictError, NotFoundError } from "../../lib/errors.js";
 import { logger } from "../../lib/logger.js";
 import { validateCompose } from "../../lib/compose-validate.js";
 import { deployKeyAad, registryAad } from "../../lib/aad.js";
+import { cloneTokenFor } from "../github/service.js";
 
 export type JobStatus = "pending" | "running" | "success" | "failure" | "cancelled";
 export const TERMINAL: JobStatus[] = ["success", "failure", "cancelled"];
@@ -112,7 +113,7 @@ export async function buildAgentPayload(db: Database, job: Job, steps: Step[]) {
     if (s.action === "image.build" || (s.action === "compose.pull" && params.environmentId)) {
       const { app } = await ownedEnvironment(db, job, String(params.environmentId));
       params.registryAuth = registryAuthFor(app);
-      if (s.action === "image.build") params.gitAuth = gitAuthFor(app);
+      if (s.action === "image.build") params.gitAuth = await gitAuthFor(db, app);
     }
     if (s.action === "release.prepare") {
       const release = await db.query.releases.findFirst({ where: eq(releases.id, String(params.releaseId)) });
@@ -143,13 +144,15 @@ function registryAuthFor(app: typeof apps.$inferSelect) {
 }
 
 /**
- * How the agent clones the repo. The only GitHub integration is the
- * control plane's own read token (INVEON_GITHUB_TOKEN), which is long-lived
- * and is never sent to servers, so there is no short-lived token to mint:
- * private repos use the app's deploy key, public repos clone anonymously.
- * The agent also accepts { type: "token" } for a future GitHub App.
+ * How the agent clones the repo, decided when the server claims the job:
+ * a GitHub App installation token (one hour, this repo only, contents read)
+ * when the repo's owner has the App installed and linked; else the app's
+ * deploy key; else anonymously. The control plane's long-lived
+ * INVEON_GITHUB_TOKEN is never sent to servers.
  */
-function gitAuthFor(app: typeof apps.$inferSelect) {
+async function gitAuthFor(db: Database, app: typeof apps.$inferSelect) {
+  const token = await cloneTokenFor(db, app);
+  if (token) return { type: "token", token };
   if (app.deployKeyEnc) return { type: "deploy_key", privateKey: decryptValue(app.deployKeyEnc, deployKeyAad(app.id)) };
   return null;
 }
