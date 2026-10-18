@@ -127,6 +127,13 @@
       "when": 1792330158160,
       "tag": "0017_backfill_environment_replicas",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792331472005,
+      "tag": "0018_wildcard_certificates",
+      "breakpoints": true
     }
   ]
 }

@@ -79,6 +79,9 @@ const envSchema = z.object({
   INVEON_DIGITALOCEAN_API_BASE: z.string().url().optional(),
   INVEON_HETZNER_API_BASE: z.string().url().optional(),
   INVEON_CLOUDFLARE_API_BASE: z.string().url().optional(),
+  // Wildcard certificates (DNS-01): seconds certbot waits after the TXT record is
+  // published (Route 53 also waits for the change to be in sync first).
+  INVEON_DNS_PROPAGATION_SEC: z.coerce.number().int().min(0).max(600).default(30),
   // Let's Encrypt account email for certbot.
   INVEON_ACME_EMAIL: z.string().email().optional(),
   // Health alerts and invites. Without SMTP_HOST, email is only logged.

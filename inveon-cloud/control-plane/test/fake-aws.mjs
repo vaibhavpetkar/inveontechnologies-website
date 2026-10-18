@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { setEc2ApiFactory } from "../dist/modules/aws/provider.js";
 import { KMS_CONTEXT, setKmsApiFactory } from "../dist/lib/kms.js";
+import { setRoute53ApiFactory } from "../dist/modules/dns/route53.js";
 
 const state = {
   calls: [],
@@ -13,6 +14,10 @@ const state = {
   groups: new Map(), // id -> { name, vpcId, sshCidr, region }
   failNext: new Map(), // method -> message
   n: 0,
+  // Route 53: public hosted zones, and TXT record sets by "zoneId|name".
+  zones: [{ id: "Z0FAKEZONE00001", name: "aws-zone.test" }],
+  txt: new Map(),
+  changes: new Map(), // change id -> polls left before INSYNC
 };
 const hex = () => (++state.n).toString(16).padStart(17, "0");
 
@@ -102,6 +107,46 @@ function api(creds, region) {
 
 setEc2ApiFactory(api);
 
+// Fake Route 53, with the real API's rules that matter here: UPSERT
+// replaces the whole record set, DELETE must name its exact values, and a
+// change is PENDING for one poll before it is INSYNC.
+setRoute53ApiFactory((creds) => {
+  const call = (method, args) => {
+    state.calls.push({ method, creds: { ...creds, secretAccessKey: creds.secretAccessKey ? "(set)" : undefined }, args });
+    const fail = state.failNext.get(method);
+    if (fail) {
+      state.failNext.delete(method);
+      throw Object.assign(new Error(fail), { name: "AccessDenied" });
+    }
+  };
+  return {
+    async findZone(name) {
+      call("route53.findZone", { name });
+      return state.zones.find((z) => z.name === name) ?? null;
+    },
+    async changeTxt(zoneId, action, name, values, ttl) {
+      call("route53.changeTxt", { zoneId, action, name, values, ttl });
+      const zone = state.zones.find((z) => z.id === zoneId);
+      if (!zone || !(name === zone.name || name.endsWith(`.${zone.name}`))) throw Object.assign(new Error("No such zone or name"), { name: "InvalidChangeBatch" });
+      const key = `${zoneId}|${name}`;
+      if (action === "DELETE") {
+        const cur = state.txt.get(key);
+        if (!cur || JSON.stringify([...cur].sort()) !== JSON.stringify([...values].sort())) throw Object.assign(new Error("Tried to delete resource record set but the values do not match"), { name: "InvalidChangeBatch" });
+        state.txt.delete(key);
+      } else state.txt.set(key, [...values]);
+      const id = `C${hex()}`;
+      state.changes.set(id, 1);
+      return id;
+    },
+    async changeStatus(id) {
+      call("route53.changeStatus", { id });
+      const left = state.changes.get(id) ?? 0;
+      state.changes.set(id, left - 1);
+      return left > 0 ? "PENDING" : "INSYNC";
+    },
+  };
+});
+
 // Fake KMS. A "ciphertext blob" is the data key sealed with a fixed fake
 // KMS key, bound to the KMS key id and the encryption context, so blobs
 // made by one process (keys:kms-generate) decrypt in another (the server),
@@ -149,6 +194,7 @@ if (port) {
       const send = (v) => res.writeHead(200, { "Content-Type": "application/json" }).end(JSON.stringify(v ?? {}));
       if (url.pathname === "/calls") return send(state.calls);
       if (url.pathname === "/groups") return send([...state.groups.keys()]);
+      if (url.pathname === "/route53/txt") return send(Object.fromEntries(state.txt));
       let m = url.pathname.match(/^\/instances\/([^/]+)$/);
       if (m && req.method === "POST") {
         const i = state.instances.get(m[1]);

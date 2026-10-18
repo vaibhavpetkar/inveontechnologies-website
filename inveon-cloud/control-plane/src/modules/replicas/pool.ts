@@ -1,7 +1,7 @@
 import { isIP } from "node:net";
 import { and, asc, eq, inArray, or, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
-import { deployments, domains, environmentReplicas, environments, jobs, servers } from "../../db/schema.js";
+import { deployments, domains, environmentReplicas, environments, jobs, servers, wildcardCertificates } from "../../db/schema.js";
 import { AppError } from "../../lib/errors.js";
 import { logger } from "../../lib/logger.js";
 import { createJob, notifyServer, registerJobEffect, type StepInput, type Tx } from "../jobs/service.js";
@@ -79,10 +79,11 @@ export async function environmentBusy(db: Database | Tx, environmentId: string, 
   return rolling ? "deploy" : null;
 }
 
-/** Servers an environment uses (as a replica or as its proxy) cannot be deleted or terminated. */
+/** Servers an environment uses (as a replica or as its proxy), or that hold a wildcard certificate, cannot be deleted or terminated. */
 export async function serverInUse(db: Database, serverId: string) {
   const replica = await db.query.environmentReplicas.findFirst({ where: eq(environmentReplicas.serverId, serverId), columns: { environmentId: true } });
   if (replica) return true;
+  if (await db.query.wildcardCertificates.findFirst({ where: eq(wildcardCertificates.serverId, serverId), columns: { id: true } })) return true;
   const env = await db.query.environments.findFirst({ where: or(eq(environments.serverId, serverId), eq(environments.proxyServerId, serverId)), columns: { id: true } });
   return !!env;
 }

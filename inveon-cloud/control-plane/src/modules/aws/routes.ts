@@ -1,4 +1,3 @@
-import { serverInUse } from "../replicas/pool.js";
 import { Router } from "express";
 import { z } from "zod";
 import { and, eq, notInArray } from "drizzle-orm";
@@ -9,6 +8,7 @@ import { encryptValue, randomToken } from "../../lib/crypto.js";
 import { audit } from "../../lib/audit.js";
 import { AppError, ConflictError } from "../../lib/errors.js";
 import { requireRole } from "../auth/middleware.js";
+import { serverInUse } from "../replicas/pool.js";
 import { issueBootstrapToken, loadServer, publicServer } from "../servers/routes.js";
 import { ec2Api } from "./provider.js";
 import {

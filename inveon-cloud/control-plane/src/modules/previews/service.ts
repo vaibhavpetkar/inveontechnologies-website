@@ -89,16 +89,17 @@ export async function upsertPreviewEnvironment(db: Database, app: App, pr: numbe
 }
 
 /** Everything a preview leaves on the server, removed in a safe order. */
-export function previewTeardownSteps(environment: Environment, app: App, hostnames: string[]): StepInput[] {
+export function previewTeardownSteps(environment: Environment, app: App, sites: { hostname: string; wildcardId?: string | null }[]): StepInput[] {
   const slots = environment.strategy === "recreate" ? (["main"] as const) : (["blue", "green"] as const);
   const steps: StepInput[] = slots.map((slot) => ({
     name: `Stop ${slot === "main" ? "containers" : slot} and remove volumes`,
     action: "compose.down",
     params: { slug: environment.slug, slot, composePath: app.composePath, removeVolumes: true },
   }));
-  for (const hostname of hostnames) {
+  for (const { hostname, wildcardId } of sites) {
     steps.push({ name: `Remove nginx site ${hostname}`, action: "nginx.remove_site", params: { hostname } });
-    steps.push({ name: `Delete certificate ${hostname}`, action: "certbot.delete", params: { hostname } });
+    // A hostname served with a wildcard certificate has none of its own.
+    if (!wildcardId) steps.push({ name: `Delete certificate ${hostname}`, action: "certbot.delete", params: { hostname } });
   }
   steps.push(
     { name: "Remove nginx upstream", action: "nginx.remove_upstream", params: { slug: environment.slug } },
@@ -116,7 +117,7 @@ export async function startPreviewTeardown(db: Database, environment: Environmen
   if (environment.previewPr === null) throw new AppError("NOT_A_PREVIEW", "Only preview environments are torn down this way", 400);
   const pending = await teardownPending(db, environment.id);
   if (pending) return pending;
-  const hostnames = (await db.select({ hostname: domains.hostname }).from(domains).where(eq(domains.environmentId, environment.id))).map((d) => d.hostname);
+  const sites = await db.select({ hostname: domains.hostname, wildcardId: domains.wildcardId }).from(domains).where(eq(domains.environmentId, environment.id));
   const job = await createJob(db, {
     orgId: environment.orgId,
     serverId: environment.serverId,
@@ -125,7 +126,7 @@ export async function startPreviewTeardown(db: Database, environment: Environmen
     title: `Tear down ${app.name} / ${environment.name}`,
     createdBy: userId,
     meta: { environmentId: environment.id, pr: environment.previewPr },
-    steps: previewTeardownSteps(environment, app, hostnames),
+    steps: previewTeardownSteps(environment, app, sites),
   });
   await db.update(environments).set({ autoDeploy: false }).where(eq(environments.id, environment.id));
   notifyServer(environment.serverId);
@@ -147,8 +148,10 @@ registerJobEffect("preview_teardown", async (db, job) => {
 /**
  * After a preview's first successful deploy, issue its certificate. Preview
  * hostnames need a wildcard DNS record (*.<base domain>) pointing at the
- * preview server, so there is no per-PR DNS step. The issue job writes the
- * HTTP site first, so the preview works over HTTP even if certbot fails.
+ * preview server, so there is no per-PR DNS step. With a wildcard
+ * certificate for the base domain on that server, the site uses it at once;
+ * otherwise the issue job writes the HTTP site first, so the preview works
+ * over HTTP even if certbot fails.
  */
 export function registerPreviewHooks(env: Env) {
   // The pull request's comment and commit status follow every preview deploy.

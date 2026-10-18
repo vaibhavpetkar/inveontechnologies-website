@@ -1,10 +1,10 @@
 import { Router } from "express";
 import { z } from "zod";
 import { promises as dns } from "node:dns";
-import { and, eq, inArray, isNotNull, lte, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
 import type { Env } from "../../env.js";
-import { apps, domains, environments, jobs, servers } from "../../db/schema.js";
+import { apps, domains, environments, jobs, releases, servers, wildcardCertificates } from "../../db/schema.js";
 import { requireRole } from "../auth/middleware.js";
 import { audit } from "../../lib/audit.js";
 import { AppError, ConflictError, NotFoundError } from "../../lib/errors.js";
@@ -12,6 +12,9 @@ import { loadEnvironment } from "../apps/routes.js";
 import { createJob, notifyServer, registerJobEffect } from "../jobs/service.js";
 import { dashboardLink, emitAlert } from "../alerts/service.js";
 import { environmentBusy, isPooled, proxyIdOf, replicasOf } from "../replicas/pool.js";
+import { cleanupJobChallenges, coveringWildcard, wildcardCertName } from "../dns/service.js";
+import { recordWildcardExpiry, wildcardExpiry } from "../dns/routes.js";
+import { notifyPreview } from "../github/service.js";
 
 export const HOSTNAME_RE = /^(?=.{1,253}$)(?!-)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
@@ -42,6 +45,15 @@ export function issueSteps(hostname: string, slug: string, email: string | null,
   ];
 }
 
+/** A hostname under a wildcard certificate on the proxy: only the HTTPS site, with that certificate. */
+export function wildcardSiteSteps(hostname: string, slug: string, certName: string, pool = false) {
+  const p = pool ? { pool: true } : {};
+  return [
+    { name: `Write HTTPS site (certificate ${certName})`, action: "nginx.write_site", params: { hostname, slug, tls: true, certName, ...p } },
+    { name: "Reload nginx", action: "nginx.reload", params: {} },
+  ];
+}
+
 /** The server that serves an environment's domains (its proxy) and whether it uses a pool. */
 async function servingServer(db: Database, environment: typeof environments.$inferSelect) {
   const proxy = await db.query.servers.findFirst({ where: eq(servers.id, proxyIdOf(environment)) });
@@ -58,15 +70,19 @@ export async function startIssueJob(db: Database, env: Env, d: Domain, userId: s
   const change = await environmentBusy(db, environment.id);
   if (change && change !== "deploy" && change !== "rollback") throw new ConflictError("The environment's servers are being changed; issue the certificate when that is done");
   const { proxy, pooled } = await servingServer(db, environment);
+  // Under a wildcard certificate on the proxy: no certbot run of its own.
+  const wildcard = await coveringWildcard(db, d.orgId, proxy.id, d.hostname);
   const job = await createJob(db, {
     orgId: d.orgId,
     serverId: proxy.id,
     environmentId: environment.id,
     type: "domain_issue",
-    title: `Certificate for ${d.hostname}`,
+    title: wildcard ? `HTTPS for ${d.hostname} (*.${wildcard.baseDomain})` : `Certificate for ${d.hostname}`,
     createdBy: userId,
-    meta: { domainId: d.id },
-    steps: issueSteps(d.hostname, environment.slug, env.INVEON_ACME_EMAIL ?? null, pooled),
+    meta: { domainId: d.id, ...(wildcard ? { wildcardId: wildcard.id } : {}) },
+    steps: wildcard
+      ? wildcardSiteSteps(d.hostname, environment.slug, wildcardCertName(wildcard.baseDomain), pooled)
+      : issueSteps(d.hostname, environment.slug, env.INVEON_ACME_EMAIL ?? null, pooled),
   });
   await db.update(domains).set({ status: "issuing", lastError: null }).where(eq(domains.id, d.id));
   notifyServer(proxy.id);
@@ -147,53 +163,83 @@ registerJobEffect("domain_issue", async (db, job, steps) => {
   const d = await db.query.domains.findFirst({ where: eq(domains.id, domainId) });
   if (!d) return;
   if (job.status === "success") {
+    const wildcard = job.meta.wildcardId ? await db.query.wildcardCertificates.findFirst({ where: eq(wildcardCertificates.id, String(job.meta.wildcardId)) }) : undefined;
     const certStep = steps.find((s) => s.action === "certbot.issue");
+    const expires = wildcard ? wildcard.certExpiresAt : certExpiry(certStep?.result ?? null, d.hostname);
     await db
       .update(domains)
-      .set({ status: "active", lastError: null, certIssuedAt: new Date(), certExpiresAt: certExpiry(certStep?.result ?? null, d.hostname) ?? new Date(Date.now() + 90 * 86400000) })
+      .set({ status: "active", lastError: null, wildcardId: wildcard?.id ?? null, certIssuedAt: new Date(), certExpiresAt: expires ?? new Date(Date.now() + 90 * 86400000) })
       .where(eq(domains.id, d.id));
+    await announceHttps(db, d.environmentId);
   } else {
     await db.update(domains).set({ status: "failed", lastError: job.error ?? "Certificate job failed" }).where(eq(domains.id, d.id));
   }
 });
 
-// Renewal results only update domains served by the reporting server (the environment's proxy).
+/** A preview's pull request comment links to https:// once its certificate is in place. */
+async function announceHttps(db: Database, environmentId: string) {
+  const environment = await db.query.environments.findFirst({ where: eq(environments.id, environmentId) });
+  if (!environment || environment.previewPr === null || !environment.currentReleaseId) return;
+  const app = await db.query.apps.findFirst({ where: eq(apps.id, environment.appId) });
+  const release = await db.query.releases.findFirst({ where: eq(releases.id, environment.currentReleaseId), columns: { commitSha: true } });
+  if (!app?.previewsEnabled || !app.previewBaseDomain) return;
+  void notifyPreview(db, {
+    app,
+    pr: environment.previewPr,
+    state: "live",
+    commitSha: release?.commitSha,
+    environmentId: environment.id,
+    hostname: `pr-${environment.previewPr}.${app.previewBaseDomain}`,
+  });
+}
+
+// Renewal results only update certificates on the reporting server (domains' proxy, and its wildcards).
 registerJobEffect("cert_renew", async (db, job, steps) => {
+  await cleanupJobChallenges(db, job.id);
   if (job.status !== "success") return;
   const result = steps.find((s) => s.action === "certbot.renew")?.result ?? null;
+  const wildcards = await db.select().from(wildcardCertificates).where(eq(wildcardCertificates.serverId, job.serverId));
+  for (const w of wildcards) {
+    const at = wildcardExpiry(result, w.baseDomain);
+    if (at) await recordWildcardExpiry(db, w, at);
+  }
   const rows = await db
     .select({ id: domains.id, hostname: domains.hostname })
     .from(domains)
     .innerJoin(environments, eq(environments.id, domains.environmentId))
-    .where(and(sql`coalesce(${environments.proxyServerId}, ${environments.serverId}) = ${job.serverId}`, eq(domains.status, "active")));
+    .where(and(sql`coalesce(${environments.proxyServerId}, ${environments.serverId}) = ${job.serverId}`, eq(domains.status, "active"), isNull(domains.wildcardId)));
   for (const r of rows) {
     const at = certExpiry(result, r.hostname);
     if (at) await db.update(domains).set({ certExpiresAt: at }).where(eq(domains.id, r.id));
   }
 });
 
-/** Daily: one renew job per server that serves active domains. */
+/** Daily: one renew job per server that serves active domains or holds wildcard certificates. */
 export async function queueRenewals(db: Database) {
   const rows = await db
     .selectDistinct({ serverId: servers.id, orgId: environments.orgId, hostname: domains.hostname })
     .from(domains)
     .innerJoin(environments, eq(environments.id, domains.environmentId))
     .innerJoin(servers, eq(servers.id, sql`coalesce(${environments.proxyServerId}, ${environments.serverId})`))
-    .where(eq(domains.status, "active"));
-  const byServer = new Map<string, { orgId: string; hostnames: string[] }>();
-  for (const r of rows) {
-    const entry = byServer.get(r.serverId) ?? { orgId: r.orgId, hostnames: [] };
-    entry.hostnames.push(r.hostname);
-    byServer.set(r.serverId, entry);
-  }
-  for (const [serverId, { orgId, hostnames }] of byServer) {
+    .where(and(eq(domains.status, "active"), isNull(domains.wildcardId)));
+  const byServer = new Map<string, { orgId: string; hostnames: string[]; wildcards: string[] }>();
+  const entry = (serverId: string, orgId: string) => {
+    const e = byServer.get(serverId) ?? { orgId, hostnames: [], wildcards: [] };
+    byServer.set(serverId, e);
+    return e;
+  };
+  for (const r of rows) entry(r.serverId, r.orgId).hostnames.push(r.hostname);
+  const wildcards = await db.select().from(wildcardCertificates).where(inArray(wildcardCertificates.status, ["active", "failed"]));
+  for (const w of wildcards) if (w.certIssuedAt) entry(w.serverId, w.orgId).wildcards.push(w.baseDomain);
+  for (const [serverId, { orgId, hostnames, wildcards: bases }] of byServer) {
     await createJob(db, {
       orgId,
       serverId,
       type: "cert_renew",
       title: "Renew certificates",
       steps: [
-        { name: "certbot renew", action: "certbot.renew", params: { hostnames } },
+        // Wildcards renew with the same DNS-01 hooks, which answer for this job.
+        { name: "certbot renew", action: "certbot.renew", params: { hostnames, ...(bases.length ? { wildcards: bases } : {}) } },
         { name: "Reload nginx", action: "nginx.reload", params: {} },
       ],
     });

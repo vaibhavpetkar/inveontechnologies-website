@@ -555,6 +555,51 @@ export const deployments = pgTable("deployments", {
 
 // ---------------------------------------------------------------- domains, health, backups
 
+/**
+ * A wildcard certificate (*.<base> and <base>) issued on one server with
+ * certbot's DNS-01 challenge: the agent's certbot hooks ask the control
+ * plane to publish the TXT record through the organization's DNS provider
+ * (Cloudflare, or Route 53 through the AWS connection). Domains under the
+ * base on that server use it instead of a certificate of their own.
+ */
+export const wildcardCertificates = pgTable(
+  "wildcard_certificates",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    baseDomain: text("base_domain").notNull(),
+    dnsProvider: text("dns_provider").$type<"cloudflare" | "route53">().notNull(),
+    // The provider's zone the TXT records go in (a Cloudflare zone id or a Route 53 hosted zone id).
+    zoneId: text("zone_id").notNull(),
+    zoneName: text("zone_name").notNull(),
+    serverId: uuid("server_id").notNull().references(() => servers.id, { onDelete: "restrict" }),
+    status: text("status").$type<"issuing" | "active" | "failed">().notNull().default("issuing"),
+    lastError: text("last_error"),
+    certIssuedAt: ts("cert_issued_at"),
+    certExpiresAt: ts("cert_expires_at"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => ({ uniq: unique().on(t.serverId, t.baseDomain) }),
+);
+
+/** TXT records published for a certbot DNS-01 challenge, until its cleanup hook (or the job's end) removes them. */
+export const dnsChallenges = pgTable(
+  "dns_challenges",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    wildcardId: uuid("wildcard_id").notNull().references(() => wildcardCertificates.id, { onDelete: "cascade" }),
+    jobId: uuid("job_id").notNull().references(() => jobs.id, { onDelete: "cascade" }),
+    recordName: text("record_name").notNull(),
+    value: text("value").notNull(),
+    // Cloudflare's record id (Route 53 sets the whole record set by name).
+    providerRecordId: text("provider_record_id"),
+    createdAt: createdAt(),
+    removedAt: ts("removed_at"),
+  },
+  (t) => ({ byWildcard: index("dns_challenges_wildcard_idx").on(t.wildcardId), byJob: index("dns_challenges_job_idx").on(t.jobId) }),
+);
+
 export const domains = pgTable("domains", {
   id: uuid("id").primaryKey().defaultRandom(),
   orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
@@ -565,6 +610,8 @@ export const domains = pgTable("domains", {
   lastError: text("last_error"),
   certIssuedAt: ts("cert_issued_at"),
   certExpiresAt: ts("cert_expires_at"),
+  // Served with this wildcard certificate instead of one of its own.
+  wildcardId: uuid("wildcard_id").references(() => wildcardCertificates.id, { onDelete: "set null" }),
   createdAt: createdAt(),
 });
 

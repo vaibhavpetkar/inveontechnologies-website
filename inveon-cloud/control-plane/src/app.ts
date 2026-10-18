@@ -31,6 +31,8 @@ import { platformRouter } from "./modules/keys/routes.js";
 import { awsRouter } from "./modules/aws/routes.js";
 import { cloudRouter } from "./modules/cloud/routes.js";
 import { configureProviderApis } from "./modules/cloud/http.js";
+import { configureDns } from "./modules/dns/service.js";
+import { dnsRouter } from "./modules/dns/routes.js";
 import { metricsRouter } from "./modules/metrics/routes.js";
 import { scrapeRouter, scrapeTokensRouter } from "./modules/metrics/prometheus.js";
 import { githubAppWebhookRouter, githubRouter, githubSetupRouter } from "./modules/github/routes.js";
@@ -40,6 +42,7 @@ export function createApp(db: Database, pool: pg.Pool, env: Env) {
   configureOutbound(env.INVEON_ALERT_PRIVATE_HOSTS);
   configureAlerts(env.INVEON_PUBLIC_URL);
   configureProviderApis({ digitalocean: env.INVEON_DIGITALOCEAN_API_BASE, hetzner: env.INVEON_HETZNER_API_BASE, cloudflare: env.INVEON_CLOUDFLARE_API_BASE });
+  configureDns({ propagationSec: env.INVEON_DNS_PROPAGATION_SEC });
   const app = express();
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
@@ -100,6 +103,7 @@ export function createApp(db: Database, pool: pg.Pool, env: Env) {
   org.use("/environments", healthRouter(db, env));
   org.use("/jobs", jobsRouter(db));
   org.use("/", domainsRouter(db, env));
+  org.use("/", dnsRouter(db, env));
   org.use("/", backupsRouter(db));
   org.use("/", alertsRouter(db));
   org.use("/", metricsRouter(db));

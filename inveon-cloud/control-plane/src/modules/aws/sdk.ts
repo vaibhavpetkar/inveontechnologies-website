@@ -32,7 +32,7 @@ interface Creds {
  * default chain) assume the organization's role with its external id, for
  * 15 minutes at a time. Keys mode: the stored access key.
  */
-function credentialProvider(input: AwsCredentialsInput, region: string): () => Promise<Creds> {
+export function credentialProvider(input: AwsCredentialsInput, region: string): () => Promise<Creds> {
   if (input.authType === "keys") {
     const fixed = { accessKeyId: input.accessKeyId, secretAccessKey: input.secretAccessKey };
     return async () => fixed;

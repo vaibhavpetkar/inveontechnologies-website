@@ -3,10 +3,10 @@ import { z } from "zod";
 import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
 import type { Env } from "../../env.js";
-import { agentRequestNonces, jobSteps, organizations, serverBootstrapTokens, servers } from "../../db/schema.js";
+import { agentRequestNonces, jobSteps, jobs, organizations, serverBootstrapTokens, servers } from "../../db/schema.js";
 import { randomToken, sha256Hex } from "../../lib/crypto.js";
 import { writeAudit } from "../../lib/audit.js";
-import { AppError, ConflictError, UnauthorizedError } from "../../lib/errors.js";
+import { AppError, ConflictError, NotFoundError, UnauthorizedError } from "../../lib/errors.js";
 import { checkAgentSignature, parseAgentPublicKey, SIGNATURE_MAX_SKEW_SEC } from "../../lib/agent-signature.js";
 import { authRateLimiter } from "../auth/middleware.js";
 import { bus, serverJobsEvent } from "../../lib/bus.js";
@@ -14,6 +14,8 @@ import { buildAgentPayload, claimNextJob, finishJob, reportStep } from "../jobs/
 import { asc } from "drizzle-orm";
 import { dashboardLink, emitAlert } from "../alerts/service.js";
 import { batchSchema, ingestSamples } from "../metrics/service.js";
+import { ACME_VALUE_RE, challengeWildcard, cleanupChallenge, presentChallenge } from "../dns/service.js";
+import { HOSTNAME_RE } from "../domains/routes.js";
 
 const factsSchema = z
   .object({
@@ -224,6 +226,35 @@ export function agentRouter(db: Database, env: Env) {
     const body = stepReportSchema.parse(req.body);
     await reportStep(db, req.server!.id, req.params.jobId, req.params.stepId, body);
     res.json({ ok: true });
+  });
+
+  /**
+   * certbot's DNS-01 hooks (inveon-agent dns-hook) during a wildcard issue
+   * or renew job: publish or remove the TXT record for one of the
+   * wildcards that job is about, on this server. The answer says how long
+   * certbot should wait for the record to propagate.
+   */
+  router.post("/jobs/:jobId/dns-challenge", async (req, res) => {
+    const body = z
+      .object({
+        phase: z.enum(["auth", "cleanup"]),
+        domain: z.string().toLowerCase().max(253).regex(HOSTNAME_RE),
+        validation: z.string().regex(ACME_VALUE_RE),
+      })
+      .strict()
+      .parse(req.body);
+    const job = await db.query.jobs.findFirst({ where: eq(jobs.id, req.params.jobId) });
+    if (!job || job.serverId !== req.server!.id) throw new NotFoundError("Job not found");
+    if (job.status !== "running") throw new ConflictError(`Job is ${job.status}`);
+    const wildcard = await challengeWildcard(db, job, body.domain);
+    if (!wildcard) throw new AppError("NO_CHALLENGE", "This job has no wildcard certificate for that domain", 403);
+    if (body.phase === "auth") {
+      const out = await presentChallenge(db, wildcard, job.id, body.validation);
+      await writeAudit(db, { orgId: wildcard.orgId, actorServerId: req.server!.id, action: "dns.challenge", entityType: "wildcard_certificate", entityId: wildcard.id, metadata: { jobId: job.id, baseDomain: wildcard.baseDomain } });
+      res.json(out);
+    } else {
+      res.json({ removed: await cleanupChallenge(db, wildcard, job.id, body.validation) });
+    }
   });
 
   router.post("/jobs/:jobId/finish", async (req, res) => {
