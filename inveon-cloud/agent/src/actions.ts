@@ -6,6 +6,9 @@ import { isAllowedBinary, type Binary, type ExecOptions, type Runner } from "./e
 import { isInside, validateCompose } from "./compose-validate.js";
 import { formatEnvFile, ipLiteral, renderListener, renderPool, renderSite, renderUpstream } from "./templates.js";
 import {
+  CERT_NAME_RE,
+  WILDCARD_CERT_RE,
+  wildcardCertName,
   BUCKET_RE,
   BUILT_IMAGE_RE,
   COMPOSE_PATH_RE,
@@ -48,6 +51,35 @@ export interface ActionContext {
   sleep?: (ms: number) => Promise<void>;
   /** Aborted when the control plane cancels the job (a live log viewer left). */
   signal?: AbortSignal;
+  /** The running job: certbot's DNS-01 hooks answer for it. */
+  jobId?: string;
+  /** The agent's config file, for the hooks (default /etc/inveon-agent/config.json). */
+  configPath?: string;
+  /** The node binary and the agent's entry script, for the hooks (default: this process's). */
+  nodePath?: string;
+  agentEntry?: string;
+}
+
+/** An absolute path with nothing a shell would interpret (certbot runs hook commands through a shell). */
+const HOOK_PATH_RE = /^\/[A-Za-z0-9_.\/@+-]{1,1000}$/;
+const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * The fixed command certbot runs for a DNS-01 challenge: this agent's
+ * `dns-hook auth|cleanup`, which asks the control plane to publish or
+ * remove the TXT record (see dns-hook.ts). Built only from paths checked
+ * against HOOK_PATH_RE, so the shell certbot uses sees no metacharacters.
+ */
+export function dnsHookCommand(phase: "auth" | "cleanup", ctx: Pick<ActionContext, "configPath" | "nodePath" | "agentEntry">) {
+  const parts = [ctx.nodePath ?? process.execPath, ctx.agentEntry ?? process.argv[1] ?? "", ctx.configPath ?? "/etc/inveon-agent/config.json"];
+  for (const p of parts) if (!HOOK_PATH_RE.test(p) || p.includes("/../")) throw new Error(`Unsafe path for the certbot hook: ${p.slice(0, 100)}`);
+  return `${parts[0]} ${parts[1]} dns-hook ${phase} --config ${parts[2]}`;
+}
+
+/** certbot's environment for the hooks: which job they answer for. */
+function hookEnv(ctx: ActionContext) {
+  if (!ctx.jobId || !JOB_ID_RE.test(ctx.jobId)) throw new Error("No job id for the DNS-01 hooks");
+  return { INVEON_DNS_JOB_ID: ctx.jobId };
 }
 
 export type ActionResult = Record<string, unknown> | void;
@@ -719,11 +751,18 @@ export const ACTIONS: Record<string, Action<any>> = {
   "nginx.write_site": {
     parse(params: unknown) {
       const p = obj(params);
-      return { hostname: str(p, "hostname", HOSTNAME_RE), slug: str(p, "slug", SLUG_RE), tls: bool(p, "tls"), pool: p.pool === undefined ? false : bool(p, "pool") };
+      return {
+        hostname: str(p, "hostname", HOSTNAME_RE),
+        slug: str(p, "slug", SLUG_RE),
+        tls: bool(p, "tls"),
+        pool: p.pool === undefined ? false : bool(p, "pool"),
+        certName: optStr(p, "certName", WILDCARD_CERT_RE),
+      };
     },
-    async run(p: { hostname: string; slug: string; tls: boolean; pool: boolean }, ctx) {
+    async run(p: { hostname: string; slug: string; tls: boolean; pool: boolean; certName: string | null }, ctx) {
       mkdirSync(join(ctx.config.acmeWebroot, ".well-known", "acme-challenge"), { recursive: true });
-      if (p.tls && !existsSync(join(ctx.config.letsencryptDir, "live", p.hostname, "fullchain.pem"))) throw new Error(`No certificate for ${p.hostname} yet`);
+      const cert = p.certName ?? p.hostname;
+      if (p.tls && !existsSync(join(ctx.config.letsencryptDir, "live", cert, "fullchain.pem"))) throw new Error(`No certificate ${cert} yet`);
       const content = renderSite({ ...p, acmeWebroot: ctx.config.acmeWebroot, letsencryptDir: ctx.config.letsencryptDir });
       await writeNginxFile(ctx, join(ctx.config.nginxConfDir, `inveon-site-${p.hostname}.conf`), content);
     },
@@ -768,23 +807,69 @@ export const ACTIONS: Record<string, Action<any>> = {
     },
   },
 
+  /**
+   * A wildcard certificate (*.<base> and <base>) with the DNS-01 challenge.
+   * certbot's manual hooks are this agent's fixed `dns-hook` commands; the
+   * control plane publishes the TXT record with the organization's DNS
+   * provider, so no DNS credentials are on the server.
+   */
+  "certbot.issue_wildcard": {
+    parse(params: unknown) {
+      const p = obj(params);
+      return { baseDomain: str(p, "baseDomain", HOSTNAME_RE), email: optStr(p, "email", /^[^\s@]{1,64}@[A-Za-z0-9.-]{1,253}$/) };
+    },
+    async run(p: { baseDomain: string; email: string | null }, ctx) {
+      const certName = wildcardCertName(p.baseDomain);
+      const args = [
+        "certonly",
+        "--manual",
+        "--preferred-challenges",
+        "dns",
+        "--manual-auth-hook",
+        dnsHookCommand("auth", ctx),
+        "--manual-cleanup-hook",
+        dnsHookCommand("cleanup", ctx),
+        "--cert-name",
+        certName,
+        "-d",
+        `*.${p.baseDomain}`,
+        "-d",
+        p.baseDomain,
+        "--non-interactive",
+        "--agree-tos",
+        "--keep-until-expiring",
+        ...(p.email ? ["--email", p.email] : ["--register-unsafely-without-email"]),
+      ];
+      await exec(ctx, "certbot", args, { timeoutMs: 900_000, env: hookEnv(ctx) });
+      return { certName, wildcards: [{ baseDomain: p.baseDomain, expiresAt: certExpiry(ctx.config, certName).expiresAt }] };
+    },
+  },
+
   "certbot.renew": {
     parse(params: unknown) {
       const p = obj(params);
       const hostnames = Array.isArray(p.hostnames) ? p.hostnames : [];
       if (hostnames.length > 500 || !hostnames.every((h) => typeof h === "string" && HOSTNAME_RE.test(h))) throw new ParamError("Invalid hostnames");
-      return { hostnames: hostnames as string[] };
+      const wildcards = Array.isArray(p.wildcards) ? p.wildcards : [];
+      if (wildcards.length > 100 || !wildcards.every((h) => typeof h === "string" && HOSTNAME_RE.test(h))) throw new ParamError("Invalid wildcards");
+      return { hostnames: hostnames as string[], wildcards: wildcards as string[] };
     },
-    async run(p: { hostnames: string[] }, ctx) {
-      await exec(ctx, "certbot", ["renew", "--non-interactive"], { timeoutMs: 900_000 });
-      return { certs: p.hostnames.map((h) => certExpiry(ctx.config, h)) };
+    async run(p: { hostnames: string[]; wildcards: string[] }, ctx) {
+      // Wildcards renew through their saved DNS-01 hooks, which answer for this job.
+      await exec(ctx, "certbot", ["renew", "--non-interactive"], { timeoutMs: 900_000, ...(p.wildcards.length ? { env: hookEnv(ctx) } : {}) });
+      return {
+        certs: p.hostnames.map((h) => certExpiry(ctx.config, h)),
+        ...(p.wildcards.length ? { wildcards: p.wildcards.map((b) => ({ baseDomain: b, expiresAt: certExpiry(ctx.config, wildcardCertName(b)).expiresAt })) } : {}),
+      };
     },
   },
 
-  /** Deletes a certificate (preview teardown) so certbot stops renewing it. */
+  /** Deletes a certificate (preview teardown, a removed wildcard) so certbot stops renewing it. */
   "certbot.delete": {
     parse(params: unknown) {
-      return { hostname: str(obj(params), "hostname", HOSTNAME_RE) };
+      const p = obj(params);
+      const name = p.certName !== undefined ? str(p, "certName", CERT_NAME_RE) : str(p, "hostname", HOSTNAME_RE);
+      return { hostname: name };
     },
     async run(p: { hostname: string }, ctx) {
       if (!existsSync(join(ctx.config.letsencryptDir, "renewal", `${p.hostname}.conf`)) && !existsSync(join(ctx.config.letsencryptDir, "live", p.hostname))) {

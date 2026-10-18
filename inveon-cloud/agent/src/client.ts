@@ -88,6 +88,11 @@ export class ControlPlaneClient {
     return this.post(`/jobs/${jobId}/steps/${stepId}`, report);
   }
 
+  /** certbot's DNS-01 hook: publish or remove the TXT record (Route 53 can take a minute to sync). */
+  dnsChallenge(jobId: string, body: { phase: "auth" | "cleanup"; domain: string; validation: string }) {
+    return this.post(`/jobs/${jobId}/dns-challenge`, body, 240000) as Promise<{ waitSec?: number } | null>;
+  }
+
   finish(jobId: string, status: "success" | "failure", error?: string) {
     return this.post(`/jobs/${jobId}/finish`, { status, error });
   }

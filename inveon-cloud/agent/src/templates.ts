@@ -1,5 +1,5 @@
 import { isIP } from "node:net";
-import { ENV_KEY_RE, HOSTNAME_RE, ParamError, SLUG_RE } from "./params.js";
+import { CERT_NAME_RE, ENV_KEY_RE, HOSTNAME_RE, ParamError, SLUG_RE } from "./params.js";
 
 export const upstreamName = (slug: string) => `inveon_${slug.replace(/-/g, "_")}`;
 /** The proxy's upstream for an environment on several servers: every replica's listener. */
@@ -81,9 +81,12 @@ export function renderListener(slug: string, port: number, allow: string[]) {
  * A site for one hostname. Without TLS it serves the ACME challenge and
  * proxies everything else; with TLS it redirects HTTP to HTTPS.
  */
-export function renderSite(opts: { hostname: string; slug: string; tls: boolean; acmeWebroot: string; letsencryptDir: string; pool?: boolean }) {
+export function renderSite(opts: { hostname: string; slug: string; tls: boolean; acmeWebroot: string; letsencryptDir: string; pool?: boolean; certName?: string | null }) {
   const { hostname, slug, tls, acmeWebroot, letsencryptDir } = opts;
   if (!HOSTNAME_RE.test(hostname) || !SLUG_RE.test(slug)) throw new ParamError("Invalid site");
+  // A hostname under a wildcard certificate is served with that certificate.
+  const certName = opts.certName ?? hostname;
+  if (!CERT_NAME_RE.test(certName)) throw new ParamError("Invalid certificate name");
   // On the proxy of a multi-server environment the site goes to the pool of replicas.
   const up = opts.pool ? poolName(slug) : upstreamName(slug);
   const acme = `    location ^~ /.well-known/acme-challenge/ {\n        root ${acmeWebroot};\n        default_type text/plain;\n    }\n`;
@@ -106,7 +109,7 @@ export function renderSite(opts: { hostname: string; slug: string; tls: boolean;
   if (!tls) {
     return `${header}server {\n    listen 80;\n    listen [::]:80;\n    server_name ${hostname};\n${acme}${proxy}\n}\n`;
   }
-  const live = `${letsencryptDir}/live/${hostname}`;
+  const live = `${letsencryptDir}/live/${certName}`;
   return (
     `${header}server {\n    listen 80;\n    listen [::]:80;\n    server_name ${hostname};\n${acme}    location / {\n        return 301 https://$host$request_uri;\n    }\n}\n\n` +
     `server {\n    listen 443 ssl http2;\n    listen [::]:443 ssl http2;\n    server_name ${hostname};\n` +

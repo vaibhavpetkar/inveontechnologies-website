@@ -18,6 +18,8 @@ export interface RunJobDeps {
   flushMs?: number;
   /** Streaming steps check in this often even when quiet, to notice a cancel (ms). */
   keepaliveMs?: number;
+  /** The config file (certbot's DNS-01 hooks read it). */
+  configPath?: string;
 }
 
 /**
@@ -67,6 +69,8 @@ export async function runJob(client: ControlPlaneClient, job: AgentJob, deps: Ru
         config: deps.config,
         runner: deps.runner,
         signal: controller.signal,
+        jobId: job.id,
+        ...(deps.configPath ? { configPath: deps.configPath } : {}),
         log: (chunk) => {
           buffer += chunk;
           if (buffer.length > 64 * 1024) void flush().catch(() => undefined);
@@ -209,7 +213,7 @@ export async function runAgent(config: AgentConfig, runner: Runner, opts: { conf
     try {
       const job = await client.claim("main");
       backoff = 1000;
-      if (job) await runJob(client, job, { config, runner });
+      if (job) await runJob(client, job, { config, runner, configPath: configPath ?? undefined });
     } catch (err) {
       if (err instanceof HttpError && err.status === 401) log("the control plane rejected this agent's token; re-install the agent", {});
       else log("claim failed", { error: String(err) });

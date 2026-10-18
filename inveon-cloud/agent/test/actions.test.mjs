@@ -54,6 +54,7 @@ test("the action allow-list is exactly the documented set", () => {
     "backup.restore",
     "certbot.delete",
     "certbot.issue",
+    "certbot.issue_wildcard",
     "certbot.renew",
     "compose.down",
     "compose.logs",

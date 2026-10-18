@@ -30,6 +30,11 @@ export const GITHUB_REPO_RE = /^(?!\.\.?$)[A-Za-z0-9._-]{1,100}$/;
 export const REGISTRY_SERVER_RE = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::\d{1,5})?$/;
 export const REGISTRY_USER_RE = /^[A-Za-z0-9._@+-]{1,256}$/;
 export const URL_PATH_RE = /^\/[A-Za-z0-9._~\/?=&%-]{0,200}$/;
+/** A wildcard certificate's name: "wildcard_" and its base domain (never a hostname, so no clash with a domain's own). */
+export const WILDCARD_CERT_RE = /^wildcard_(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+export const wildcardCertName = (baseDomain: string) => `wildcard_${baseDomain}`;
+/** A certificate on disk: a hostname's own, or a wildcard's. */
+export const CERT_NAME_RE = new RegExp(`(?:${HOSTNAME_RE.source})|(?:${WILDCARD_CERT_RE.source})`);
 
 export function obj(v: unknown, what = "params"): Obj {
   if (typeof v !== "object" || v === null || Array.isArray(v)) throw new ParamError(`${what} must be an object`);
