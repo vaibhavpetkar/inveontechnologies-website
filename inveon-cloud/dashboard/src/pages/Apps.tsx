@@ -5,6 +5,7 @@ import { api } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useAuth, useOrgPath } from "../context/AuthContext";
 import type { App } from "../lib/types";
+import { GithubAppCard } from "../components/GithubApp";
 import { CopyField, Empty, ErrorNote, Field, Loading, Modal, PageHeader, useAction } from "../components/ui";
 
 export default function Apps() {
@@ -41,6 +42,7 @@ export default function Apps() {
         }
       />
       <ErrorNote error={error} />
+      <GithubAppCard />
       {loading && !data && <Loading />}
       {data && data.apps.length === 0 && (
         <Empty icon={<Boxes size={28} />} title="No apps yet">
