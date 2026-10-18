@@ -60,8 +60,15 @@ export interface Server {
   lastSeenAt: string | null;
   registeredAt: string | null;
   createdAt: string;
-  provider: "manual" | "aws";
-  provisionState: "pending" | "running" | "agent_online" | "terminating" | "terminated" | "failed" | null;
+  provider: "manual" | "aws" | "digitalocean" | "hetzner";
+  provisionState: "pending" | "running" | "agent_online" | "stopping" | "stopped" | "starting" | "resizing" | "terminating" | "terminated" | "failed" | null;
+  privateIpAddress: string | null;
+  cloudRegion: string | null;
+  cloudInstanceId: string | null;
+  cloudSize: string | null;
+  cloudImage: string | null;
+  cloudState: string | null;
+  resizeTarget: string | null;
   provisionError: string | null;
   awsRegion: string | null;
   awsInstanceId: string | null;
@@ -463,4 +470,22 @@ export interface ScrapeToken {
   lastUsedAt: string | null;
   revokedAt: string | null;
   createdAt: string;
+}
+
+export type TokenCloud = "digitalocean" | "hetzner";
+
+export interface ProviderConnection {
+  provider: string;
+  label?: string;
+  connected: boolean;
+  tokenHint: string | null;
+  accountLabel: string | null;
+  verifiedAt: string | null;
+  updatedAt: string | null;
+}
+
+export interface CloudOptions {
+  regions: { id: string; name: string }[];
+  sizes: { id: string; vcpu: number; memoryGb: number; diskGb: number | null; priceMonthly: number | null; regions?: string[]; arch: "x86_64" | "arm64" }[];
+  images: { id: string; name: string }[];
 }

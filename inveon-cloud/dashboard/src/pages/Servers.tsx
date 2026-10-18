@@ -6,6 +6,8 @@ import { useAuth, useOrgPath } from "../context/AuthContext";
 import { Link } from "wouter";
 import type { AwsInfo, MetricIncident, Server } from "../lib/types";
 import { AwsConnectionModal, CreateAwsServerModal, TerminateModal } from "./servers/Aws";
+import { CLOUD_NAMES, CloudAccountsModal, CreateCloudServerModal, PowerModal, serverSize } from "./servers/Clouds";
+import type { ProviderConnection, TokenCloud } from "../lib/types";
 import { bytes, timeAgo } from "../lib/format";
 import { CopyField, Empty, ErrorNote, Field, Loading, Modal, PageHeader, StatusBadge, useAction } from "../components/ui";
 
@@ -90,6 +92,13 @@ export default function Servers() {
   const [launching, setLaunching] = useState(false);
   const [terminating, setTerminating] = useState<Server | null>(null);
   const awsConnected = !!aws.data?.connection?.connected;
+  const tokenClouds = useApi<{ connections: ProviderConnection[] }>(can("admin") ? orgPath("/clouds") : null);
+  const [cloudsOpen, setCloudsOpen] = useState(false);
+  const [creatingOn, setCreatingOn] = useState<TokenCloud | null>(null);
+  const [power, setPower] = useState<Server | null>(null);
+  const connectedClouds = (tokenClouds.data?.connections ?? []).filter((c) => c.connected).map((c) => c.provider as TokenCloud);
+  // Launched by Inveon Cloud on some cloud (not added by hand).
+  const launched = (s: Server) => s.provider !== "manual" && !!(s.awsInstanceId || s.cloudInstanceId);
   const incidents = useApi<{ incidents: MetricIncident[] }>(orgPath("/metric-incidents"), 30000);
   const openFor = (id: string) => incidents.data?.incidents.filter((i) => i.serverId === id).length ?? 0;
 
@@ -132,6 +141,14 @@ export default function Servers() {
                   <Plus size={16} /> Create on AWS
                 </button>
               )}
+              <button className="btn btn-ghost" onClick={() => setCloudsOpen(true)}>
+                <Cloud size={16} /> DigitalOcean, Hetzner
+              </button>
+              {connectedClouds.map((p) => (
+                <button key={p} className="btn btn-ghost" onClick={() => setCreatingOn(p)}>
+                  <Plus size={16} /> Create on {CLOUD_NAMES[p]}
+                </button>
+              ))}
               <button className="btn btn-primary" onClick={() => setAdding(true)}>
                 <Plus size={16} /> Add server
               </button>
@@ -159,12 +176,21 @@ export default function Servers() {
                   </Link>
                 )}
               </h3>
-              <StatusBadge status={s.provider === "aws" && s.provisionState && s.provisionState !== "agent_online" ? s.provisionState : s.status} />
+              <StatusBadge status={s.provider !== "manual" && s.provisionState && s.provisionState !== "agent_online" ? s.provisionState : s.status} />
             </div>
             {s.provider === "aws" && (
               <p className="muted small">
                 EC2 {s.awsInstanceType} · {s.awsRegion} · {s.awsInstanceId ?? "launching"}
                 {s.awsState && s.awsState !== "running" ? ` · ${s.awsState}` : ""}
+                {s.provisionState === "running" && " · installing the agent (a few minutes)"}
+                {s.provisionState === "terminated" && s.terminatedAt ? ` · terminated ${timeAgo(s.terminatedAt)}` : ""}
+              </p>
+            )}
+            {(s.provider === "digitalocean" || s.provider === "hetzner") && (
+              <p className="muted small">
+                {CLOUD_NAMES[s.provider]} {s.cloudSize} · {s.cloudRegion} · {s.cloudInstanceId ?? "creating"}
+                {s.cloudState ? ` · ${s.cloudState}` : ""}
+                {s.provisionState === "resizing" && s.resizeTarget ? ` · resizing to ${s.resizeTarget}` : ""}
                 {s.provisionState === "running" && " · installing the agent (a few minutes)"}
                 {s.provisionState === "terminated" && s.terminatedAt ? ` · terminated ${timeAgo(s.terminatedAt)}` : ""}
               </p>
@@ -219,11 +245,16 @@ export default function Servers() {
                 >
                   Public IP
                 </button>
-                {s.provider === "aws" && s.provisionState !== "terminated" && (
+                {launched(s) && s.provisionState !== "terminated" && (
                   <>
-                    <button className="btn btn-small btn-ghost" onClick={() => refresh(s)} disabled={action.busy} title="Check the instance in AWS now">
+                    <button className="btn btn-small btn-ghost" onClick={() => refresh(s)} disabled={action.busy} title={`Check the instance in ${CLOUD_NAMES[s.provider]} now`}>
                       <RefreshCw size={14} /> Refresh
                     </button>
+                    {s.provisionState !== "terminating" && s.provisionState !== "pending" && (
+                      <button className="btn btn-small btn-ghost" onClick={() => setPower(s)} title={`Stop, start or resize (now ${serverSize(s) ?? "?"})`}>
+                        <Power size={14} /> Power and size
+                      </button>
+                    )}
                     {s.provisionState !== "terminating" && (
                       <button className="btn btn-small btn-ghost btn-danger" onClick={() => setTerminating(s)}>
                         <Power size={14} /> Terminate
@@ -234,8 +265,8 @@ export default function Servers() {
                 <button
                   className="btn btn-small btn-ghost btn-danger"
                   aria-label={`Remove ${s.name}`}
-                  title={s.provider === "aws" && s.provisionState !== "terminated" && s.provisionState !== "failed" ? "Terminate the instance first" : "Remove"}
-                  disabled={s.provider === "aws" && s.provisionState !== "terminated" && s.provisionState !== "failed"}
+                  title={launched(s) && s.provisionState !== "terminated" && s.provisionState !== "failed" ? "Terminate the instance first" : "Remove"}
+                  disabled={launched(s) && s.provisionState !== "terminated" && s.provisionState !== "failed"}
                   onClick={() => {
                     if (confirm(`Remove ${s.name}? The agent on it stops being accepted.`)) void action.run(async () => (await api(orgPath(`/servers/${s.id}`), { method: "DELETE" }), reload()));
                   }}
@@ -258,6 +289,9 @@ export default function Servers() {
         />
       )}
       <TerminateModal server={terminating} onClose={() => setTerminating(null)} onDone={() => void reload()} />
+      <CloudAccountsModal open={cloudsOpen} onClose={() => setCloudsOpen(false)} onSaved={() => void tokenClouds.reload()} />
+      <CreateCloudServerModal provider={creatingOn} onClose={() => setCreatingOn(null)} onCreated={() => void reload()} />
+      <PowerModal server={power} onClose={() => setPower(null)} onDone={() => void reload()} />
 
       <Modal open={adding} title="Add server" onClose={() => setAdding(false)}>
         <form onSubmit={create} className="form">

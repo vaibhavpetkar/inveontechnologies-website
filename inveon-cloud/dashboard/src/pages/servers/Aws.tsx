@@ -327,8 +327,8 @@ export function TerminateModal({ server, onClose, onDone }: { server: Server | n
           }}
         >
           <div className="note note-bad">
-            This terminates EC2 instance {server.awsInstanceId} in {server.awsRegion}. Its disk is deleted with it and can't be recovered. Move or back up anything you need
-            first.
+            This terminates {server.provider === "aws" ? `EC2 instance ${server.awsInstanceId} in ${server.awsRegion}` : `${server.provider === "hetzner" ? "Hetzner server" : "droplet"} ${server.cloudInstanceId} in ${server.cloudRegion}`}. Its disk is deleted with it and can't be recovered. Move or back
+            up anything you need first.
           </div>
           <Field label={`Type ${server.name} to confirm`}>
             <input autoComplete="off" value={typed} onChange={(e) => setTyped(e.target.value)} />
