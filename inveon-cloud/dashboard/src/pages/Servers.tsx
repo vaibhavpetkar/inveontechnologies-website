@@ -86,6 +86,7 @@ export default function Servers() {
   const [install, setInstall] = useState<{ command: string; expiresAt: string; title: string } | null>(null);
   const [editing, setEditing] = useState<Server | null>(null);
   const [ip, setIp] = useState("");
+  const [privateIp, setPrivateIp] = useState("");
   const action = useAction();
   const aws = useApi<AwsInfo>(can("admin") ? orgPath("/aws") : null);
   const [awsOpen, setAwsOpen] = useState(false);
@@ -241,9 +242,10 @@ export default function Servers() {
                   onClick={() => {
                     setEditing(s);
                     setIp(s.ipAddress ?? "");
+                    setPrivateIp(s.privateIpAddress ?? "");
                   }}
                 >
-                  Public IP
+                  IP addresses
                 </button>
                 {launched(s) && s.provisionState !== "terminated" && (
                   <>
@@ -309,13 +311,13 @@ export default function Servers() {
         {install && <InstallCommand command={install.command} expiresAt={install.expiresAt} />}
       </Modal>
 
-      <Modal open={!!editing} title={`Public IP of ${editing?.name ?? ""}`} onClose={() => setEditing(null)}>
+      <Modal open={!!editing} title={`IP addresses of ${editing?.name ?? ""}`} onClose={() => setEditing(null)}>
         <form
           className="form"
           onSubmit={(e) => {
             e.preventDefault();
             void action.run(async () => {
-              await api(orgPath(`/servers/${editing!.id}`), { method: "PATCH", body: { ipAddress: ip } });
+              await api(orgPath(`/servers/${editing!.id}`), { method: "PATCH", body: { ipAddress: ip, privateIpAddress: privateIp.trim() || null } });
               setEditing(null);
               void reload();
             });
@@ -323,6 +325,9 @@ export default function Servers() {
         >
           <Field label="IPv4 address" hint="Domains point their A record here. Taken from the agent's connection by default; correct it if the server is behind NAT.">
             <input required value={ip} onChange={(e) => setIp(e.target.value)} placeholder="203.0.113.10" />
+          </Field>
+          <Field label="Private IP address (optional)" hint="On a private network shared with the other servers of an environment, the proxy reaches this server here instead of over the internet.">
+            <input value={privateIp} onChange={(e) => setPrivateIp(e.target.value)} placeholder="10.0.0.5" />
           </Field>
           <ErrorNote error={action.error} />
           <button className="btn btn-primary" disabled={action.busy}>

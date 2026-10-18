@@ -128,6 +128,8 @@ export interface Environment {
   id: string;
   appId: string;
   serverId: string;
+  /** The server whose nginx serves the domains; null: the primary (serverId). */
+  proxyServerId: string | null;
   name: string;
   slug: string;
   strategy: "blue_green" | "recreate";
@@ -202,6 +204,36 @@ export interface Deployment {
   releaseOutput: string | null;
   backupId: string | null;
   backupStatus: JobStatus | null;
+}
+
+export interface Replica {
+  serverId: string;
+  serverName: string;
+  ipAddress: string | null;
+  privateIpAddress: string | null;
+  status: "adding" | "active" | "removing" | "failed";
+  error: string | null;
+  activeSlot: "blue" | "green" | "main" | null;
+  currentReleaseId: string | null;
+  bluePort: number;
+  greenPort: number;
+  listenPort: number | null;
+  primary: boolean;
+  proxy: boolean;
+  createdAt: string;
+}
+
+export interface ReplicasView {
+  replicas: Replica[];
+  proxy: { id: string; name: string; ipAddress: string | null; privateIpAddress: string | null; dedicated: boolean } | null;
+  pooled: boolean;
+  rollout: {
+    deploymentId: string;
+    status: JobStatus;
+    serverIds: string[];
+    done: string[];
+    failedServerId?: string | null;
+  } | null;
 }
 
 export interface EnvVar {
