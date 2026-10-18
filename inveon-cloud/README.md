@@ -35,7 +35,9 @@ inveon-cloud/
     `image.build|remove`, `release.prepare|run`,
     `compose.validate|pull|up|down|ps|logs|logs_follow`, `health.check`,
     `nginx.write_upstream|write_site|remove_site|remove_upstream|reload`,
-    `certbot.issue|renew|delete`, `backup.create|restore|delete` and
+    `nginx.write_listener|remove_listener|write_pool|remove_pool`
+    ([several servers](#one-environment-on-several-servers)),
+    `certbot.issue|issue_wildcard|renew|delete`, `backup.create|restore|delete` and
     `app.remove_folder`. The only programs it starts are `docker`, `nginx`,
     `systemctl`, `certbot`, `aws`, `tar` and `git`, always with an argv list.
     There is no shell access, every parameter is checked, and an unknown
@@ -247,11 +249,13 @@ wildcard DNS record `*.preview.example.com` at that server. Add the
   (strategy, health path, release command) from the environment you chose
   in the settings, if any. Pick a staging environment, not production:
   preview code can read those values. After its first successful deploy the
-  preview gets its own Let's Encrypt certificate (the HTTP site is written
-  first, so it works over HTTP even if certbot fails);
+  preview gets HTTPS: with a [wildcard certificate](#wildcard-certificates)
+  for the base domain on the preview server, its site uses that at once;
+  otherwise it gets its own Let's Encrypt certificate (the HTTP site is
+  written first, so it works over HTTP even if certbot fails);
 - **closed** (merged or not): a teardown job stops both colours with
   `docker compose down --volumes`, removes the nginx site and upstream,
-  deletes the certificate and the environment's folder, and then deletes
+  deletes its own certificate (never the shared wildcard) and the environment's folder, and then deletes
   the environment. If the teardown fails, the preview stays listed and an
   admin can retry it with **Tear down**.
 
@@ -263,13 +267,84 @@ running, that commit is skipped; the next push deploys again.
 With the [GitHub App](#github-app) linked for the repo's owner, each pull
 request gets **one comment**, edited in place (a new one if somebody deleted
 it): *Deploying `abc1234`…* when the deploy starts, *Live* with the preview
-URL (`http://` until the certificate is issued, then `https://`) and a
-dashboard link, *failed* with the error, and *Torn down* when the PR is
+URL (`http://` until the certificate is issued, then `https://`: the
+comment is edited again once HTTPS is in place) and a dashboard link, *failed* with the error, and *Torn down* when the PR is
 closed. The head commit also gets a commit status `inveon-cloud/preview`
 (pending, success with the preview URL, or failure). Updates for one PR are
 sent in order in the background, so GitHub being slow never holds up a
 deploy. Without the app nothing is posted; open the preview from the
 dashboard or the `pr-<number>` URL.
+
+### One environment on several servers
+
+An environment runs on one server (its **primary**) until you add more on
+its **Servers** tab (admins). Each added server (a **replica**) gets the
+live release deployed first, on its own blue and green ports, and joins the
+pool once its health check passes.
+
+- **Proxy.** One server's nginx serves the environment's domains: the
+  primary by default, another replica, or a dedicated server (**Set proxy**;
+  only while the environment has no domains, since their certificates live
+  on the proxy). Its pool upstream lists every deployed replica's
+  **listener port**, on the replica's private IP when one is set (Servers,
+  **IP addresses**) and its public IP otherwise, with nginx's passive health
+  checks (`max_fails=3 fail_timeout=10s`; a failed request is retried on the
+  next server). On each replica the listener accepts only the proxy's
+  addresses and the machine itself and forwards to the local blue/green
+  upstream. DNS for the domains points at the proxy.
+- **Rollouts.** A deploy or rollback updates the servers one at a time,
+  primary first, each with its full blue/green deploy. A server's health
+  check must pass before the next one starts. If a server fails, the
+  rollout stops: the failed server's half-started colour is stopped, and the
+  servers already updated go back to what they ran (blue/green: the upstream
+  points at the old colour again, which was kept running; recreate: the
+  previous release is deployed again). Old colours are stopped only once
+  every server is on the new release. The tab shows the progress.
+- **Primary only.** Release commands, the backup before them, nightly
+  backups, restores and logs run on the primary. **Make primary** moves
+  that role (the old primary stays the proxy, so the domains keep
+  working); backups made on the old primary stay there.
+- **Adding and removing** servers rewrites the pool: a removed server is
+  taken out of the pool first and then stopped (containers, listener and
+  upstream; its volumes stay). With one server left and the proxy on it,
+  the environment is back to the single-server setup. **Update proxy**
+  writes the listeners and the pool again, for example after changing a
+  server's IP.
+
+One-server environments work exactly as before (no listener, no pool), and
+existing environments were given their server as their one replica.
+Preview environments always run on one server. Servers that an
+environment uses as a replica or proxy can't be removed or terminated.
+
+### Wildcard certificates
+
+Servers, **DNS and wildcards** (admins) connects DNS providers and issues
+certificates for `*.<base>` and `<base>` with the DNS-01 challenge:
+
+- **Cloudflare:** an API token with Zone, Zone, Read and Zone, DNS, Edit
+  for the zones you use. It is checked before saving, encrypted like a
+  secret variable, write-only, and included in master key rotation.
+- **Route 53:** the organization's [AWS connection](#creating-servers-on-aws),
+  whose role or user also needs `route53:ListHostedZonesByName`,
+  `route53:ChangeResourceRecordSets` and `route53:GetChange`.
+
+Choose the base domain (`preview.example.com`) and the server that serves
+those hostnames (an environment's proxy, or the preview server), and point
+the A records for `*.<base>` and `<base>` at it. The control plane finds the
+zone (the base or its nearest parent) and queues a job. On the server,
+certbot runs with `--manual --preferred-challenges dns` and two fixed hook
+commands, `inveon-agent dns-hook auth|cleanup`, given the job's id in their
+environment. Each hook makes a signed request to the control plane, which
+publishes (or removes) the `_acme-challenge.<base>` TXT record, for that
+running job's wildcard on that server only, and tells certbot how long to
+wait (`INVEON_DNS_PROPAGATION_SEC`; Route 53 first waits for the change to
+be in sync). DNS credentials never reach the server, and records a failed
+run leaves behind are removed when the job ends. Renewal runs with the
+daily `certbot renew`, through the same hooks.
+
+Domains one label under an active wildcard on their proxy (`pr-12.preview.example.com`,
+not `a.b.preview.example.com`) use it: their HTTPS site is written with the
+wildcard's certificate and no certbot run of their own.
 
 ## Operations
 
@@ -385,8 +460,13 @@ and when it succeeds the releases are marked archived for that environment.
 
 ### Maintenance windows
 
-Deploys, Maintenance windows: add weekly windows (UTC weekday, start time
-and length; a window can run past midnight). With at least one window:
+Deploys, Maintenance windows: choose the time zone (an IANA name such as
+`Europe/Berlin`, UTC by default) and add weekly windows (weekday, start time
+and length, in that zone; a window can run past midnight). Windows follow
+daylight saving time: a window that starts in the hour skipped in spring
+starts when the clocks jump, one that starts in the hour repeated in autumn
+starts the first time round, and a window always lasts its length in real
+time. With at least one window:
 
 - a push that arrives outside every window doesn't deploy. Its release is
   queued on the environment, a newer push replaces it, and the scheduler
@@ -494,6 +574,23 @@ enrols its key on its own and the server shows **Signed requests**; turn on
 unsigned. Give the
 server's AWS role `s3:DeleteObject` on its backup prefix before turning on
 retention.
+
+Several servers per environment and wildcard certificates also need the
+new agent on every server involved (the replicas, the proxy, the server
+holding a wildcard); an older one fails those jobs with "Action not
+allowed" and nothing else changes. For several servers, also:
+
+- set each server's **private IP** (Servers, IP addresses) when they share a
+  private network, so pool traffic stays on it;
+- open each replica's listener port (shown on the Servers tab, from 20000
+  up) to the proxy only, in the cloud firewall or security group (nginx on
+  the replica also refuses every other address);
+- keep the data the replicas share (database, uploads) outside the
+  servers: each replica has its own volumes.
+
+For wildcard certificates, certbot must be installed on the server (as for
+any domain), and the agent's paths must be plain absolute paths without
+spaces (the default `/opt/inveon-agent` and `/etc/inveon-agent` are).
 
 ## Running it
 
@@ -680,6 +777,22 @@ is deleted, and the server can be removed from the list (it can't be
 removed while its instance may still run). Launches, terminations and
 connection changes are audit-logged (never the secret key).
 
+### DigitalOcean and Hetzner servers
+
+Servers, **DigitalOcean, Hetzner** (admins) takes an API token for each
+(DigitalOcean: read and write; Hetzner: a project's Read & Write token).
+Tokens are checked with the provider before saving, encrypted, write-only
+and included in master key rotation. **Create on DigitalOcean** or **Create
+on Hetzner Cloud** picks the region, size and image (Ubuntu or Debian) from
+the provider's own lists; the server is labelled with its Inveon ids and
+installs the agent from cloud-init with a single-use one-hour token, like
+on AWS. The scheduler follows its state every 30 seconds while it changes.
+
+On all three clouds, **Power and size** stops, starts and resizes a server
+(typed confirmation to stop; resizing only while stopped, to a size with
+the same CPU architecture that the region offers; it stays off until you
+start it). **Terminate** works as on AWS, checking the instance's label.
+
 ### GitHub App
 
 Optional. Without it, the control plane reads repos with
@@ -745,6 +858,8 @@ settings, GitHub Apps):
 | `INVEON_AGENT_SIGNATURES` | `optional` | `required` refuses unsigned agent requests in every organization; see [signed agent requests](#signed-agent-requests). |
 | `INVEON_WEBAUTHN_ORIGINS` | unset | Extra browser origins for [passkeys](#passkeys) on the same host (for example the Vite dev server). |
 | `INVEON_ACME_EMAIL` | unset | Let's Encrypt account email. |
+| `INVEON_DNS_PROPAGATION_SEC` | `30` | How long certbot waits after a [wildcard](#wildcard-certificates) challenge record is published (0 to 600). |
+| `INVEON_DIGITALOCEAN_API_BASE`, `INVEON_HETZNER_API_BASE`, `INVEON_CLOUDFLARE_API_BASE` | the providers' APIs | Only for tests (the fakes). |
 | `INVEON_SMTP_HOST`, `_PORT`, `_SECURE`, `_USER`, `_PASSWORD`, `INVEON_MAIL_FROM` | unset | Invites, health emails and email alert channels. |
 | `INVEON_ALERT_PRIVATE_HOSTS` | unset | Comma-separated hosts that alert webhooks may reach on a private address or over plain http. Only for trusted internal endpoints. |
 | `INVEON_ACCESS_TOKEN_TTL_MIN` / `INVEON_REFRESH_TOKEN_TTL_DAYS` | `15` / `30` | |
@@ -1084,8 +1199,20 @@ a fake GitHub API, and act as the agent. They cover:
   another environment keeps), never the live or previous release, refusing
   rollbacks to archived releases, and un-archiving on redeploy;
 - maintenance windows: the window maths (past midnight and across the
-  week), queuing and replacing pushes, deploying when the window opens,
-  and manual deploys flagged but allowed;
+  week), time zones and both daylight saving changes, queuing and
+  replacing pushes, deploying when the window opens, and manual deploys
+  flagged but allowed;
+- several servers: the backfill, port allocation, adding a replica (deploy
+  first, then listeners and the pool), the rollout order, a failure on the
+  second of three servers rolling back the first (blue/green and recreate),
+  stopping old colours at the end, removing a replica and going back to one
+  server, a dedicated proxy with domains issued on the pool, making another
+  server the primary, and one-server deploys unchanged;
+- wildcard certificates: the Cloudflare connection, zone lookup, the hooks'
+  checks (server, job, domain, value), TXT records published and removed
+  with Cloudflare and with Route 53 (UPSERT of every live value, waiting for
+  INSYNC, DELETE with the exact values), leftovers removed after a failed
+  run, and previews served with the wildcard;
 - monitoring: metric batches only for the agent's own server (unknown
   fields refused), the batch, value and container caps, skipped old and
   duplicate samples, charts and an environment's containers, the rollup
@@ -1101,7 +1228,10 @@ never returned), every input check, the AMI lookup per architecture, the
 security group rules, the user data and its single-use one-hour token,
 pending to running to agent online, a failed launch cleaning up, and
 terminate (typed confirmation, environments, the tag check, the agent cut
-off, the group deleted afterwards).
+off, the group deleted afterwards). DigitalOcean, Hetzner and Cloudflare run
+against in-process fakes (`test/fake-clouds.mjs`): token checks, creating
+servers from the providers' lists, state polling, and stop, start and
+resize on all three clouds.
 
 The agent tests cover the allow-list, parameter checks, the argument lists
 of every command (run through a fake runner), nginx rollback when `nginx -t`
@@ -1113,7 +1243,10 @@ checks, cancelling a live log stream while it is quiet, request signing
 (the fixed vector, the `0600` key, enrolment and its retry), and metrics: the
 `/proc` parsers (CPU, memory, network), `docker stats` and `docker ps`
 parsing, the exact docker argument lists, and the send buffer (batches,
-retries, refused batches dropped, size cap).
+retries, refused batches dropped, size cap). They also render the replica
+listener and the pool (address, port and IPv6 checks), and check certbot's
+exact DNS-01 argument list, the hook command's path checks, the hook itself
+(what it sends, the capped wait) and sites served with a wildcard.
 
 ## Moving the portal, the website and the CRM onto Inveon Cloud
 
@@ -1174,14 +1307,10 @@ rollback.
 7. **Retire the old host** once traffic and backups have looked healthy for
    a few days.
 
-## Phase 2
+## Future work
 
-- Other clouds (DigitalOcean, Hetzner) behind the same provider interface as
-  EC2, and resizing or stopping instances from the dashboard.
-- Build on a separate build host (builds run on each environment's server
-  today).
+- Build on a separate build host (builds run on each server today, and on
+  every replica of a multi-server environment).
 - SSO.
 - Central log search across servers (live logs and the last lines are
-  per environment today), and metric history beyond 30 days.
-- Maintenance windows in a chosen time zone (they are UTC today).
-- Many servers behind one proxy, and wildcard certificates (DNS-01).
+  per environment, on its primary, today), and metric history beyond 30 days.
