@@ -252,6 +252,8 @@ export interface Domain {
   lastError: string | null;
   certIssuedAt: string | null;
   certExpiresAt: string | null;
+  /** Served with this wildcard certificate (DNS and wildcards on the Servers page). */
+  wildcardId?: string | null;
   dnsRecord?: { type: string; name: string; value: string | null };
 }
 
@@ -520,4 +522,29 @@ export interface CloudOptions {
   regions: { id: string; name: string }[];
   sizes: { id: string; vcpu: number; memoryGb: number; diskGb: number | null; priceMonthly: number | null; regions?: string[]; arch: "x86_64" | "arm64" }[];
   images: { id: string; name: string }[];
+}
+
+export interface WildcardCertificate {
+  id: string;
+  baseDomain: string;
+  dnsProvider: "cloudflare" | "route53";
+  zoneId: string;
+  zoneName: string;
+  serverId: string;
+  serverName: string | null;
+  status: "issuing" | "active" | "failed";
+  lastError: string | null;
+  certName: string;
+  certIssuedAt: string | null;
+  certExpiresAt: string | null;
+  dnsRecords: { type: string; name: string; value: string | null }[];
+  createdAt: string;
+}
+
+export interface DnsView {
+  connections: {
+    cloudflare: ProviderConnection & { label: string };
+    route53: { provider: "route53"; label: string; connected: boolean };
+  };
+  wildcards: WildcardCertificate[];
 }

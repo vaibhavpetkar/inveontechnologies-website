@@ -92,7 +92,7 @@ export function DomainsTab({ detail, reload }: { detail: EnvironmentDetail; relo
             </div>
           )}
           <p className="muted small">
-            {d.certExpiresAt ? `Certificate valid until ${dateTime(d.certExpiresAt)}. Renewal runs daily.` : d.dnsCheckedAt ? `DNS checked ${timeAgo(d.dnsCheckedAt)}.` : "DNS not checked yet."}
+            {d.certExpiresAt ? `${d.wildcardId ? "Wildcard certificate" : "Certificate"} valid until ${dateTime(d.certExpiresAt)}. Renewal runs daily.` : d.dnsCheckedAt ? `DNS checked ${timeAgo(d.dnsCheckedAt)}.` : "DNS not checked yet."}
           </p>
           {d.lastError && d.status !== "active" && <ErrorNote error={d.lastError} />}
           {can("admin") && (

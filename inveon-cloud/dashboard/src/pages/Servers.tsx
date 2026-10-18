@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Cloud, Cpu, HardDrive, KeyRound, MemoryStick, Plus, Power, RefreshCw, Server as ServerIcon, ShieldCheck, Trash2 } from "lucide-react";
+import { Cloud, Cpu, HardDrive, KeyRound, Lock, MemoryStick, Plus, Power, RefreshCw, Server as ServerIcon, ShieldCheck, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApi } from "../lib/useApi";
 import { useAuth, useOrgPath } from "../context/AuthContext";
@@ -7,6 +7,7 @@ import { Link } from "wouter";
 import type { AwsInfo, MetricIncident, Server } from "../lib/types";
 import { AwsConnectionModal, CreateAwsServerModal, TerminateModal } from "./servers/Aws";
 import { CLOUD_NAMES, CloudAccountsModal, CreateCloudServerModal, PowerModal, serverSize } from "./servers/Clouds";
+import { WildcardsModal } from "./servers/Wildcards";
 import type { ProviderConnection, TokenCloud } from "../lib/types";
 import { bytes, timeAgo } from "../lib/format";
 import { CopyField, Empty, ErrorNote, Field, Loading, Modal, PageHeader, StatusBadge, useAction } from "../components/ui";
@@ -95,6 +96,7 @@ export default function Servers() {
   const awsConnected = !!aws.data?.connection?.connected;
   const tokenClouds = useApi<{ connections: ProviderConnection[] }>(can("admin") ? orgPath("/clouds") : null);
   const [cloudsOpen, setCloudsOpen] = useState(false);
+  const [dnsOpen, setDnsOpen] = useState(false);
   const [creatingOn, setCreatingOn] = useState<TokenCloud | null>(null);
   const [power, setPower] = useState<Server | null>(null);
   const connectedClouds = (tokenClouds.data?.connections ?? []).filter((c) => c.connected).map((c) => c.provider as TokenCloud);
@@ -144,6 +146,9 @@ export default function Servers() {
               )}
               <button className="btn btn-ghost" onClick={() => setCloudsOpen(true)}>
                 <Cloud size={16} /> DigitalOcean, Hetzner
+              </button>
+              <button className="btn btn-ghost" onClick={() => setDnsOpen(true)}>
+                <Lock size={16} /> DNS and wildcards
               </button>
               {connectedClouds.map((p) => (
                 <button key={p} className="btn btn-ghost" onClick={() => setCreatingOn(p)}>
@@ -291,6 +296,7 @@ export default function Servers() {
         />
       )}
       <TerminateModal server={terminating} onClose={() => setTerminating(null)} onDone={() => void reload()} />
+      <WildcardsModal open={dnsOpen} onClose={() => setDnsOpen(false)} servers={(data?.servers ?? []).filter((s) => s.provisionState !== "terminated")} />
       <CloudAccountsModal open={cloudsOpen} onClose={() => setCloudsOpen(false)} onSaved={() => void tokenClouds.reload()} />
       <CreateCloudServerModal provider={creatingOn} onClose={() => setCreatingOn(null)} onCreated={() => void reload()} />
       <PowerModal server={power} onClose={() => setPower(null)} onDone={() => void reload()} />
