@@ -17,14 +17,17 @@ type Environment = typeof environments.$inferSelect;
  * outside the window so the dashboard can warn first.
  */
 export function maintenanceView(environment: Environment, now = new Date()) {
-  const s = windowState(environment.maintenanceWindows, now);
+  const tz = environment.maintenanceTimeZone;
+  const s = windowState(environment.maintenanceWindows, now, tz);
   return {
     windows: environment.maintenanceWindows,
+    timeZone: tz,
     restricted: s.restricted,
     open: s.open,
     current: s.current,
     next: s.next,
-    nextLabel: s.next ? describeWindow(s.next) : null,
+    nextLabel: s.next ? describeWindow(s.next, tz) : null,
+    currentLabel: s.current ? describeWindow(s.current, tz) : null,
     queuedReleaseId: environment.queuedReleaseId,
     queuedAt: environment.queuedAt,
   };
@@ -32,7 +35,7 @@ export function maintenanceView(environment: Environment, now = new Date()) {
 
 /** True when an automatic deploy has to wait. */
 export function outsideWindow(environment: Environment, now = new Date()) {
-  const s = windowState(environment.maintenanceWindows, now);
+  const s = windowState(environment.maintenanceWindows, now, environment.maintenanceTimeZone);
   return s.restricted && !s.open;
 }
 

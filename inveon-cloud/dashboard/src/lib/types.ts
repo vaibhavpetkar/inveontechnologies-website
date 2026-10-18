@@ -136,6 +136,7 @@ export interface Environment {
   previewPr: number | null;
   keepReleases: number;
   maintenanceWindows: MaintenanceWindow[];
+  maintenanceTimeZone: string;
   queuedReleaseId: string | null;
   queuedAt: string | null;
   createdAt: string;
@@ -265,6 +266,9 @@ export interface MaintenanceWindow {
 
 export interface MaintenanceState {
   windows: MaintenanceWindow[];
+  /** IANA name the windows are read in (UTC unless chosen). */
+  timeZone: string;
+  currentLabel: string | null;
   restricted: boolean;
   open: boolean;
   current: { start: string; end: string } | null;

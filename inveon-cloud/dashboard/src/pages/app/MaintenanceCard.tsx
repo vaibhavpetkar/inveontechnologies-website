@@ -18,17 +18,27 @@ function until(iso: string) {
   return h < 48 ? `in ${h} h` : `in ${Math.round(h / 24)} days`;
 }
 
-const hhmm = (iso: string) => new Date(iso).toISOString().slice(11, 16);
+/** IANA zones the browser knows, with UTC first and the browser's own zone near the top. */
+function zoneOptions(current: string) {
+  let zones: string[] = [];
+  try {
+    zones = (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.("timeZone") ?? [];
+  } catch {
+    zones = [];
+  }
+  const local = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return [...new Set(["UTC", local, current, ...zones])].filter(Boolean);
+}
 
 /** One line for the environment summary and the deploy warning. */
 export function windowSummary(m: MaintenanceState) {
   if (!m.restricted) return null;
-  if (m.open && m.current) return `Maintenance window open until ${hhmm(m.current.end)} UTC`;
+  if (m.open && m.current) return `Maintenance window open now (${m.currentLabel ?? ""})`;
   return m.next ? `Next maintenance window ${m.nextLabel} (${until(m.next.start)})` : null;
 }
 
 /**
- * Weekly windows (UTC) when pushes may deploy. Outside them, a push waits
+ * Weekly windows, in the environment's time zone, when pushes may deploy. Outside them, a push waits
  * and deploys when the next window opens; manual deploys still go ahead.
  */
 export function MaintenanceCard({ detail, reload }: { detail: EnvironmentDetail; reload: () => void }) {
@@ -37,14 +47,16 @@ export function MaintenanceCard({ detail, reload }: { detail: EnvironmentDetail;
   const env = detail.environment;
   const m = detail.maintenance;
   const [rows, setRows] = useState<MaintenanceWindow[]>(m.windows);
+  const [timeZone, setTimeZone] = useState(m.timeZone);
   const action = useAction();
   useEffect(() => setRows(detail.maintenance.windows), [env.id, detail.maintenance.windows]);
+  useEffect(() => setTimeZone(detail.maintenance.timeZone), [env.id, detail.maintenance.timeZone]);
 
   const set = (i: number, patch: Partial<MaintenanceWindow>) => setRows((r) => r.map((w, j) => (j === i ? { ...w, ...patch } : w)));
   const save = (e: FormEvent) => {
     e.preventDefault();
     void action.run(async () => {
-      await api(orgPath(`/environments/${env.id}`), { method: "PATCH", body: { maintenanceWindows: rows } });
+      await api(orgPath(`/environments/${env.id}`), { method: "PATCH", body: { maintenanceWindows: rows, maintenanceTimeZone: timeZone } });
       reload();
     });
   };
@@ -55,7 +67,7 @@ export function MaintenanceCard({ detail, reload }: { detail: EnvironmentDetail;
     });
 
   const summary = windowSummary(m);
-  const dirty = JSON.stringify(rows) !== JSON.stringify(m.windows);
+  const dirty = JSON.stringify(rows) !== JSON.stringify(m.windows) || timeZone !== m.timeZone;
 
   return (
     <div className="card">
@@ -67,7 +79,7 @@ export function MaintenanceCard({ detail, reload }: { detail: EnvironmentDetail;
       </div>
       <p className="muted small">
         {m.restricted
-          ? "Pushes deploy only inside these windows (UTC). A push outside them waits, and the newest one deploys when the next window opens. Manual deploys and rollbacks still run at any time."
+          ? `Pushes deploy only inside these windows (${m.timeZone}, daylight saving time included). A push outside them waits, and the newest one deploys when the next window opens. Manual deploys and rollbacks still run at any time.`
           : "Pushes deploy as soon as they arrive. Add a window to hold automatic deploys until a quiet time."}
       </p>
       {summary && <p className="note note-info">{summary}</p>}
@@ -86,6 +98,16 @@ export function MaintenanceCard({ detail, reload }: { detail: EnvironmentDetail;
       )}
       {can("admin") ? (
         <form className="form" onSubmit={save}>
+          <label>
+            Time zone
+            <select value={timeZone} onChange={(e) => setTimeZone(e.target.value)}>
+              {zoneOptions(timeZone).map((z) => (
+                <option key={z} value={z}>
+                  {z}
+                </option>
+              ))}
+            </select>
+          </label>
           {rows.map((w, i) => (
             <div key={i} className="window-row">
               <select aria-label="Day" value={w.day} onChange={(e) => set(i, { day: Number(e.target.value) })}>
@@ -95,7 +117,7 @@ export function MaintenanceCard({ detail, reload }: { detail: EnvironmentDetail;
                   </option>
                 ))}
               </select>
-              <input aria-label="Start (UTC)" type="time" required value={w.start} onChange={(e) => set(i, { start: e.target.value })} />
+              <input aria-label={`Start (${timeZone})`} type="time" required value={w.start} onChange={(e) => set(i, { start: e.target.value })} />
               <select aria-label="Length" value={w.durationMin} onChange={(e) => set(i, { durationMin: Number(e.target.value) })}>
                 {[...new Set([...LENGTHS, w.durationMin])].sort((a, b) => a - b).map((n) => (
                   <option key={n} value={n}>
@@ -123,7 +145,7 @@ export function MaintenanceCard({ detail, reload }: { detail: EnvironmentDetail;
           <ul className="muted small">
             {m.windows.map((w, i) => (
               <li key={i}>
-                {DAYS[w.day]} {w.start} UTC for {w.durationMin < 60 ? `${w.durationMin} min` : `${w.durationMin / 60} h`}
+                {DAYS[w.day]} {w.start} {m.timeZone} for {w.durationMin < 60 ? `${w.durationMin} min` : `${w.durationMin / 60} h`}
               </li>
             ))}
           </ul>

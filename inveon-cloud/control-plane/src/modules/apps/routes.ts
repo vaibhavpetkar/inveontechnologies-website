@@ -14,7 +14,7 @@ import { deployKeyAad, registryAad, webhookAad } from "../../lib/aad.js";
 import { HOSTNAME_RE } from "../domains/routes.js";
 import { startPreviewTeardown } from "../previews/service.js";
 import { parseReleaseCommand, RELEASE_SERVICE_RE } from "../../lib/release-command.js";
-import { windowsSchema } from "../../lib/maintenance.js";
+import { timeZoneSchema, windowsSchema } from "../../lib/maintenance.js";
 import { maintenanceView } from "../deploys/maintenance.js";
 import { slugify } from "../auth/routes.js";
 import { loadServer, publicServer } from "../servers/routes.js";
@@ -308,6 +308,8 @@ export function environmentsRouter(db: Database, env: Env) {
         // Release archiving: at least the live and the previous release are kept.
         keepReleases: z.number().int().min(2).max(100).optional(),
         maintenanceWindows: windowsSchema.optional(),
+        // IANA name; the windows are read in this zone (DST included).
+        maintenanceTimeZone: timeZoneSchema.optional(),
       })
       .parse(req.body);
     const { environment } = await loadEnvironment(db, req.member!.orgId, req.params.envId);

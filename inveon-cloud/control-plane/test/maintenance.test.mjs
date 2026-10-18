@@ -5,7 +5,7 @@ import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { startServer, sha } from "./helpers.mjs";
-import { windowState, describeWindow } from "../dist/lib/maintenance.js";
+import { windowState, describeWindow, zonedTimeToUtc, canonicalTimeZone } from "../dist/lib/maintenance.js";
 import { deployQueuedReleases } from "../dist/modules/deploys/maintenance.js";
 import { createDb } from "../dist/db/client.js";
 
@@ -53,6 +53,44 @@ test("window maths: open now, next window, past midnight and across the week", (
   assert.equal(s.next.start.toISOString(), "2026-10-12T18:00:00.000Z");
 });
 
+test("time zones: windows follow the local clock, including both DST changes", () => {
+  const iso = (d) => d.toISOString();
+  const tue2 = [{ day: 2, start: "02:00", durationMin: 120 }];
+  // Berlin is UTC+2 in summer and UTC+1 in winter: the same local window moves in UTC.
+  assert.equal(iso(windowState(tue2, new Date("2026-07-05T12:00:00Z"), "Europe/Berlin").next.start), "2026-07-07T00:00:00.000Z");
+  assert.equal(iso(windowState(tue2, new Date("2026-12-06T12:00:00Z"), "Europe/Berlin").next.start), "2026-12-08T01:00:00.000Z");
+  // No DST, half-hour offset.
+  assert.equal(iso(windowState([{ day: 1, start: "09:00", durationMin: 60 }], new Date("2026-10-11T00:00:00Z"), "Asia/Kolkata").next.start), "2026-10-12T03:30:00.000Z");
+
+  // Spring forward (Berlin, Sunday 2026-03-29, 02:00 -> 03:00): 02:30 doesn't
+  // exist that day, so the window starts at 03:30 local (01:30 UTC).
+  const sun0230 = [{ day: 0, start: "02:30", durationMin: 60 }];
+  let s = windowState(sun0230, new Date("2026-03-28T12:00:00Z"), "Europe/Berlin");
+  assert.equal(iso(s.next.start), "2026-03-29T01:30:00.000Z");
+  assert.equal(describeWindow(s.next, "Europe/Berlin"), "Sun 03:30–04:30 Europe/Berlin");
+  // Autumn back (2026-10-25, 03:00 -> 02:00): 02:30 happens twice; the first one counts.
+  s = windowState(sun0230, new Date("2026-10-24T12:00:00Z"), "Europe/Berlin");
+  assert.equal(iso(s.next.start), "2026-10-25T00:30:00.000Z");
+  // The length is real time: 3 hours from 01:00 across the spring change ends at 05:00 local.
+  s = windowState([{ day: 0, start: "01:00", durationMin: 180 }], new Date("2026-03-29T01:30:00Z"), "Europe/Berlin");
+  assert.equal(s.open, true);
+  assert.equal(iso(s.current.start), "2026-03-29T00:00:00.000Z");
+  assert.equal(describeWindow(s.current, "Europe/Berlin"), "Sun 01:00–05:00 Europe/Berlin");
+  // New York springs forward at 02:00 local on 2026-03-08.
+  assert.equal(zonedTimeToUtc(2026, 3, 8, 2, 15, "America/New_York"), Date.parse("2026-03-08T07:15:00Z"));
+  assert.equal(zonedTimeToUtc(2026, 3, 8, 1, 59, "America/New_York"), Date.parse("2026-03-08T06:59:00Z"));
+  assert.equal(zonedTimeToUtc(2026, 3, 8, 3, 0, "America/New_York"), Date.parse("2026-03-08T07:00:00Z"));
+  // The local week matters: Saturday 23:00 in Kolkata is Saturday 17:30 UTC.
+  s = windowState([{ day: 6, start: "23:00", durationMin: 120 }], new Date("2026-10-17T18:00:00Z"), "Asia/Kolkata");
+  assert.equal(s.open, true);
+  // UTC by default, as before.
+  assert.equal(iso(windowState(tue2, new Date("2026-07-05T12:00:00Z")).next.start), "2026-07-07T02:00:00.000Z");
+
+  assert.equal(canonicalTimeZone("europe/berlin"), "Europe/Berlin");
+  assert.equal(canonicalTimeZone("Mars/Olympus"), null);
+  assert.equal(canonicalTimeZone("UTC; rm -rf /"), null);
+});
+
 async function setup() {
   const { orgId, owner, member } = await api.createOrg();
   const srv = await api.registerServer(orgId, owner);
@@ -78,6 +116,17 @@ test("windows are validated and admin-only", async () => {
   const detail = (await api.call("GET", base, { token: owner.token })).json;
   assert.equal(detail.maintenance.restricted, true);
   assert.match(detail.maintenance.nextLabel, /^Tue 02:00–04:00 UTC$/);
+  assert.equal(detail.maintenance.timeZone, "UTC", "existing windows stay UTC");
+
+  for (const bad of ["Mars/Olympus", "", "Europe/Berlin;x", "../../etc/passwd", 5]) {
+    assert.equal((await api.call("PATCH", base, { token: owner.token, body: { maintenanceTimeZone: bad } })).status, 400, String(bad));
+  }
+  assert.equal((await api.call("PATCH", base, { token: developer.token, body: { maintenanceTimeZone: "Europe/Berlin" } })).status, 403);
+  const tz = await api.call("PATCH", base, { token: owner.token, body: { maintenanceTimeZone: "europe/berlin" } });
+  assert.equal(tz.json.environment.maintenanceTimeZone, "Europe/Berlin");
+  const zoned = (await api.call("GET", base, { token: owner.token })).json;
+  assert.equal(zoned.maintenance.timeZone, "Europe/Berlin");
+  assert.match(zoned.maintenance.nextLabel, /^Tue 02:00–04:00 Europe\/Berlin$/);
 });
 
 test("a push outside the window is queued, replaced by a newer push, and deployed when the window opens", async () => {
