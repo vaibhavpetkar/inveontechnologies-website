@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import type { AgentConfig } from "./config.js";
 import { isAllowedBinary, type Binary, type ExecOptions, type Runner } from "./exec.js";
 import { isInside, validateCompose } from "./compose-validate.js";
-import { formatEnvFile, renderSite, renderUpstream } from "./templates.js";
+import { formatEnvFile, ipLiteral, renderListener, renderPool, renderSite, renderUpstream } from "./templates.js";
 import {
   BUCKET_RE,
   BUILT_IMAGE_RE,
@@ -662,12 +662,66 @@ export const ACTIONS: Record<string, Action<any>> = {
     },
   },
 
+  /**
+   * The replica listener of a multi-server environment: the proxy reaches
+   * this server's live colour on this port. Only the listed addresses (the
+   * proxy's, and this machine) may connect.
+   */
+  "nginx.write_listener": {
+    parse(params: unknown) {
+      const p = obj(params);
+      const allow = p.allow;
+      if (!Array.isArray(allow) || allow.length < 1 || allow.length > 20) throw new ParamError("Invalid allow");
+      for (const a of allow) ipLiteral(a as string);
+      return { slug: str(p, "slug", SLUG_RE), port: int(p, "port", 1024, 65535), allow: allow as string[] };
+    },
+    async run(p: { slug: string; port: number; allow: string[] }, ctx) {
+      await writeNginxFile(ctx, join(ctx.config.nginxConfDir, `inveon-listener-${p.slug}.conf`), renderListener(p.slug, p.port, p.allow));
+    },
+  },
+
+  "nginx.remove_listener": {
+    parse(params: unknown) {
+      return { slug: str(obj(params), "slug", SLUG_RE) };
+    },
+    async run(p: { slug: string }, ctx) {
+      await removeNginxFile(ctx, join(ctx.config.nginxConfDir, `inveon-listener-${p.slug}.conf`));
+    },
+  },
+
+  /** On the proxy: the upstream that lists every replica, with passive health checks. */
+  "nginx.write_pool": {
+    parse(params: unknown) {
+      const p = obj(params);
+      const servers = p.servers;
+      if (!Array.isArray(servers) || servers.length < 1 || servers.length > 50) throw new ParamError("Invalid servers");
+      const members = servers.map((m) => {
+        const o = obj(m, "server");
+        ipLiteral(o.host as string);
+        return { host: o.host as string, port: int(o, "port", 1024, 65535) };
+      });
+      return { slug: str(p, "slug", SLUG_RE), servers: members, maxFails: int(p, "maxFails", 1, 20), failTimeoutSec: int(p, "failTimeoutSec", 1, 600) };
+    },
+    async run(p: { slug: string; servers: { host: string; port: number }[]; maxFails: number; failTimeoutSec: number }, ctx) {
+      await writeNginxFile(ctx, join(ctx.config.nginxConfDir, `inveon-pool-${p.slug}.conf`), renderPool(p.slug, p.servers, p));
+    },
+  },
+
+  "nginx.remove_pool": {
+    parse(params: unknown) {
+      return { slug: str(obj(params), "slug", SLUG_RE) };
+    },
+    async run(p: { slug: string }, ctx) {
+      await removeNginxFile(ctx, join(ctx.config.nginxConfDir, `inveon-pool-${p.slug}.conf`));
+    },
+  },
+
   "nginx.write_site": {
     parse(params: unknown) {
       const p = obj(params);
-      return { hostname: str(p, "hostname", HOSTNAME_RE), slug: str(p, "slug", SLUG_RE), tls: bool(p, "tls") };
+      return { hostname: str(p, "hostname", HOSTNAME_RE), slug: str(p, "slug", SLUG_RE), tls: bool(p, "tls"), pool: p.pool === undefined ? false : bool(p, "pool") };
     },
-    async run(p: { hostname: string; slug: string; tls: boolean }, ctx) {
+    async run(p: { hostname: string; slug: string; tls: boolean; pool: boolean }, ctx) {
       mkdirSync(join(ctx.config.acmeWebroot, ".well-known", "acme-challenge"), { recursive: true });
       if (p.tls && !existsSync(join(ctx.config.letsencryptDir, "live", p.hostname, "fullchain.pem"))) throw new Error(`No certificate for ${p.hostname} yet`);
       const content = renderSite({ ...p, acmeWebroot: ctx.config.acmeWebroot, letsencryptDir: ctx.config.letsencryptDir });

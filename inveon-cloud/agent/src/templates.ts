@@ -1,6 +1,18 @@
+import { isIP } from "node:net";
 import { ENV_KEY_RE, HOSTNAME_RE, ParamError, SLUG_RE } from "./params.js";
 
 export const upstreamName = (slug: string) => `inveon_${slug.replace(/-/g, "_")}`;
+/** The proxy's upstream for an environment on several servers: every replica's listener. */
+export const poolName = (slug: string) => `inveon_pool_${slug.replace(/-/g, "_")}`;
+
+const validPort = (port: number) => Number.isInteger(port) && port >= 1024 && port <= 65535;
+
+/** An IPv4 or IPv6 literal, as nginx wants it in `server` and `allow` lines. */
+export function ipLiteral(ip: string) {
+  const v = typeof ip === "string" ? isIP(ip) : 0;
+  if (!v || ip.length > 45 || !/^[0-9A-Fa-f.:]+$/.test(ip)) throw new ParamError(`Invalid address ${String(ip).slice(0, 50)}`);
+  return v;
+}
 
 /** The one line that blue/green switching changes. */
 export function renderUpstream(slug: string, port: number) {
@@ -8,14 +20,72 @@ export function renderUpstream(slug: string, port: number) {
   return `# Managed by inveon-agent. Do not edit.\nupstream ${upstreamName(slug)} {\n    server 127.0.0.1:${port};\n    keepalive 16;\n}\n`;
 }
 
+export interface PoolMember {
+  host: string;
+  port: number;
+}
+
+/**
+ * The proxy's view of a multi-server environment: one line per replica
+ * (its listener port, on its private IP when known), with nginx's passive
+ * health checks. A replica that fails maxFails times within failTimeout is
+ * skipped for failTimeout, and requests that fail on one go to the next.
+ */
+export function renderPool(slug: string, members: PoolMember[], opts: { maxFails: number; failTimeoutSec: number }) {
+  if (!SLUG_RE.test(slug) || !members.length || members.length > 50) throw new ParamError("Invalid pool");
+  if (!Number.isInteger(opts.maxFails) || opts.maxFails < 1 || opts.maxFails > 20 || !Number.isInteger(opts.failTimeoutSec) || opts.failTimeoutSec < 1 || opts.failTimeoutSec > 600) {
+    throw new ParamError("Invalid health check settings");
+  }
+  const lines = members.map((m) => {
+    if (!validPort(m.port)) throw new ParamError("Invalid pool port");
+    const host = ipLiteral(m.host) === 6 ? `[${m.host}]` : m.host;
+    return `    server ${host}:${m.port} max_fails=${opts.maxFails} fail_timeout=${opts.failTimeoutSec}s;`;
+  });
+  return `# Managed by inveon-agent. Do not edit.\nupstream ${poolName(slug)} {\n${lines.join("\n")}\n    keepalive 16;\n}\n`;
+}
+
+/**
+ * This server's replica listener: the environment's proxy reaches the live
+ * colour here (through the local upstream that blue/green switches). Only
+ * the proxy's addresses and this machine may connect. The proxy already
+ * set the forwarding headers, so they are passed on as they came.
+ */
+export function renderListener(slug: string, port: number, allow: string[]) {
+  if (!SLUG_RE.test(slug) || !validPort(port) || !allow.length || allow.length > 20) throw new ParamError("Invalid listener");
+  for (const a of allow) ipLiteral(a);
+  return [
+    "# Managed by inveon-agent. Do not edit.",
+    "server {",
+    `    listen ${port};`,
+    `    listen [::]:${port};`,
+    ...[...new Set(allow)].map((a) => `    allow ${a};`),
+    "    deny all;",
+    "    location / {",
+    `        proxy_pass http://${upstreamName(slug)};`,
+    "        proxy_http_version 1.1;",
+    "        proxy_set_header Host $host;",
+    "        proxy_set_header X-Real-IP $http_x_real_ip;",
+    "        proxy_set_header X-Forwarded-For $http_x_forwarded_for;",
+    "        proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;",
+    "        proxy_set_header Upgrade $http_upgrade;",
+    '        proxy_set_header Connection "upgrade";',
+    "        proxy_read_timeout 120s;",
+    "        client_max_body_size 50m;",
+    "    }",
+    "}",
+    "",
+  ].join("\n");
+}
+
 /**
  * A site for one hostname. Without TLS it serves the ACME challenge and
  * proxies everything else; with TLS it redirects HTTP to HTTPS.
  */
-export function renderSite(opts: { hostname: string; slug: string; tls: boolean; acmeWebroot: string; letsencryptDir: string }) {
+export function renderSite(opts: { hostname: string; slug: string; tls: boolean; acmeWebroot: string; letsencryptDir: string; pool?: boolean }) {
   const { hostname, slug, tls, acmeWebroot, letsencryptDir } = opts;
   if (!HOSTNAME_RE.test(hostname) || !SLUG_RE.test(slug)) throw new ParamError("Invalid site");
-  const up = upstreamName(slug);
+  // On the proxy of a multi-server environment the site goes to the pool of replicas.
+  const up = opts.pool ? poolName(slug) : upstreamName(slug);
   const acme = `    location ^~ /.well-known/acme-challenge/ {\n        root ${acmeWebroot};\n        default_type text/plain;\n    }\n`;
   const proxy = [
     "    location / {",
@@ -29,6 +99,7 @@ export function renderSite(opts: { hostname: string; slug: string; tls: boolean;
     '        proxy_set_header Connection "upgrade";',
     "        proxy_read_timeout 120s;",
     "        client_max_body_size 50m;",
+    ...(opts.pool ? ["        proxy_next_upstream error timeout http_502 http_503 http_504;", "        proxy_next_upstream_tries 2;"] : []),
     "    }",
   ].join("\n");
   const header = `# Managed by inveon-agent for ${hostname}. Do not edit.\n`;
