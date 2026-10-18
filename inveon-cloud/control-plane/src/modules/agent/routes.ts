@@ -142,7 +142,7 @@ export function agentRouter(db: Database, env: Env) {
         ipAddress: current?.ipAddress ?? req.ip ?? null,
         registeredAt: new Date(),
         lastSeenAt: new Date(),
-        ...(current?.provider === "aws" && current.provisionState !== "terminating" && current.provisionState !== "terminated" ? { provisionState: "agent_online" as const } : {}),
+        ...(current && current.provider !== "manual" && current.provisionState !== "terminating" && current.provisionState !== "terminated" ? { provisionState: "agent_online" as const } : {}),
       })
       .where(eq(servers.id, used.serverId))
       .returning();

@@ -317,7 +317,7 @@ test("the AWS SDK implementation loads and builds its clients without calling AW
   const { sdkEc2Api } = await import("../dist/modules/aws/sdk.js");
   const keys = sdkEc2Api({ authType: "keys", accessKeyId: "AKIAIOSFODNN7EXAMPLE", secretAccessKey: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" }, "ap-south-1");
   const role = sdkEc2Api({ authType: "role", roleArn: ROLE, externalId: "inveon-x" }, "eu-west-1");
-  for (const m of ["verify", "ubuntuAmi", "defaultVpcId", "subnetVpcId", "listSecurityGroups", "listKeyPairs", "createSecurityGroup", "deleteSecurityGroup", "runInstance", "describeInstances", "terminateInstance"]) {
+  for (const m of ["verify", "ubuntuAmi", "defaultVpcId", "subnetVpcId", "listSecurityGroups", "listKeyPairs", "createSecurityGroup", "deleteSecurityGroup", "runInstance", "describeInstances", "terminateInstance", "stopInstance", "startInstance", "modifyInstanceType"]) {
     assert.equal(typeof keys[m], "function", m);
     assert.equal(typeof role[m], "function", m);
   }

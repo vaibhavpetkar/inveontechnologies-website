@@ -30,6 +30,7 @@ export interface InstanceInfo {
   state: string;
   publicIp: string | null;
   privateIp: string | null;
+  instanceType?: string | null;
   tags: Record<string, string>;
 }
 
@@ -48,6 +49,10 @@ export interface Ec2Api {
   /** Missing instances are left out of the result. */
   describeInstances(ids: string[]): Promise<InstanceInfo[]>;
   terminateInstance(id: string): Promise<void>;
+  stopInstance(id: string): Promise<void>;
+  startInstance(id: string): Promise<void>;
+  /** The instance must be stopped. */
+  modifyInstanceType(id: string, instanceType: string): Promise<void>;
 }
 
 export type Ec2ApiFactory = (creds: AwsCredentialsInput, region: string) => Ec2Api;

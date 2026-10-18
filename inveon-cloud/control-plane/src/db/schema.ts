@@ -165,6 +165,9 @@ export const servers = pgTable("servers", {
   // SHA-256 of the per-server agent token. The plaintext is shown to the agent once.
   tokenHash: text("token_hash").unique(),
   ipAddress: text("ip_address"),
+  // Address other servers reach it on inside a private network (VPC). The
+  // proxy of a multi-server environment prefers it over the public one.
+  privateIpAddress: text("private_ip_address"),
   hostname: text("hostname"),
   os: text("os"),
   cpuCount: integer("cpu_count"),
@@ -179,11 +182,13 @@ export const servers = pgTable("servers", {
   signingKeyAt: ts("signing_key_at"),
   lastSeenAt: ts("last_seen_at"),
   registeredAt: ts("registered_at"),
-  // "aws" when Inveon Cloud launched the EC2 instance itself.
-  provider: text("provider").$type<"manual" | "aws">().notNull().default("manual"),
+  // Which cloud Inveon Cloud launched the instance on ("manual": added by hand).
+  provider: text("provider").$type<"manual" | "aws" | "digitalocean" | "hetzner">().notNull().default("manual"),
   // pending (launched) -> running (instance up) -> agent_online (registered);
-  // terminating -> terminated after Terminate. failed if the launch failed.
-  provisionState: text("provision_state").$type<"pending" | "running" | "agent_online" | "terminating" | "terminated" | "failed">(),
+  // stopping -> stopped -> starting after Stop and Start (resizing while a
+  // stopped DigitalOcean or Hetzner server changes size); terminating ->
+  // terminated after Terminate. failed if the launch failed.
+  provisionState: text("provision_state").$type<"pending" | "running" | "agent_online" | "stopping" | "stopped" | "starting" | "resizing" | "terminating" | "terminated" | "failed">(),
   provisionError: text("provision_error"),
   awsRegion: text("aws_region"),
   awsInstanceId: text("aws_instance_id"),
@@ -193,6 +198,15 @@ export const servers = pgTable("servers", {
   awsSecurityGroupId: text("aws_security_group_id"),
   // The security group was created for this server (deleted after termination).
   awsCreatedSecurityGroup: boolean("aws_created_security_group").notNull().default(false),
+  // DigitalOcean droplets and Hetzner servers (EC2 keeps its aws_* columns).
+  cloudRegion: text("cloud_region"),
+  cloudInstanceId: text("cloud_instance_id"),
+  cloudSize: text("cloud_size"),
+  cloudImage: text("cloud_image"),
+  // The provider's own status word ("active", "off", ...).
+  cloudState: text("cloud_state"),
+  // The size a resize asked for, until the provider reports it.
+  resizeTarget: text("resize_target"),
   terminatedAt: ts("terminated_at"),
   createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: createdAt(),
@@ -219,6 +233,30 @@ export const awsConnections = pgTable("aws_connections", {
   createdAt: createdAt(),
   updatedAt: ts("updated_at").notNull().defaultNow(),
 });
+
+/**
+ * API tokens for the clouds and DNS providers that are reached with one
+ * (DigitalOcean, Hetzner Cloud, Cloudflare), one per organization and
+ * provider. The token is envelope-encrypted and write-only; only its last
+ * four characters are shown. Route 53 uses the AWS connection instead.
+ */
+export const providerConnections = pgTable(
+  "provider_connections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    provider: text("provider").$type<"digitalocean" | "hetzner" | "cloudflare">().notNull(),
+    tokenEnc: text("token_enc").notNull(),
+    tokenHint: text("token_hint").notNull(),
+    // What the provider says the token belongs to (account, team or project).
+    accountLabel: text("account_label"),
+    verifiedAt: ts("verified_at"),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: ts("updated_at").notNull().defaultNow(),
+  },
+  (t) => ({ uniq: unique().on(t.orgId, t.provider) }),
+);
 
 /**
  * Nonces of signed agent requests, kept until their timestamp can no longer

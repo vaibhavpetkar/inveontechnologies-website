@@ -81,8 +81,8 @@ export function serversRouter(db: Database, env: Env) {
     const server = await loadServer(db, req.member!.orgId, req.params.id);
     const inUse = await db.query.environments.findFirst({ where: eq(environments.serverId, server.id) });
     if (inUse) throw new ConflictError("Remove the environments on this server first");
-    if (server.provider === "aws" && server.awsInstanceId && server.provisionState !== "terminated" && server.provisionState !== "failed") {
-      throw new ConflictError("Terminate the EC2 instance first, so it isn't left running");
+    if ((server.awsInstanceId || server.cloudInstanceId) && server.provisionState !== "terminated" && server.provisionState !== "failed") {
+      throw new ConflictError("Terminate the instance first, so it isn't left running");
     }
     await db.delete(servers).where(eq(servers.id, server.id));
     await audit(db, req, "server.delete", "server", server.id, { name: server.name });

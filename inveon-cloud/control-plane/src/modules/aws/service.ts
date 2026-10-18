@@ -1,11 +1,12 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
 import type { Database } from "../../db/client.js";
 import { awsConnections, servers } from "../../db/schema.js";
 import { decryptValue } from "../../lib/crypto.js";
 import { AppError } from "../../lib/errors.js";
 import { logger } from "../../lib/logger.js";
-import { ec2Api, type Arch, type AwsCredentialsInput, type Ec2Api } from "./provider.js";
+import { ec2Api, type Arch, type AwsCredentialsInput, type Ec2Api, type InstanceInfo } from "./provider.js";
+import { CHANGING_STATES, ec2State, nextProvisionState } from "../cloud/state.js";
 
 export const awsSecretAad = (orgId: string) => `aws-secret:${orgId}`;
 
@@ -145,7 +146,7 @@ export function awsErrorMessage(err: unknown) {
 type Server = typeof servers.$inferSelect;
 
 /** Applies what EC2 reports to one server row. Returns the updated row. */
-async function applyInstanceState(db: Database, api: Ec2Api, s: Server, info: { state: string; publicIp: string | null } | null) {
+async function applyInstanceState(db: Database, api: Ec2Api, s: Server, info: InstanceInfo | null) {
   const set: Partial<Server> = {};
   if (!info) {
     // Gone from EC2 (terminated long ago). Right after a launch EC2 may not
@@ -153,10 +154,13 @@ async function applyInstanceState(db: Database, api: Ec2Api, s: Server, info: { 
     if (s.provisionState === "terminating") Object.assign(set, { provisionState: "terminated", awsState: "terminated", terminatedAt: new Date() });
   } else {
     set.awsState = info.state;
-    if (info.publicIp && !s.ipAddress) set.ipAddress = info.publicIp;
-    if (info.state === "terminated") Object.assign(set, { provisionState: "terminated", terminatedAt: s.terminatedAt ?? new Date() });
-    else if (info.state === "shutting-down") set.provisionState = "terminating";
-    else if (info.state === "running" && s.provisionState === "pending") set.provisionState = s.registeredAt ? "agent_online" : "running";
+    // A stop and start without an Elastic IP gets a new public address.
+    if (info.publicIp && info.publicIp !== s.ipAddress) set.ipAddress = info.publicIp;
+    if (info.privateIp && info.privateIp !== s.privateIpAddress) set.privateIpAddress = info.privateIp;
+    if (info.instanceType && info.instanceType !== s.awsInstanceType) set.awsInstanceType = info.instanceType;
+    const next = nextProvisionState(s, ec2State(info.state));
+    if (next && next !== s.provisionState) set.provisionState = next;
+    if (next === "terminated") set.terminatedAt = s.terminatedAt ?? new Date();
   }
   if (set.provisionState === "terminated" && s.awsCreatedSecurityGroup && s.awsSecurityGroupId) {
     try {
@@ -171,12 +175,14 @@ async function applyInstanceState(db: Database, api: Ec2Api, s: Server, info: { 
   return updated;
 }
 
-const ACTIVE_STATES = ["pending", "running", "terminating"] as const;
+const ACTIVE_STATES = CHANGING_STATES;
 
 /** Refreshes launched servers that are still changing (scheduler, and the Refresh button). */
 export async function pollAwsServers(db: Database, only?: { orgId: string; serverId: string }) {
-  const where = [eq(servers.provider, "aws"), inArray(servers.provisionState, [...ACTIVE_STATES])];
-  if (only) where.push(eq(servers.orgId, only.orgId), eq(servers.id, only.serverId));
+  // Refresh asks about one server whatever its state; the scheduler only about changing ones.
+  const where = only
+    ? [eq(servers.provider, "aws"), eq(servers.orgId, only.orgId), eq(servers.id, only.serverId), ne(servers.provisionState, "terminated")]
+    : [eq(servers.provider, "aws"), inArray(servers.provisionState, [...ACTIVE_STATES])];
   // A terminated server whose security group couldn't be deleted yet is retried too.
   const rows = [
     ...(await db.select().from(servers).where(and(...where))),

@@ -75,6 +75,10 @@ const envSchema = z.object({
   INVEON_GITHUB_APP_WEBHOOK_SECRET: z.string().min(16, "Use a long random webhook secret").optional(),
   // github.com itself (installation and OAuth pages); changed only in tests.
   INVEON_GITHUB_WEB_BASE: z.string().url().default("https://github.com"),
+  // Provider REST APIs (DigitalOcean, Hetzner Cloud, Cloudflare); changed only in tests.
+  INVEON_DIGITALOCEAN_API_BASE: z.string().url().optional(),
+  INVEON_HETZNER_API_BASE: z.string().url().optional(),
+  INVEON_CLOUDFLARE_API_BASE: z.string().url().optional(),
   // Let's Encrypt account email for certbot.
   INVEON_ACME_EMAIL: z.string().email().optional(),
   // Health alerts and invites. Without SMTP_HOST, email is only logged.

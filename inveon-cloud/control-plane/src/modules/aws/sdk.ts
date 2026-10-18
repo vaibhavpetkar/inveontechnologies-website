@@ -8,7 +8,10 @@ import {
   DescribeSubnetsCommand,
   DescribeVpcsCommand,
   EC2Client,
+  ModifyInstanceAttributeCommand,
   RunInstancesCommand,
+  StartInstancesCommand,
+  StopInstancesCommand,
   TerminateInstancesCommand,
   type IpPermission,
   type Tag,
@@ -154,6 +157,7 @@ export function sdkEc2Api(input: AwsCredentialsInput, region: string): Ec2Api {
               state: inst.State?.Name ?? "unknown",
               publicIp: inst.PublicIpAddress ?? null,
               privateIp: inst.PrivateIpAddress ?? null,
+              instanceType: inst.InstanceType ?? null,
               tags: fromTags(inst.Tags),
             });
           }
@@ -171,6 +175,18 @@ export function sdkEc2Api(input: AwsCredentialsInput, region: string): Ec2Api {
 
     async terminateInstance(id: string) {
       await ec2.send(new TerminateInstancesCommand({ InstanceIds: [id] }));
+    },
+
+    async stopInstance(id: string) {
+      await ec2.send(new StopInstancesCommand({ InstanceIds: [id] }));
+    },
+
+    async startInstance(id: string) {
+      await ec2.send(new StartInstancesCommand({ InstanceIds: [id] }));
+    },
+
+    async modifyInstanceType(id: string, instanceType: string) {
+      await ec2.send(new ModifyInstanceAttributeCommand({ InstanceId: id, InstanceType: { Value: instanceType } }));
     },
   };
 }

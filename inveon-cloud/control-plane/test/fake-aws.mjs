@@ -65,7 +65,7 @@ function api(creds, region) {
     async runInstance(input) {
       call("runInstance", input);
       const instanceId = `i-${hex()}`;
-      state.instances.set(instanceId, { instanceId, state: "pending", publicIp: null, privateIp: "10.0.0.5", tags: { Name: input.name, ...input.tags }, region });
+      state.instances.set(instanceId, { instanceId, state: "pending", publicIp: null, privateIp: "10.0.0.5", instanceType: input.instanceType, tags: { Name: input.name, ...input.tags }, region });
       return { instanceId };
     },
     async describeInstances(ids) {
@@ -76,6 +76,26 @@ function api(creds, region) {
       call("terminateInstance", { id });
       const i = state.instances.get(id);
       if (i) i.state = "shutting-down";
+    },
+    async stopInstance(id) {
+      call("stopInstance", { id });
+      const i = state.instances.get(id);
+      if (i) i.state = "stopping";
+    },
+    async startInstance(id) {
+      call("startInstance", { id });
+      const i = state.instances.get(id);
+      if (i) i.state = "pending";
+    },
+    async modifyInstanceType(id, instanceType) {
+      call("modifyInstanceType", { id, instanceType });
+      const i = state.instances.get(id);
+      if (!i || i.state !== "stopped") {
+        const err = new Error("The instance is not in the 'stopped' state.");
+        err.name = "IncorrectInstanceState";
+        throw err;
+      }
+      i.instanceType = instanceType;
     },
   };
 }

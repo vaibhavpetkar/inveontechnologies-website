@@ -28,6 +28,8 @@ import { configureAlerts } from "./modules/alerts/service.js";
 import { configureOutbound } from "./lib/outbound.js";
 import { platformRouter } from "./modules/keys/routes.js";
 import { awsRouter } from "./modules/aws/routes.js";
+import { cloudRouter } from "./modules/cloud/routes.js";
+import { configureProviderApis } from "./modules/cloud/http.js";
 import { metricsRouter } from "./modules/metrics/routes.js";
 import { scrapeRouter, scrapeTokensRouter } from "./modules/metrics/prometheus.js";
 import { githubAppWebhookRouter, githubRouter, githubSetupRouter } from "./modules/github/routes.js";
@@ -36,6 +38,7 @@ export function createApp(db: Database, pool: pg.Pool, env: Env) {
   registerPreviewHooks(env);
   configureOutbound(env.INVEON_ALERT_PRIVATE_HOSTS);
   configureAlerts(env.INVEON_PUBLIC_URL);
+  configureProviderApis({ digitalocean: env.INVEON_DIGITALOCEAN_API_BASE, hetzner: env.INVEON_HETZNER_API_BASE, cloudflare: env.INVEON_CLOUDFLARE_API_BASE });
   const app = express();
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
@@ -85,6 +88,8 @@ export function createApp(db: Database, pool: pg.Pool, env: Env) {
 
   const org = Router({ mergeParams: true });
   org.use(requireAuth(env), requireMember(db));
+  // DigitalOcean and Hetzner first: their refresh and terminate pass EC2 servers on.
+  org.use("/", cloudRouter(db, env));
   org.use("/", awsRouter(db, env));
   org.use("/servers", serversRouter(db, env));
   org.use("/apps", appsRouter(db, env));

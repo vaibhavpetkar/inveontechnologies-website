@@ -14,6 +14,7 @@ import { archiveAllReleases } from "./modules/deploys/archive.js";
 import { deployQueuedReleases } from "./modules/deploys/maintenance.js";
 import { expireLogFollows } from "./modules/live-logs/service.js";
 import { pollAwsServers } from "./modules/aws/service.js";
+import { pollCloudServers } from "./modules/cloud/service.js";
 import { rollupMetrics } from "./modules/metrics/service.js";
 import { evaluateMetricAlerts, pruneIncidents } from "./modules/metrics/alerts.js";
 
@@ -38,7 +39,8 @@ export async function tick(db: Database, env: Env) {
   const tasks: [string, () => Promise<unknown>][] = [
     ["offline servers", () => markOfflineServers(db, env.INVEON_HEARTBEAT_TIMEOUT_SEC)],
     ["metric threshold alerts", () => evaluateMetricAlerts(db, env.INVEON_HEARTBEAT_TIMEOUT_SEC)],
-    ["EC2 servers being launched or terminated", () => pollAwsServers(db)],
+    ["EC2 servers being launched, stopped, started or terminated", () => pollAwsServers(db)],
+    ["DigitalOcean and Hetzner servers that are changing", () => pollCloudServers(db)],
     ["agent request nonces", () => pruneAgentNonces(db)],
     ["expired passkey challenges", () => pruneWebauthnChallenges(db)],
     ["stale jobs", () => failStaleJobs(db, env.INVEON_JOB_TIMEOUT_MIN)],
