@@ -1,0 +1,1 @@
+ALTER TABLE "environments" ADD COLUMN "maintenance_time_zone" text DEFAULT 'UTC' NOT NULL;

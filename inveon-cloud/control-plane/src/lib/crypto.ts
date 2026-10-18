@@ -5,35 +5,40 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, 
  *
  * Each value gets its own random 256-bit data key. The value is encrypted
  * with AES-256-GCM under the data key, and the data key is itself encrypted
- * (wrapped) with AES-256-GCM under the master key from INVEON_MASTER_KEY.
- * The master key never touches the database, so a database dump alone
- * reveals nothing. The caller passes an "aad" (for example
- * "env:<environmentId>:<KEY>") that is authenticated with the value, so a
- * ciphertext copied to another row or key fails to decrypt.
+ * (wrapped) under a master key. Master keys never touch the database, so a
+ * database dump alone reveals nothing. The caller passes an "aad" (for
+ * example "env:<environmentId>:<KEY>") that is authenticated with the
+ * value, so a ciphertext copied to another row or key fails to decrypt.
  *
- * Format: v1.<wrapIv>.<wrapTag>.<wrappedKey>.<iv>.<tag>.<ciphertext> (base64url).
- * Rotating the master key = decrypt with the old key and re-wrap (phase 2).
+ * Formats (base64url parts):
+ *   v1.<wrapIv>.<wrapTag>.<wrappedKey>.<iv>.<tag>.<ciphertext>
+ *       wrapped with the "legacy" key (INVEON_MASTER_KEY); the original format.
+ *   v2.<keyId>.<w1>.<w2>.<w3>.<iv>.<tag>.<ciphertext>
+ *       wrapped with master key <keyId>; the key id is also bound into the
+ *       wrap's associated data.
+ *
+ * Rotating the master key only re-wraps data keys (rewrapValue): the
+ * value's own ciphertext is untouched.
  */
 
 const ALGO = "aes-256-gcm";
+export const LEGACY_KEY_ID = "legacy";
+const KEY_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/;
 
-let masterKey: Buffer | null = null;
-
-export function parseMasterKey(raw: string): Buffer {
-  const trimmed = raw.trim();
-  const key = /^[0-9a-fA-F]{64}$/.test(trimmed) ? Buffer.from(trimmed, "hex") : Buffer.from(trimmed, "base64");
-  if (key.length !== 32) throw new Error("INVEON_MASTER_KEY must be 32 bytes (base64 or 64 hex characters)");
-  return key;
+/**
+ * A key-encryption key. The local implementation is AES-256-GCM with a key
+ * from the environment; a KMS-backed one (Encrypt/Decrypt with an
+ * encryption context) can implement the same three-part wrap and be added
+ * to the keyring under its own id.
+ */
+export interface KeyEncryptionKey {
+  readonly id: string;
+  wrap(dataKey: Buffer, context: string): [string, string, string];
+  unwrap(parts: [string, string, string], context: string): Buffer;
 }
 
-export function configureMasterKey(raw: string) {
-  masterKey = parseMasterKey(raw);
-}
-
-function getMasterKey(): Buffer {
-  if (!masterKey) throw new Error("Master key not configured");
-  return masterKey;
-}
+const b64 = (b: Buffer) => b.toString("base64url");
+const unb64 = (s: string) => Buffer.from(s, "base64url");
 
 function seal(key: Buffer, plaintext: Buffer, aad: Buffer) {
   const iv = randomBytes(12);
@@ -50,25 +55,216 @@ function open(key: Buffer, iv: Buffer, tag: Buffer, ct: Buffer, aad: Buffer) {
   return Buffer.concat([decipher.update(ct), decipher.final()]);
 }
 
-const b64 = (b: Buffer) => b.toString("base64url");
-const unb64 = (s: string) => Buffer.from(s, "base64url");
-
-export function encryptValue(plaintext: string, aad: string, key: Buffer = getMasterKey()): string {
-  const dataKey = randomBytes(32);
-  const aadBuf = Buffer.from(aad, "utf8");
-  const wrapped = seal(key, dataKey, Buffer.from(`wrap:${aad}`, "utf8"));
-  const sealed = seal(dataKey, Buffer.from(plaintext, "utf8"), aadBuf);
-  dataKey.fill(0);
-  return ["v1", b64(wrapped.iv), b64(wrapped.tag), b64(wrapped.ct), b64(sealed.iv), b64(sealed.tag), b64(sealed.ct)].join(".");
+export class LocalKey implements KeyEncryptionKey {
+  constructor(
+    readonly id: string,
+    private readonly key: Buffer,
+  ) {}
+  wrap(dataKey: Buffer, context: string): [string, string, string] {
+    const w = seal(this.key, dataKey, Buffer.from(context, "utf8"));
+    return [b64(w.iv), b64(w.tag), b64(w.ct)];
+  }
+  unwrap([iv, tag, ct]: [string, string, string], context: string): Buffer {
+    return open(this.key, unb64(iv), unb64(tag), unb64(ct), Buffer.from(context, "utf8"));
+  }
 }
 
-export function decryptValue(envelope: string, aad: string, key: Buffer = getMasterKey()): string {
-  const parts = envelope.split(".");
-  if (parts.length !== 7 || parts[0] !== "v1") throw new Error("Unsupported ciphertext format");
-  const [, wIv, wTag, wCt, iv, tag, ct] = parts.map((p, i) => (i === 0 ? Buffer.alloc(0) : unb64(p)));
-  const dataKey = open(key, wIv, wTag, wCt, Buffer.from(`wrap:${aad}`, "utf8"));
+export function parseMasterKey(raw: string): Buffer {
+  const trimmed = raw.trim();
+  const key = /^[0-9a-fA-F]{64}$/.test(trimmed) ? Buffer.from(trimmed, "hex") : Buffer.from(trimmed, "base64");
+  if (key.length !== 32) throw new Error("A master key must be 32 bytes (base64 or 64 hex characters)");
+  return key;
+}
+
+// ---------------------------------------------------------------- keyring
+
+let keyring = new Map<string, KeyEncryptionKey>();
+let currentKeyId: string | null = null;
+let kmsKeyIds = new Set<string>();
+
+export interface MasterKeyConfig {
+  /** INVEON_MASTER_KEY: the original single key, id "legacy" (decrypts v1). */
+  legacy?: string;
+  /** INVEON_MASTER_KEYS: "id:key,id:key", where a key is base64/hex or "kms:<base64 CiphertextBlob>". */
+  keys?: string;
+  /** INVEON_MASTER_KEY_CURRENT: the id new values are encrypted with. */
+  current?: string;
+}
+
+interface KeyEntry {
+  id: string;
+  /** The key itself, or (kms) the base64 CiphertextBlob of a KMS data key. */
+  material: string;
+  kms: boolean;
+}
+
+function parseKeyEntries(keys: string | undefined): KeyEntry[] {
+  const seen = new Set<string>();
+  return (keys ?? "")
+    .split(",")
+    .map((e) => e.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const i = entry.indexOf(":");
+      if (i < 1) throw new Error("INVEON_MASTER_KEYS entries look like <id>:<base64 or hex key> or <id>:kms:<base64 ciphertext>");
+      const id = entry.slice(0, i).trim();
+      if (!KEY_ID_RE.test(id)) throw new Error(`Invalid master key id "${id}" (letters, digits, - and _, up to 32)`);
+      if (id === LEGACY_KEY_ID) throw new Error(`"${LEGACY_KEY_ID}" is reserved for INVEON_MASTER_KEY`);
+      if (seen.has(id)) throw new Error(`Master key id "${id}" is listed twice`);
+      seen.add(id);
+      const rest = entry.slice(i + 1).trim();
+      if (rest.startsWith("kms:")) {
+        const blob = rest.slice(4);
+        if (!/^[A-Za-z0-9+/]{40,8192}={0,2}$/.test(blob)) throw new Error(`Master key "${id}": kms: needs the base64 CiphertextBlob from keys:kms-generate`);
+        return { id, material: blob, kms: true };
+      }
+      return { id, material: rest, kms: false };
+    });
+}
+
+/**
+ * Parses the environment's keys into the keyring. Throws on anything
+ * malformed. KMS-backed entries need their decrypted data keys in
+ * `kmsKeys` (see loadMasterKeys, which fetches them).
+ */
+export function configureMasterKeys(cfg: MasterKeyConfig, kmsKeys: Map<string, Buffer> = new Map()) {
+  const next = new Map<string, KeyEncryptionKey>();
+  const kms = new Set<string>();
+  if (cfg.legacy?.trim()) next.set(LEGACY_KEY_ID, new LocalKey(LEGACY_KEY_ID, parseMasterKey(cfg.legacy)));
+  let lastListed: string | null = null;
+  for (const entry of parseKeyEntries(cfg.keys)) {
+    if (entry.kms) {
+      const key = kmsKeys.get(entry.id);
+      if (!key || key.length !== 32) throw new Error(`Master key "${entry.id}" is KMS-backed and wasn't decrypted (it must be a 32-byte data key)`);
+      next.set(entry.id, new LocalKey(entry.id, Buffer.from(key)));
+      kms.add(entry.id);
+    } else {
+      next.set(entry.id, new LocalKey(entry.id, parseMasterKey(entry.material)));
+    }
+    lastListed = entry.id;
+  }
+  if (next.size === 0) throw new Error("Set INVEON_MASTER_KEY or INVEON_MASTER_KEYS");
+  const current = cfg.current?.trim() || lastListed || LEGACY_KEY_ID;
+  if (!next.has(current)) throw new Error(`INVEON_MASTER_KEY_CURRENT is "${current}", which isn't configured`);
+  keyring = next;
+  currentKeyId = current;
+  kmsKeyIds = kms;
+}
+
+/**
+ * configureMasterKeys, after asking KMS to decrypt each KMS-backed entry
+ * (once, at start-up). `decrypt` is only called when there is such an entry.
+ */
+export async function loadMasterKeys(cfg: MasterKeyConfig, decrypt: (blob: Buffer) => Promise<Buffer>) {
+  const kmsKeys = new Map<string, Buffer>();
   try {
+    for (const entry of parseKeyEntries(cfg.keys).filter((e) => e.kms)) {
+      try {
+        kmsKeys.set(entry.id, await decrypt(Buffer.from(entry.material, "base64")));
+      } catch (err) {
+        throw new Error(`KMS could not decrypt master key "${entry.id}": ${(err as Error).message}`);
+      }
+    }
+    configureMasterKeys(cfg, kmsKeys);
+  } finally {
+    for (const k of kmsKeys.values()) k.fill(0);
+  }
+}
+
+/** The original single-key setup (INVEON_MASTER_KEY only). */
+export function configureMasterKey(raw: string) {
+  configureMasterKeys({ legacy: raw });
+}
+
+/** Adds a key (for example a KMS-backed one) to the keyring. */
+export function registerKeyEncryptionKey(kek: KeyEncryptionKey, makeCurrent = false) {
+  keyring.set(kek.id, kek);
+  if (makeCurrent) currentKeyId = kek.id;
+}
+
+export function keyringInfo() {
+  return { currentKeyId, keyIds: [...keyring.keys()], kmsKeyIds: [...kmsKeyIds] };
+}
+
+function getKey(id: string): KeyEncryptionKey {
+  const k = keyring.get(id);
+  if (!k) throw new Error(`Master key "${id}" is not configured`);
+  return k;
+}
+
+function getCurrentKey(): KeyEncryptionKey {
+  if (!currentKeyId) throw new Error("Master key not configured");
+  return getKey(currentKeyId);
+}
+
+const wrapContext = (keyId: string, aad: string) => (keyId === LEGACY_KEY_ID ? `wrap:${aad}` : `wrap:${keyId}:${aad}`);
+
+interface Parsed {
+  keyId: string;
+  wrapped: [string, string, string];
+  sealed: [string, string, string];
+}
+
+function parseEnvelope(envelope: string): Parsed {
+  const parts = envelope.split(".");
+  if (parts.length === 7 && parts[0] === "v1") return { keyId: LEGACY_KEY_ID, wrapped: [parts[1], parts[2], parts[3]], sealed: [parts[4], parts[5], parts[6]] };
+  if (parts.length === 8 && parts[0] === "v2" && KEY_ID_RE.test(parts[1]) && parts[1] !== LEGACY_KEY_ID) {
+    return { keyId: parts[1], wrapped: [parts[2], parts[3], parts[4]], sealed: [parts[5], parts[6], parts[7]] };
+  }
+  throw new Error("Unsupported ciphertext format");
+}
+
+function assemble(keyId: string, wrapped: [string, string, string], sealed: [string, string, string]) {
+  return keyId === LEGACY_KEY_ID ? ["v1", ...wrapped, ...sealed].join(".") : ["v2", keyId, ...wrapped, ...sealed].join(".");
+}
+
+/** The master key id a ciphertext is wrapped with ("legacy" for v1). */
+export function keyIdOf(envelope: string): string {
+  return parseEnvelope(envelope).keyId;
+}
+
+/**
+ * Encrypts under the current master key. Passing a raw 32-byte key instead
+ * uses it as the legacy key (v1 format), as before key rotation existed.
+ */
+export function encryptValue(plaintext: string, aad: string, key?: Buffer | KeyEncryptionKey): string {
+  const kek = key === undefined ? getCurrentKey() : Buffer.isBuffer(key) ? new LocalKey(LEGACY_KEY_ID, key) : key;
+  const dataKey = randomBytes(32);
+  try {
+    const wrapped = kek.wrap(dataKey, wrapContext(kek.id, aad));
+    const s = seal(dataKey, Buffer.from(plaintext, "utf8"), Buffer.from(aad, "utf8"));
+    return assemble(kek.id, wrapped, [b64(s.iv), b64(s.tag), b64(s.ct)]);
+  } finally {
+    dataKey.fill(0);
+  }
+}
+
+export function decryptValue(envelope: string, aad: string, key?: Buffer | KeyEncryptionKey): string {
+  const p = parseEnvelope(envelope);
+  const kek = key === undefined ? getKey(p.keyId) : Buffer.isBuffer(key) ? new LocalKey(p.keyId, key) : key;
+  const dataKey = kek.unwrap(p.wrapped, wrapContext(p.keyId, aad));
+  try {
+    const [iv, tag, ct] = p.sealed.map(unb64);
     return open(dataKey, iv, tag, ct, Buffer.from(aad, "utf8")).toString("utf8");
+  } finally {
+    dataKey.fill(0);
+  }
+}
+
+/**
+ * Re-wraps a value's data key with the current master key. Returns null
+ * when it already uses the current key. The value's ciphertext is kept, and
+ * the data key is checked against it before anything is written.
+ */
+export function rewrapValue(envelope: string, aad: string): string | null {
+  const p = parseEnvelope(envelope);
+  const target = getCurrentKey();
+  if (p.keyId === target.id) return null;
+  const dataKey = getKey(p.keyId).unwrap(p.wrapped, wrapContext(p.keyId, aad));
+  try {
+    const [iv, tag, ct] = p.sealed.map(unb64);
+    open(dataKey, iv, tag, ct, Buffer.from(aad, "utf8")).fill(0);
+    return assemble(target.id, target.wrap(dataKey, wrapContext(target.id, aad)), p.sealed);
   } finally {
     dataKey.fill(0);
   }

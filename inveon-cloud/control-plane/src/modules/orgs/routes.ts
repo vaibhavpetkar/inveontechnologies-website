@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { and, asc, count, desc, eq, isNull, lt, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNull, lt, ne, sql, type SQL } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
 import type { Env } from "../../env.js";
 import { auditLogs, invites, memberships, organizations, users } from "../../db/schema.js";
@@ -10,6 +10,8 @@ import { randomToken, sha256Hex } from "../../lib/crypto.js";
 import { audit, writeAudit } from "../../lib/audit.js";
 import { AppError, ForbiddenError, NotFoundError } from "../../lib/errors.js";
 import { sendMail } from "../../lib/mailer.js";
+import { clearTwoFactor, hasSecondFactor, hasSecondFactorSql } from "../auth/two-factor.js";
+import { userPasskeys } from "../../db/schema.js";
 
 const roleSchema = z.enum(["owner", "admin", "developer", "viewer"]);
 const INVITE_TTL_DAYS = 7;
@@ -32,13 +34,17 @@ export function orgRouter(db: Database, env: Env) {
 
   router.get("/", async (req, res) => {
     const org = await db.query.organizations.findFirst({ where: eq(organizations.id, req.member!.orgId) });
-    res.json({ organization: { ...org, role: req.member!.role } });
+    // agentSignatures "required": the control plane requires signed agent requests everywhere.
+    res.json({ organization: { ...org, role: req.member!.role }, agentSignatures: env.INVEON_AGENT_SIGNATURES });
   });
 
   router.patch("/", requireRole("owner"), async (req, res) => {
-    const { name } = z.object({ name: z.string().trim().min(2).max(80) }).parse(req.body);
-    const [org] = await db.update(organizations).set({ name }).where(eq(organizations.id, req.member!.orgId)).returning();
-    await audit(db, req, "org.update", "organization", org.id, { name });
+    const body = z
+      .object({ name: z.string().trim().min(2).max(80).optional(), require2faForAdmins: z.boolean().optional(), requireSignedAgents: z.boolean().optional() })
+      .refine((b) => b.name !== undefined || b.require2faForAdmins !== undefined || b.requireSignedAgents !== undefined, { message: "Nothing to change" })
+      .parse(req.body);
+    const [org] = await db.update(organizations).set(body).where(eq(organizations.id, req.member!.orgId)).returning();
+    await audit(db, req, "org.update", "organization", org.id, body);
     res.json({ organization: { ...org, role: req.member!.role } });
   });
 
@@ -46,7 +52,7 @@ export function orgRouter(db: Database, env: Env) {
 
   router.get("/members", async (req, res) => {
     const rows = await db
-      .select({ userId: users.id, email: users.email, name: users.name, role: memberships.role, joinedAt: memberships.createdAt })
+      .select({ userId: users.id, email: users.email, name: users.name, role: memberships.role, joinedAt: memberships.createdAt, twoFactorEnabled: hasSecondFactorSql })
       .from(memberships)
       .innerJoin(users, eq(users.id, memberships.userId))
       .where(eq(memberships.orgId, req.member!.orgId))
@@ -67,6 +73,30 @@ export function orgRouter(db: Database, env: Env) {
     if (target.role === "owner" && role !== "owner" && (await ownerCount(orgId)) <= 1) throw new AppError("LAST_OWNER", "An organization needs at least one owner", 400);
     await db.update(memberships).set({ role }).where(eq(memberships.id, target.id));
     await audit(db, req, "member.role_change", "user", target.userId, { from: target.role, to: role });
+    res.json({ ok: true });
+  });
+
+  /**
+   * An owner resets a member's two-factor (lost phone and recovery codes).
+   * Only for members whose every other organization is one where this
+   * owner is an owner too, so it can't weaken accounts elsewhere.
+   */
+  router.post("/members/:userId/2fa/reset", requireRole("owner"), async (req, res) => {
+    const orgId = req.member!.orgId;
+    if (req.params.userId === req.user!.sub) throw new AppError("SELF_RESET", "Turn your own two-factor off from your account page", 400);
+    const target = await db.query.memberships.findFirst({ where: and(eq(memberships.orgId, orgId), eq(memberships.userId, req.params.userId)) });
+    if (!target) throw new NotFoundError("Member not found");
+    const elsewhere = await db.select({ orgId: memberships.orgId }).from(memberships).where(and(eq(memberships.userId, target.userId), ne(memberships.orgId, orgId)));
+    for (const other of elsewhere) {
+      const mine = await db.query.memberships.findFirst({ where: and(eq(memberships.orgId, other.orgId), eq(memberships.userId, req.user!.sub)) });
+      if (mine?.role !== "owner") throw new ForbiddenError("This member also belongs to another organization; an owner of each of their organizations has to do this");
+    }
+    const user = await db.query.users.findFirst({ where: eq(users.id, target.userId) });
+    if (!user || !(await hasSecondFactor(db, user))) throw new AppError("NOT_ENABLED", "This member doesn't have two-factor on", 400);
+    // A lost phone may well have held the passkeys too: they go as well.
+    const passkeys = await db.delete(userPasskeys).where(eq(userPasskeys.userId, target.userId)).returning({ id: userPasskeys.id });
+    await clearTwoFactor(db, target.userId);
+    await audit(db, req, "member.2fa_reset", "user", target.userId, { email: user.email, passkeysRemoved: passkeys.length });
     res.json({ ok: true });
   });
 

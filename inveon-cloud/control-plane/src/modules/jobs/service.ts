@@ -1,11 +1,13 @@
 import { and, asc, eq, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
-import { envVars, environments, apps, jobSteps, jobs, releases } from "../../db/schema.js";
+import { envVars, environmentReplicas, environments, apps, jobSteps, jobs, releases } from "../../db/schema.js";
 import { bus, jobEvent, serverJobsEvent, type JobStreamEvent } from "../../lib/bus.js";
 import { decryptValue } from "../../lib/crypto.js";
 import { AppError, ConflictError, NotFoundError } from "../../lib/errors.js";
 import { logger } from "../../lib/logger.js";
 import { validateCompose } from "../../lib/compose-validate.js";
+import { deployKeyAad, registryAad } from "../../lib/aad.js";
+import { cloneTokenFor } from "../github/service.js";
 
 export type JobStatus = "pending" | "running" | "success" | "failure" | "cancelled";
 export const TERMINAL: JobStatus[] = ["success", "failure", "cancelled"];
@@ -29,7 +31,7 @@ export interface CreateJobInput {
 
 type Job = typeof jobs.$inferSelect;
 type Step = typeof jobSteps.$inferSelect;
-type Tx = Parameters<Parameters<Database["transaction"]>[0]>[0];
+export type Tx = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 const MAX_LOG_BYTES = 1024 * 1024;
 
@@ -72,12 +74,23 @@ export async function getJob(db: Database, jobId: string, orgId?: string) {
   return { job, steps };
 }
 
-/** Atomically claims the oldest pending job for this server (skip-locked, so two pollers never get the same job). */
-export async function claimNextJob(db: Database, serverId: string): Promise<Job | null> {
+/** Live log streams: long-running, never stored, and claimed on their own lane. */
+export const STREAM_JOB_TYPES = ["logs_follow"];
+export type Lane = "main" | "stream";
+
+/**
+ * Atomically claims the oldest pending job for this server (skip-locked, so
+ * two pollers never get the same job). The agent polls two lanes: "stream"
+ * gets only live log streams, so a 10-minute `logs -f` never holds up a
+ * deploy; "main" gets everything else, one job at a time.
+ */
+export async function claimNextJob(db: Database, serverId: string, lane: Lane = "main"): Promise<Job | null> {
+  const types = sql.join(STREAM_JOB_TYPES.map((t) => sql`${t}`), sql`, `);
+  const laneFilter = lane === "stream" ? sql`AND type IN (${types})` : sql`AND type NOT IN (${types})`;
   const result = await db.execute(sql`
     UPDATE jobs SET status = 'running', claimed_at = now()
     WHERE id = (
-      SELECT id FROM jobs WHERE server_id = ${serverId} AND status = 'pending'
+      SELECT id FROM jobs WHERE server_id = ${serverId} AND status = 'pending' ${laneFilter}
       ORDER BY created_at ASC FOR UPDATE SKIP LOCKED LIMIT 1
     )
     RETURNING id`);
@@ -97,10 +110,15 @@ export async function buildAgentPayload(db: Database, job: Job, steps: Step[]) {
   const out = [];
   for (const s of steps) {
     const params: Record<string, unknown> = { ...s.params };
+    if (s.action === "image.build" || (s.action === "compose.pull" && params.environmentId)) {
+      const { app } = await ownedEnvironment(db, job, String(params.environmentId));
+      params.registryAuth = registryAuthFor(app);
+      if (s.action === "image.build") params.gitAuth = await gitAuthFor(db, app);
+    }
     if (s.action === "release.prepare") {
       const release = await db.query.releases.findFirst({ where: eq(releases.id, String(params.releaseId)) });
       const environment = await db.query.environments.findFirst({ where: eq(environments.id, String(params.environmentId)) });
-      if (!release || !environment || environment.serverId !== job.serverId) throw new AppError("BAD_JOB", "Release or environment missing", 409);
+      if (!release || !environment || !(await runsOn(db, environment, job.serverId))) throw new AppError("BAD_JOB", "Release or environment missing", 409);
       const app = await db.query.apps.findFirst({ where: eq(apps.id, environment.appId) });
       params.composeContent = release.composeContent;
       params.env = await decryptEnvironmentVars(db, environment.id);
@@ -109,6 +127,44 @@ export async function buildAgentPayload(db: Database, job: Job, steps: Step[]) {
     out.push({ id: s.id, position: s.position, name: s.name, action: s.action, params });
   }
   return { id: job.id, type: job.type, title: job.title, steps: out };
+}
+
+/** The environment runs on this server: its primary, or one of its replicas. */
+async function runsOn(db: Database, environment: typeof environments.$inferSelect, serverId: string) {
+  if (environment.serverId === serverId) return true;
+  const replica = await db.query.environmentReplicas.findFirst({
+    where: and(eq(environmentReplicas.environmentId, environment.id), eq(environmentReplicas.serverId, serverId)),
+    columns: { serverId: true },
+  });
+  return !!replica;
+}
+
+async function ownedEnvironment(db: Database, job: Job, environmentId: string) {
+  const environment = await db.query.environments.findFirst({ where: eq(environments.id, environmentId) });
+  if (!environment || !(await runsOn(db, environment, job.serverId))) throw new AppError("BAD_JOB", "Environment missing", 409);
+  const app = await db.query.apps.findFirst({ where: eq(apps.id, environment.appId) });
+  if (!app) throw new AppError("BAD_JOB", "App missing", 409);
+  return { environment, app };
+}
+
+/** The app's registry login, decrypted for this job only. */
+function registryAuthFor(app: typeof apps.$inferSelect) {
+  if (!app.registryServer || !app.registryUsername || !app.registryPasswordEnc) return null;
+  return { server: app.registryServer, username: app.registryUsername, password: decryptValue(app.registryPasswordEnc, registryAad(app.id)) };
+}
+
+/**
+ * How the agent clones the repo, decided when the server claims the job:
+ * a GitHub App installation token (one hour, this repo only, contents read)
+ * when the repo's owner has the App installed and linked; else the app's
+ * deploy key; else anonymously. The control plane's long-lived
+ * INVEON_GITHUB_TOKEN is never sent to servers.
+ */
+async function gitAuthFor(db: Database, app: typeof apps.$inferSelect) {
+  const token = await cloneTokenFor(db, app);
+  if (token) return { type: "token", token };
+  if (app.deployKeyEnc) return { type: "deploy_key", privateKey: decryptValue(app.deployKeyEnc, deployKeyAad(app.id)) };
+  return null;
 }
 
 export async function decryptEnvironmentVars(db: Database, environmentId: string): Promise<Record<string, string>> {
@@ -136,7 +192,7 @@ export interface StepReport {
 }
 
 export async function reportStep(db: Database, serverId: string, jobId: string, stepId: string, report: StepReport) {
-  await ownedRunningJob(db, serverId, jobId);
+  const job = await ownedRunningJob(db, serverId, jobId);
   const step = await db.query.jobSteps.findFirst({ where: and(eq(jobSteps.id, stepId), eq(jobSteps.jobId, jobId)) });
   if (!step) throw new NotFoundError("Step not found");
   if (TERMINAL.includes(step.status)) throw new ConflictError(`Step is already ${step.status}`);
@@ -153,7 +209,10 @@ export async function reportStep(db: Database, serverId: string, jobId: string, 
   }
 
   const set: Partial<Step> = {};
-  if (report.append) {
+  if (report.append && STREAM_JOB_TYPES.includes(job.type)) {
+    // Live container logs are relayed to whoever is watching, never stored.
+    emit(jobId, { type: "log", stepId, chunk: report.append });
+  } else if (report.append) {
     const room = MAX_LOG_BYTES - Buffer.byteLength(step.log);
     if (room > 0) {
       const chunk = report.append.length > room ? report.append.slice(0, room) + "\n[log truncated]\n" : report.append;

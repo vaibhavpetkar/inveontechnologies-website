@@ -5,8 +5,9 @@ import { useAuth, useOrgPath } from "../../context/AuthContext";
 import type { EnvironmentDetail, Job } from "../../lib/types";
 import { ErrorNote, Field, useAction } from "../../components/ui";
 import { JobView } from "../../components/JobView";
+import { LiveLogs } from "./LiveLogs";
 
-/** Container logs: each request is a short job that tails the live containers. */
+/** Container logs: the last lines (a short job), or a live stream (Follow). */
 export function LogsTab({ detail }: { detail: EnvironmentDetail }) {
   const orgPath = useOrgPath();
   const { can } = useAuth();
@@ -32,9 +33,10 @@ export function LogsTab({ detail }: { detail: EnvironmentDetail }) {
 
   return (
     <div className="stack">
+      <LiveLogs detail={detail} />
       <div className="card">
         <h3 className="card-title">
-          <ScrollText size={16} /> Container logs
+          <ScrollText size={16} /> Last lines
         </h3>
         <form className="btn-row align-end" onSubmit={submit}>
           <Field label="Lines">

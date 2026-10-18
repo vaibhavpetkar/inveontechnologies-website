@@ -18,12 +18,31 @@ import { serversRouter } from "./modules/servers/routes.js";
 import { agentRouter } from "./modules/agent/routes.js";
 import { appsRouter, environmentsRouter } from "./modules/apps/routes.js";
 import { deploysRouter, webhookRouter } from "./modules/deploys/routes.js";
+import { replicasRouter } from "./modules/replicas/routes.js";
 import { jobsRouter } from "./modules/jobs/routes.js";
 import { domainsRouter } from "./modules/domains/routes.js";
 import { healthRouter } from "./modules/health/routes.js";
 import { backupsRouter } from "./modules/backups/routes.js";
+import { registerPreviewHooks } from "./modules/previews/service.js";
+import { alertsRouter } from "./modules/alerts/routes.js";
+import { configureAlerts } from "./modules/alerts/service.js";
+import { configureOutbound } from "./lib/outbound.js";
+import { platformRouter } from "./modules/keys/routes.js";
+import { awsRouter } from "./modules/aws/routes.js";
+import { cloudRouter } from "./modules/cloud/routes.js";
+import { configureProviderApis } from "./modules/cloud/http.js";
+import { configureDns } from "./modules/dns/service.js";
+import { dnsRouter } from "./modules/dns/routes.js";
+import { metricsRouter } from "./modules/metrics/routes.js";
+import { scrapeRouter, scrapeTokensRouter } from "./modules/metrics/prometheus.js";
+import { githubAppWebhookRouter, githubRouter, githubSetupRouter } from "./modules/github/routes.js";
 
 export function createApp(db: Database, pool: pg.Pool, env: Env) {
+  registerPreviewHooks(env);
+  configureOutbound(env.INVEON_ALERT_PRIVATE_HOSTS);
+  configureAlerts(env.INVEON_PUBLIC_URL);
+  configureProviderApis({ digitalocean: env.INVEON_DIGITALOCEAN_API_BASE, hetzner: env.INVEON_HETZNER_API_BASE, cloudflare: env.INVEON_CLOUDFLARE_API_BASE });
+  configureDns({ propagationSec: env.INVEON_DNS_PROPAGATION_SEC });
   const app = express();
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
@@ -50,6 +69,7 @@ export function createApp(db: Database, pool: pg.Pool, env: Env) {
 
   // Raw-body and agent routes parse their own bodies.
   app.use("/api/v1/webhooks", webhookRouter(db, env));
+  app.use("/api/v1/webhooks", githubAppWebhookRouter(db, env));
   app.use("/api/v1/agent", agentRouter(db, env));
 
   app.use(express.json({ limit: "256kb" }));
@@ -67,23 +87,37 @@ export function createApp(db: Database, pool: pg.Pool, env: Env) {
 
   app.use("/api/v1/auth", authRouter(db, env));
   app.use("/api/v1/orgs", requireAuth(env), orgCreateRouter(db));
+  app.use("/api/v1/platform", requireAuth(env), platformRouter(db, env));
+  app.use("/api/v1/github", githubSetupRouter(db, env));
 
   const org = Router({ mergeParams: true });
   org.use(requireAuth(env), requireMember(db));
+  // DigitalOcean and Hetzner first: their refresh and terminate pass EC2 servers on.
+  org.use("/", cloudRouter(db, env));
+  org.use("/", awsRouter(db, env));
   org.use("/servers", serversRouter(db, env));
   org.use("/apps", appsRouter(db, env));
   org.use("/environments", environmentsRouter(db, env));
   org.use("/environments", deploysRouter(db, env));
+  org.use("/environments", replicasRouter(db));
   org.use("/environments", healthRouter(db, env));
   org.use("/jobs", jobsRouter(db));
   org.use("/", domainsRouter(db, env));
+  org.use("/", dnsRouter(db, env));
   org.use("/", backupsRouter(db));
+  org.use("/", alertsRouter(db));
+  org.use("/", metricsRouter(db));
+  org.use("/", scrapeTokensRouter(db));
+  org.use("/", githubRouter(db));
   org.use("/", orgRouter(db, env));
   app.use("/api/v1/orgs/:orgId", org);
 
   app.use("/api/v1", (_req, _res) => {
     throw new NotFoundError("No such endpoint");
   });
+
+  // Prometheus scrape endpoint (read-only, per-organization scrape token).
+  app.use("/", scrapeRouter(db, env));
 
   // install.sh and the agent bundle for the one-line install command.
   const agentDir = env.INVEON_AGENT_DIR ?? resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "agent");

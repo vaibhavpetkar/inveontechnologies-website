@@ -15,6 +15,10 @@ export interface AgentConfig {
   acmeWebroot: string;
   letsencryptDir: string;
   workDir: string;
+  /** The Ed25519 key for request signing (default: agent-key.pem next to this file). */
+  signingKeyPath?: string;
+  /** Set once the control plane has the signing key's public half. */
+  signingKeyRegistered?: boolean;
 }
 
 export const DEFAULTS: Omit<AgentConfig, "controlPlaneUrl" | "serverId" | "token"> = {

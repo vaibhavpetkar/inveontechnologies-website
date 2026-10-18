@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { AnimatePresence, motion } from "framer-motion";
-import { Boxes, Cloud, History, ListChecks, LogOut, Menu, Server, Users, X } from "lucide-react";
+import { Bell, Boxes, Cloud, History, KeyRound, ListChecks, LogOut, Menu, Server, UserCog, Users, X } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
 const NAV = [
@@ -9,7 +9,10 @@ const NAV = [
   { href: "/apps", label: "Apps", icon: Boxes },
   { href: "/jobs", label: "Jobs", icon: ListChecks },
   { href: "/team", label: "Team", icon: Users },
+  { href: "/alerts", label: "Alerts", icon: Bell, min: "admin" as const },
   { href: "/audit", label: "Audit log", icon: History, min: "admin" as const },
+  { href: "/account", label: "Account", icon: UserCog },
+  { href: "/platform/keys", label: "Encryption keys", icon: KeyRound, platform: true },
 ];
 
 function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
@@ -34,7 +37,7 @@ function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         </label>
       )}
       <nav className="nav">
-        {NAV.filter((n) => !n.min || can(n.min)).map(({ href, label, icon: Icon }) => (
+        {NAV.filter((n) => (!n.min || can(n.min)) && (!("platform" in n) || user?.platformAdmin)).map(({ href, label, icon: Icon }) => (
           <Link key={href} href={href} className={`nav-link ${location.startsWith(href) ? "active" : ""}`} onClick={onNavigate}>
             <Icon size={18} /> {label}
           </Link>

@@ -69,3 +69,25 @@ Off by default. Turn it on only once email sending works; candidates then have t
 ## Tests and CI
 
 `portal-backend` has an automated test suite (`npm test`, needs a disposable Postgres in `TEST_DATABASE_URL`), and `.github/workflows/ci.yml` runs it plus typecheck/build for all three apps on every push and pull request.
+
+## Inveon Cloud — cloud.inveontechnologies.in
+
+Inveon Cloud (the `inveon-cloud/` folder) runs as two containers in `docker-compose.yml`, `inveon-cloud` and `inveon-cloud-postgres`, behind the same nginx as every other site.
+
+1. **DNS**: add an `A` record for `cloud.inveontechnologies.in` pointing at this server. If it goes through Cloudflare, set it to **DNS only** (grey cloud) until the certificate below is issued.
+2. **Secrets**: add these three lines to the `.env` next to `docker-compose.yml`, generating each value on the server (never paste them into chat or a ticket):
+   ```bash
+   echo "INVEON_POSTGRES_PASSWORD=$(openssl rand -hex 24)" >> .env
+   echo "INVEON_JWT_SECRET=$(openssl rand -base64 32)" >> .env
+   echo "INVEON_MASTER_KEY=$(openssl rand -base64 32)" >> .env
+   ```
+   Save a copy of `INVEON_MASTER_KEY` in your password manager. Without it, the stored deploy keys, registry passwords and app secrets can't be read. Optional settings (email, GitHub token, platform admins) are in `inveon-cloud/.env.example` and go in the same `.env`.
+3. **Deploy**: `docker compose up -d --build web inveon-cloud`. The site starts with a self-signed placeholder certificate on `cloud.` until step 4, and every other site is unaffected. If the three secrets are missing, only the `inveon_cloud` container fails to start (`docker compose logs inveon-cloud` says which).
+4. **Certificate**, once DNS resolves to the server:
+   ```bash
+   docker compose run --rm --entrypoint certbot certbot certonly --webroot -w /var/www/certbot -d cloud.inveontechnologies.in
+   docker compose restart web
+   ```
+5. **Create the owner account straight away**: open https://cloud.inveontechnologies.in and sign up. Sign-up is closed, except that the very first account can be created without an invite, so do this before sharing the address. That account becomes the owner and platform admin, and is asked to turn on two-factor login.
+
+After that, add servers from the dashboard (the install command is shown there), connect a GitHub repo and deploy. The full guide is `inveon-cloud/README.md`.

@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, onSessionChange, refreshSession, setAccessToken } from "../lib/api";
 import { ROLE_RANK, type OrgSummary, type Role, type User } from "../lib/types";
+import { getPasskey, type RequestOptionsJSON } from "../lib/webauthn";
 
 interface AuthValue {
   user: User | null;
@@ -8,7 +9,11 @@ interface AuthValue {
   org: OrgSummary | null;
   setOrgId: (id: string) => void;
   can: (min: Role) => boolean;
-  login: (email: string, password: string) => Promise<void>;
+  /** Resolves to a challenge token (and the second factors it accepts) when the account has two-factor on. */
+  login: (email: string, password: string) => Promise<{ challengeToken: string; methods: string[] } | null>;
+  /** Signs in with a passkey: on its own, or as the second step after the password. */
+  loginWithPasskey: (challengeToken?: string) => Promise<void>;
+  completeLogin: (challengeToken: string, factor: { code?: string; recoveryCode?: string }) => Promise<void>;
   signup: (body: { email: string; password: string; name: string; orgName?: string; inviteToken?: string }) => Promise<void>;
   logout: () => Promise<void>;
   reloadMe: () => Promise<User | null>;
@@ -65,7 +70,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
-    const r = await api<{ accessToken: string; user: User }>("/auth/login", { method: "POST", body: { email, password } });
+    const r = await api<{ accessToken: string; user: User } | { twoFactorRequired: true; challengeToken: string; methods?: string[] }>("/auth/login", { method: "POST", body: { email, password } });
+    if ("challengeToken" in r) return { challengeToken: r.challengeToken, methods: r.methods ?? ["totp"] };
+    setAccessToken(r.accessToken);
+    setUser(r.user);
+    return null;
+  }, []);
+
+  const completeLogin = useCallback(async (challengeToken: string, factor: { code?: string; recoveryCode?: string }) => {
+    const r = await api<{ accessToken: string; user: User }>("/auth/login/2fa", { method: "POST", body: { challengeToken, ...factor } });
+    setAccessToken(r.accessToken);
+    setUser(r.user);
+  }, []);
+
+  const loginWithPasskey = useCallback(async (challengeToken?: string) => {
+    const opts = await api<{ ceremonyId: string; publicKey: RequestOptionsJSON }>("/auth/passkeys/login/options", { method: "POST", body: challengeToken ? { challengeToken } : {} });
+    const credential = await getPasskey(opts.publicKey);
+    const r = await api<{ accessToken: string; user: User }>("/auth/passkeys/login", { method: "POST", body: { ceremonyId: opts.ceremonyId, credential, ...(challengeToken ? { challengeToken } : {}) } });
     setAccessToken(r.accessToken);
     setUser(r.user);
   }, []);
@@ -90,7 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const can = useCallback((min: Role) => !!org && ROLE_RANK[org.role] >= ROLE_RANK[min], [org]);
 
-  return <AuthContext.Provider value={{ user, loading, org, setOrgId, can, login, signup, logout, reloadMe }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, loading, org, setOrgId, can, login, loginWithPasskey, completeLogin, signup, logout, reloadMe }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

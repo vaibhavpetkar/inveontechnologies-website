@@ -6,17 +6,23 @@ import { Shell } from "./components/Shell";
 import { Loading } from "./components/ui";
 import { AcceptInvite, Login, Signup } from "./pages/Auth";
 import Servers from "./pages/Servers";
+import ServerDetail from "./pages/ServerDetail";
 import Apps from "./pages/Apps";
 import AppDetail from "./pages/AppDetail";
 import Jobs from "./pages/Jobs";
 import Team from "./pages/Team";
 import Audit from "./pages/Audit";
+import Alerts from "./pages/Alerts";
 import NoOrganization from "./pages/NoOrganization";
+import Account from "./pages/Account";
+import EncryptionKeys from "./pages/EncryptionKeys";
+import TwoFactorGate from "./pages/TwoFactorGate";
 
 function Private({ children }: { children: ReactNode }) {
   const { user, loading, org } = useAuth();
   if (loading) return <div className="page-loading"><Loading /></div>;
   if (!user) return <Redirect to="/login" />;
+  if (user.twoFactor.required && !(user.twoFactor.satisfied ?? user.twoFactor.enabled)) return <TwoFactorGate />;
   if (!org) return <NoOrganization />;
   // Remount pages when the organization changes so no data leaks across.
   return <Shell key={org.id}>{children}</Shell>;
@@ -45,6 +51,11 @@ export default function App() {
             </Public>
           </Route>
           <Route path="/invite/:token" component={AcceptInvite} />
+          <Route path="/servers/:id">
+            <Private>
+              <ServerDetail />
+            </Private>
+          </Route>
           <Route path="/servers">
             <Private>
               <Servers />
@@ -68,6 +79,21 @@ export default function App() {
           <Route path="/team">
             <Private>
               <Team />
+            </Private>
+          </Route>
+          <Route path="/alerts">
+            <Private>
+              <Alerts />
+            </Private>
+          </Route>
+          <Route path="/platform/keys">
+            <Private>
+              <EncryptionKeys />
+            </Private>
+          </Route>
+          <Route path="/account">
+            <Private>
+              <Account />
             </Private>
           </Route>
           <Route path="/audit">

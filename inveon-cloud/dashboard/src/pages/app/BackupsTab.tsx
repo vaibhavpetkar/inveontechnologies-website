@@ -19,6 +19,8 @@ const DEFAULTS: BackupConfig = {
   s3Bucket: "",
   s3Prefix: "",
   s3Region: "ap-south-1",
+  keepDaily: 14,
+  keepWeekly: 8,
 };
 
 function ConfigForm({ envId, config, onSaved }: { envId: string; config: BackupConfig | null; onSaved: () => void }) {
@@ -54,6 +56,8 @@ function ConfigForm({ envId, config, onSaved }: { envId: string; config: BackupC
           s3Bucket: form.s3Bucket || null,
           s3Prefix: form.s3Prefix ?? "",
           s3Region: form.s3Region,
+          keepDaily: form.keepDaily === null || Number.isNaN(form.keepDaily) ? null : Number(form.keepDaily),
+          keepWeekly: form.keepDaily === null ? 0 : Number(form.keepWeekly) || 0,
         },
       });
       onSaved();
@@ -104,6 +108,27 @@ function ConfigForm({ envId, config, onSaved }: { envId: string; config: BackupC
           <input required value={form.s3Region} onChange={(e) => set("s3Region", e.target.value)} />
         </Field>
       </div>
+      <div className="row row-3">
+        <label className="check">
+          <input type="checkbox" checked={form.keepDaily !== null} onChange={(e) => set("keepDaily", e.target.checked ? 14 : null)} /> Delete old backups
+        </label>
+        {form.keepDaily !== null && (
+          <>
+            <Field label="Daily backups to keep" hint="The newest backup of each of the last N days.">
+              <input type="number" min={1} max={366} required value={form.keepDaily} onChange={(e) => set("keepDaily", Number(e.target.value))} />
+            </Field>
+            <Field label="Weekly backups to keep" hint="Plus the newest of each of the last N weeks (0 for none).">
+              <input type="number" min={0} max={260} value={form.keepWeekly} onChange={(e) => set("keepWeekly", Number(e.target.value))} />
+            </Field>
+          </>
+        )}
+      </div>
+      {form.keepDaily !== null && (
+        <p className="muted small">
+          Checked daily. Backups younger than 24 hours are always kept. Older ones are deleted from S3 by the server (<code>aws s3 rm</code> on this environment's folder only), so its
+          AWS role needs <code>s3:DeleteObject</code> on the prefix.
+        </p>
+      )}
       <p className="muted small">
         Uploads use the server's own AWS credentials (an EC2 instance role is best), never keys stored here. Give each server a write-only policy on its prefix and turn on bucket versioning
         and encryption.
@@ -132,6 +157,15 @@ export function BackupsTab({ detail, reload }: { detail: EnvironmentDetail; relo
       void list.reload();
     });
 
+  const prune = () => {
+    if (!confirm(`Delete backups older than the retention rule now? They are removed from S3 and can't be restored afterwards.`)) return;
+    void action.run(async () => {
+      const r = await api<{ job: Job | null; count: number }>(orgPath(`/environments/${envId}/backups/prune`), { method: "POST" });
+      if (r.job) setJobId(r.job.id);
+      else action.setError("Nothing to delete: every backup is within the retention rule.");
+    });
+  };
+
   const restore = (b: Backup) => {
     if (!confirm(`Restore the backup from ${dateTime(b.createdAt)}? A fresh backup of the current state is taken first.`)) return;
     void action.run(async () => {
@@ -148,7 +182,10 @@ export function BackupsTab({ detail, reload }: { detail: EnvironmentDetail; relo
           <h3>
             <DatabaseBackup size={16} /> Backups to S3
           </h3>
-          {cfg ? <span className={`badge ${cfg.enabled ? "badge-ok" : "badge-muted"}`}>{cfg.enabled ? `nightly ${String(cfg.hourUtc).padStart(2, "0")}:00 UTC` : "paused"}</span> : <span className="muted small">not configured</span>}
+          <span className="btn-row no-margin">
+            {cfg ? <span className={`badge ${cfg.enabled ? "badge-ok" : "badge-muted"}`}>{cfg.enabled ? `nightly ${String(cfg.hourUtc).padStart(2, "0")}:00 UTC` : "paused"}</span> : <span className="muted small">not configured</span>}
+            {cfg && <span className="badge badge-muted">{cfg.keepDaily === null ? "kept forever" : `keep ${cfg.keepDaily} daily${cfg.keepWeekly ? ` + ${cfg.keepWeekly} weekly` : ""}`}</span>}
+          </span>
         </div>
         {can("admin") ? (
           <ConfigForm envId={envId} config={cfg} onSaved={reload} />
@@ -164,6 +201,11 @@ export function BackupsTab({ detail, reload }: { detail: EnvironmentDetail; relo
             <button className="btn btn-ghost" disabled={action.busy || !detail.environment.activeSlot} onClick={backupNow}>
               Back up now
             </button>
+            {can("admin") && cfg.keepDaily !== null && (
+              <button className="btn btn-ghost" disabled={action.busy} onClick={prune}>
+                Apply retention now
+              </button>
+            )}
           </div>
         )}
         <ErrorNote error={action.error} />

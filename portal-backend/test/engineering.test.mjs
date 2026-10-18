@@ -20,7 +20,8 @@ after(async () => {
   await api?.stop();
 });
 
-const key = () => `E${Math.random().toString(36).slice(2, 6).toUpperCase().replace(/[^A-Z]/g, "Q")}`;
+// Six random letters: replacing digits with one letter made collisions likely.
+const key = () => `E${Array.from({ length: 6 }, () => String.fromCharCode(65 + Math.floor(Math.random() * 26))).join("")}`;
 async function project(extra = {}) {
   const r = await api.call("POST", "/projects", { token: manager.token, body: { title: `Eng ${Math.random().toString(36).slice(2, 7)}`, key: key(), memberIds: [dev.id, other.id], ...extra } });
   assert.equal(r.status, 201, JSON.stringify(r.json));

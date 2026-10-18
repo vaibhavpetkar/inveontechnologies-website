@@ -8,6 +8,7 @@ import { requireRole } from "../auth/middleware.js";
 import { randomToken, sha256Hex } from "../../lib/crypto.js";
 import { audit } from "../../lib/audit.js";
 import { ConflictError, NotFoundError } from "../../lib/errors.js";
+import { serverInUse } from "../replicas/pool.js";
 
 export const BOOTSTRAP_TTL_MS = 15 * 60 * 1000;
 
@@ -15,10 +16,11 @@ type Server = typeof servers.$inferSelect;
 
 /** Never expose the token hash. Status is derived from the last heartbeat. */
 export function publicServer(s: Server, heartbeatTimeoutSec: number) {
-  const { tokenHash: _t, ...rest } = s;
+  const { tokenHash: _t, signingPublicKey, ...rest } = s;
   let status = s.status;
   if (s.registeredAt) status = s.lastSeenAt && Date.now() - s.lastSeenAt.getTime() < heartbeatTimeoutSec * 1000 ? "online" : "offline";
-  return { ...rest, status };
+  // "unsigned": an agent from before request signing; upgrade it before requiring signatures.
+  return { ...rest, status, requestSigning: signingPublicKey ? ("signed" as const) : s.registeredAt ? ("unsigned" as const) : null };
 }
 
 export async function loadServer(db: Database, orgId: string, id: string) {
@@ -27,9 +29,9 @@ export async function loadServer(db: Database, orgId: string, id: string) {
   return s;
 }
 
-async function issueBootstrapToken(db: Database, env: Env, serverId: string, userId: string) {
+export async function issueBootstrapToken(db: Database, env: Env, serverId: string, userId: string, ttlMs = BOOTSTRAP_TTL_MS) {
   const token = randomToken(32);
-  const expiresAt = new Date(Date.now() + BOOTSTRAP_TTL_MS);
+  const expiresAt = new Date(Date.now() + ttlMs);
   // A new token replaces any unused one for this server.
   await db.delete(serverBootstrapTokens).where(eq(serverBootstrapTokens.serverId, serverId));
   await db.insert(serverBootstrapTokens).values({ serverId, tokenHash: sha256Hex(token), expiresAt, createdBy: userId });
@@ -68,7 +70,7 @@ export function serversRouter(db: Database, env: Env) {
 
   router.patch("/:id", requireRole("admin"), async (req, res) => {
     const body = z
-      .object({ name: z.string().trim().min(1).max(80).optional(), ipAddress: z.string().ip().optional() })
+      .object({ name: z.string().trim().min(1).max(80).optional(), ipAddress: z.string().ip().optional(), privateIpAddress: z.string().ip().nullable().optional() })
       .parse(req.body);
     const server = await loadServer(db, req.member!.orgId, req.params.id);
     const [updated] = await db.update(servers).set(body).where(eq(servers.id, server.id)).returning();
@@ -78,8 +80,10 @@ export function serversRouter(db: Database, env: Env) {
 
   router.delete("/:id", requireRole("admin"), async (req, res) => {
     const server = await loadServer(db, req.member!.orgId, req.params.id);
-    const inUse = await db.query.environments.findFirst({ where: eq(environments.serverId, server.id) });
-    if (inUse) throw new ConflictError("Remove the environments on this server first");
+    if (await serverInUse(db, server.id)) throw new ConflictError("Remove the environments on this server first (or take it out of their replicas and proxies)");
+    if ((server.awsInstanceId || server.cloudInstanceId) && server.provisionState !== "terminated" && server.provisionState !== "failed") {
+      throw new ConflictError("Terminate the instance first, so it isn't left running");
+    }
     await db.delete(servers).where(eq(servers.id, server.id));
     await audit(db, req, "server.delete", "server", server.id, { name: server.name });
     res.json({ ok: true });

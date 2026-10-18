@@ -8,6 +8,132 @@
       "when": 1791714752613,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791823101776,
+      "tag": "0001_release_command",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791823391196,
+      "tag": "0002_build_on_server",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791823799186,
+      "tag": "0003_preview_environments",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791824998963,
+      "tag": "0004_alerts",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791825377943,
+      "tag": "0005_backup_retention",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791825632368,
+      "tag": "0006_release_archive",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791825971704,
+      "tag": "0007_maintenance_windows",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791826661091,
+      "tag": "0008_two_factor",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791827518455,
+      "tag": "0009_aws_servers",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792024567410,
+      "tag": "0010_monitoring",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1792025988520,
+      "tag": "0011_signed_agents",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1792026338282,
+      "tag": "0012_passkeys",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1792026750072,
+      "tag": "0013_github_app",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1792329231330,
+      "tag": "0014_maintenance_time_zone",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1792329550250,
+      "tag": "0015_cloud_providers",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1792330157100,
+      "tag": "0016_environment_replicas",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1792330158160,
+      "tag": "0017_backfill_environment_replicas",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1792331472005,
+      "tag": "0018_wildcard_certificates",
+      "breakpoints": true
     }
   ]
 }

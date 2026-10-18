@@ -3,14 +3,19 @@ import { z } from "zod";
 import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import type { Database } from "../../db/client.js";
 import type { Env } from "../../env.js";
-import { jobSteps, serverBootstrapTokens, servers } from "../../db/schema.js";
+import { agentRequestNonces, jobSteps, jobs, organizations, serverBootstrapTokens, servers } from "../../db/schema.js";
 import { randomToken, sha256Hex } from "../../lib/crypto.js";
 import { writeAudit } from "../../lib/audit.js";
-import { AppError, UnauthorizedError } from "../../lib/errors.js";
+import { AppError, ConflictError, NotFoundError, UnauthorizedError } from "../../lib/errors.js";
+import { checkAgentSignature, parseAgentPublicKey, SIGNATURE_MAX_SKEW_SEC } from "../../lib/agent-signature.js";
 import { authRateLimiter } from "../auth/middleware.js";
 import { bus, serverJobsEvent } from "../../lib/bus.js";
 import { buildAgentPayload, claimNextJob, finishJob, reportStep } from "../jobs/service.js";
 import { asc } from "drizzle-orm";
+import { dashboardLink, emitAlert } from "../alerts/service.js";
+import { batchSchema, ingestSamples } from "../metrics/service.js";
+import { ACME_VALUE_RE, challengeWildcard, cleanupChallenge, presentChallenge } from "../dns/service.js";
+import { HOSTNAME_RE } from "../domains/routes.js";
 
 const factsSchema = z
   .object({
@@ -25,7 +30,20 @@ const factsSchema = z
   })
   .default({});
 
-const registerSchema = z.object({ token: z.string().min(20).max(200), facts: factsSchema });
+/** An Ed25519 public key, SPKI DER in base64 (44 bytes, so 60 characters). */
+const publicKeySchema = z
+  .string()
+  .max(200)
+  .refine((k) => {
+    try {
+      parseAgentPublicKey(k);
+      return true;
+    } catch {
+      return false;
+    }
+  }, "An Ed25519 public key (SPKI DER, base64)");
+
+const registerSchema = z.object({ token: z.string().min(20).max(200), facts: factsSchema, publicKey: publicKeySchema.optional() });
 
 const stepReportSchema = z.object({
   status: z.enum(["running", "success", "failure"]).optional(),
@@ -35,21 +53,72 @@ const stepReportSchema = z.object({
 
 const finishSchema = z.object({ status: z.enum(["success", "failure"]), error: z.string().max(4000).optional() });
 
-/** Agent auth: a per-server random token, compared by its SHA-256 hash. No debug bypass. */
-function requireAgent(db: Database) {
+type RawRequest = Request & { rawBody?: Buffer };
+
+/** Whether unsigned requests are refused for this server's organization. */
+async function signaturesRequired(db: Database, env: Env, orgId: string) {
+  if (env.INVEON_AGENT_SIGNATURES === "required") return true;
+  const org = await db.query.organizations.findFirst({ where: eq(organizations.id, orgId), columns: { requireSignedAgents: true } });
+  return !!org?.requireSignedAgents;
+}
+
+/**
+ * Agent auth: a per-server random token, compared by its SHA-256 hash, and
+ * an Ed25519 signature over the request (lib/agent-signature.ts) once the
+ * server has a signing key. No debug bypass.
+ *
+ * - Key on record: the request must be signed with it, within 5 minutes of
+ *   our clock, with a nonce not seen before. There is no falling back to
+ *   unsigned requests once a key is set.
+ * - No key yet (an agent from before signing): accepted, unless signatures
+ *   are required for the organization (or everywhere). Even then the agent
+ *   may enrol its first key at POST /signing-key, so upgrading works.
+ */
+function requireAgent(db: Database, env: Env) {
   return async (req: Request, _res: Response, next: NextFunction) => {
     const header = req.headers.authorization;
     if (!header?.startsWith("Bearer ")) throw new UnauthorizedError("Agent token required");
     const server = await db.query.servers.findFirst({ where: eq(servers.tokenHash, sha256Hex(header.slice(7))) });
     if (!server) throw new UnauthorizedError("Invalid agent token");
+    if (server.signingPublicKey) {
+      const check = checkAgentSignature(
+        server.signingPublicKey,
+        { method: req.method, path: req.originalUrl, body: (req as RawRequest).rawBody ?? Buffer.alloc(0), headers: req.headers },
+        Date.now(),
+      );
+      if (!check.ok) throw new AppError("INVALID_AGENT_SIGNATURE", check.reason, 401);
+      // Kept until the timestamp could no longer pass the window, then cleaned up by the scheduler.
+      const [fresh] = await db
+        .insert(agentRequestNonces)
+        .values({ serverId: server.id, nonce: check.nonce, expiresAt: new Date((check.timestamp + SIGNATURE_MAX_SKEW_SEC + 60) * 1000) })
+        .onConflictDoNothing()
+        .returning({ nonce: agentRequestNonces.nonce });
+      if (!fresh) throw new AppError("REPLAYED_AGENT_REQUEST", "This signed request was already used", 401);
+    } else if (req.path !== "/signing-key" && (await signaturesRequired(db, env, server.orgId))) {
+      throw new AppError("AGENT_SIGNATURE_REQUIRED", "This organization requires signed agent requests; upgrade the agent on this server", 401);
+    }
     req.server = { id: server.id, orgId: server.orgId };
     next();
   };
 }
 
+/** Scheduler: nonces whose timestamps are past the window can't be replayed anyway. */
+export async function pruneAgentNonces(db: Database) {
+  const result = await db.execute(sql`DELETE FROM agent_request_nonces WHERE expires_at < now()`);
+  return result.rowCount ?? 0;
+}
+
 export function agentRouter(db: Database, env: Env) {
   const router = Router();
-  router.use(express.json({ limit: "1mb" }));
+  // The raw body is kept for the request signature (its SHA-256 is signed).
+  router.use(
+    express.json({
+      limit: "1mb",
+      verify: (req, _res, buf) => {
+        (req as RawRequest).rawBody = Buffer.from(buf);
+      },
+    }),
+  );
 
   router.post("/register", authRateLimiter(env.INVEON_AUTH_RATE_LIMIT), async (req, res) => {
     const body = registerSchema.parse(req.body);
@@ -68,34 +137,71 @@ export function agentRouter(db: Database, env: Env) {
       .set({
         ...body.facts,
         tokenHash: sha256Hex(agentToken),
+        // A new install replaces the signing key (or clears it, for an agent from before signing).
+        signingPublicKey: body.publicKey ?? null,
+        signingKeyAt: body.publicKey ? new Date() : null,
         status: "online",
         ipAddress: current?.ipAddress ?? req.ip ?? null,
         registeredAt: new Date(),
         lastSeenAt: new Date(),
+        ...(current && current.provider !== "manual" && current.provisionState !== "terminating" && current.provisionState !== "terminated" ? { provisionState: "agent_online" as const } : {}),
       })
       .where(eq(servers.id, used.serverId))
       .returning();
-    await writeAudit(db, { orgId: server.orgId, actorServerId: server.id, action: "server.register", entityType: "server", entityId: server.id, metadata: { hostname: body.facts.hostname }, ipAddress: req.ip });
-    res.status(201).json({ serverId: server.id, agentToken });
+    await writeAudit(db, { orgId: server.orgId, actorServerId: server.id, action: "server.register", entityType: "server", entityId: server.id, metadata: { hostname: body.facts.hostname, signedRequests: !!body.publicKey }, ipAddress: req.ip });
+    res.status(201).json({ serverId: server.id, agentToken, signingKey: body.publicKey ? "registered" : null });
   });
 
-  router.use(requireAgent(db));
+  router.use(requireAgent(db, env));
+
+  /**
+   * An agent installed before signing enrols its key here (on upgrade). The
+   * first key is accepted on the bearer token alone; replacing a key needs a
+   * request signed with the current one (checked by requireAgent).
+   */
+  router.post("/signing-key", async (req, res) => {
+    const { publicKey } = z.object({ publicKey: publicKeySchema }).parse(req.body);
+    const server = (await db.query.servers.findFirst({ where: eq(servers.id, req.server!.id) }))!;
+    if (server.signingPublicKey === publicKey) {
+      res.json({ signingKey: "registered" });
+      return;
+    }
+    const [updated] = await db
+      .update(servers)
+      .set({ signingPublicKey: publicKey, signingKeyAt: new Date() })
+      .where(and(eq(servers.id, server.id), server.signingPublicKey ? eq(servers.signingPublicKey, server.signingPublicKey) : isNull(servers.signingPublicKey)))
+      .returning({ id: servers.id });
+    if (!updated) throw new ConflictError("The signing key changed meanwhile");
+    await writeAudit(db, { orgId: server.orgId, actorServerId: server.id, action: server.signingPublicKey ? "server.signing_key_rotate" : "server.signing_key", entityType: "server", entityId: server.id, ipAddress: req.ip });
+    res.json({ signingKey: "registered" });
+  });
 
   router.post("/heartbeat", async (req, res) => {
     const { facts } = z.object({ facts: factsSchema }).parse(req.body ?? {});
+    await markBackOnline(db, req.server!.id);
     await db.update(servers).set({ ...facts, status: "online", lastSeenAt: new Date() }).where(eq(servers.id, req.server!.id));
-    res.json({ ok: true });
+    // Tells the agent it may poll the separate lane for live log streams,
+    // and that it may send metrics.
+    res.json({ ok: true, features: ["stream_lane", "metrics", "signed_requests"] });
+  });
+
+  // Host metrics, in batches. Always stored for the token's own server.
+  router.post("/metrics", async (req, res) => {
+    const { samples } = batchSchema.parse(req.body);
+    res.json(await ingestSamples(db, req.server!.id, samples));
   });
 
   // Long poll: waits up to INVEON_AGENT_POLL_TIMEOUT_MS for a job, else 204.
   router.post("/jobs/claim", async (req, res) => {
     const serverId = req.server!.id;
+    const { lane } = z.object({ lane: z.enum(["main", "stream"]).default("main") }).parse(req.body ?? {});
+    await markBackOnline(db, serverId);
     await db.update(servers).set({ lastSeenAt: new Date(), status: "online" }).where(eq(servers.id, serverId));
     const deadline = Date.now() + env.INVEON_AGENT_POLL_TIMEOUT_MS;
     let closed = false;
     req.on("close", () => (closed = true));
     for (;;) {
-      const job = await claimNextJob(db, serverId);
+      const job = await claimNextJob(db, serverId, lane);
       if (job) {
         const steps = await db.select().from(jobSteps).where(eq(jobSteps.jobId, job.id)).orderBy(asc(jobSteps.position));
         res.json({ job: await buildAgentPayload(db, job, steps) });
@@ -122,6 +228,35 @@ export function agentRouter(db: Database, env: Env) {
     res.json({ ok: true });
   });
 
+  /**
+   * certbot's DNS-01 hooks (inveon-agent dns-hook) during a wildcard issue
+   * or renew job: publish or remove the TXT record for one of the
+   * wildcards that job is about, on this server. The answer says how long
+   * certbot should wait for the record to propagate.
+   */
+  router.post("/jobs/:jobId/dns-challenge", async (req, res) => {
+    const body = z
+      .object({
+        phase: z.enum(["auth", "cleanup"]),
+        domain: z.string().toLowerCase().max(253).regex(HOSTNAME_RE),
+        validation: z.string().regex(ACME_VALUE_RE),
+      })
+      .strict()
+      .parse(req.body);
+    const job = await db.query.jobs.findFirst({ where: eq(jobs.id, req.params.jobId) });
+    if (!job || job.serverId !== req.server!.id) throw new NotFoundError("Job not found");
+    if (job.status !== "running") throw new ConflictError(`Job is ${job.status}`);
+    const wildcard = await challengeWildcard(db, job, body.domain);
+    if (!wildcard) throw new AppError("NO_CHALLENGE", "This job has no wildcard certificate for that domain", 403);
+    if (body.phase === "auth") {
+      const out = await presentChallenge(db, wildcard, job.id, body.validation);
+      await writeAudit(db, { orgId: wildcard.orgId, actorServerId: req.server!.id, action: "dns.challenge", entityType: "wildcard_certificate", entityId: wildcard.id, metadata: { jobId: job.id, baseDomain: wildcard.baseDomain } });
+      res.json(out);
+    } else {
+      res.json({ removed: await cleanupChallenge(db, wildcard, job.id, body.validation) });
+    }
+  });
+
   router.post("/jobs/:jobId/finish", async (req, res) => {
     const body = finishSchema.parse(req.body);
     const job = await finishJob(db, req.server!.id, req.params.jobId, body);
@@ -131,6 +266,32 @@ export function agentRouter(db: Database, env: Env) {
   return router;
 }
 
+/** Scheduler: no heartbeat for timeoutSec means offline (one alert per transition). */
 export async function markOfflineServers(db: Database, timeoutSec: number) {
-  await db.execute(sql`UPDATE servers SET status = 'offline' WHERE status = 'online' AND last_seen_at < now() - make_interval(secs => ${timeoutSec})`);
+  const result = await db.execute(
+    sql`UPDATE servers SET status = 'offline' WHERE status = 'online' AND last_seen_at < now() - make_interval(secs => ${timeoutSec}) RETURNING id, org_id, name, last_seen_at`,
+  );
+  for (const s of result.rows as { id: string; org_id: string; name: string; last_seen_at: Date | string | null }[]) {
+    const seen = s.last_seen_at ? new Date(s.last_seen_at).toISOString() : null;
+    await emitAlert(db, s.org_id, "server.offline", {
+      title: `Server offline: ${s.name}`,
+      text: `${s.name} has not checked in for more than ${timeoutSec} seconds. Deploys and other jobs for it wait until its agent is back.`,
+      severity: "critical",
+      url: dashboardLink("/servers"),
+      details: { server: s.name, lastSeen: seen },
+    });
+  }
+  return result.rows.length;
+}
+
+/** An offline server whose agent checks in again is online (one alert per transition). */
+async function markBackOnline(db: Database, serverId: string) {
+  const [back] = await db
+    .update(servers)
+    .set({ status: "online", lastSeenAt: new Date() })
+    .where(and(eq(servers.id, serverId), eq(servers.status, "offline")))
+    .returning();
+  if (back) {
+    await emitAlert(db, back.orgId, "server.online", { title: `Server back online: ${back.name}`, text: `The agent on ${back.name} is checking in again.`, severity: "info", url: dashboardLink("/servers"), details: { server: back.name } });
+  }
 }

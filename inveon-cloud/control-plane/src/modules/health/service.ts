@@ -3,6 +3,7 @@ import type { Database } from "../../db/client.js";
 import { apps, environments, healthChecks, memberships, users } from "../../db/schema.js";
 import { sendMail } from "../../lib/mailer.js";
 import { writeAudit } from "../../lib/audit.js";
+import { emitAlert, hasChannelFor } from "../alerts/service.js";
 
 export const FAILURES_BEFORE_DOWN = 3;
 
@@ -69,11 +70,21 @@ export async function runCheck(db: Database, check: Check, publicUrl: string) {
     if (environment && app) {
       const label = `${app.name} / ${environment.name}`;
       const link = `${publicUrl.replace(/\/$/, "")}/apps/${app.id}?env=${environment.id}`;
-      const to = await alertRecipients(db, environment.orgId);
+      const event = next.transition === "down" ? "health.down" : "health.up";
+      // Alert channels take over from the built-in email once one subscribes to the event.
+      if (!(await hasChannelFor(db, environment.orgId, event))) {
+        const to = await alertRecipients(db, environment.orgId);
+        if (next.transition === "down") {
+          await sendMail(to, `[Down] ${label}`, `${label} failed ${next.consecutiveFailures} health checks in a row.\n\nURL: ${check.url}\nLast error: ${result.error}\n\n${link}`);
+        } else {
+          await sendMail(to, `[Recovered] ${label}`, `${label} is responding again (HTTP ${result.statusCode}).\n\nURL: ${check.url}\n\n${link}`);
+        }
+      }
+      const details = { app: app.name, environment: environment.name, url: check.url, status: result.statusCode, error: result.error };
       if (next.transition === "down") {
-        await sendMail(to, `[Down] ${label}`, `${label} failed ${next.consecutiveFailures} health checks in a row.\n\nURL: ${check.url}\nLast error: ${result.error}\n\n${link}`);
+        await emitAlert(db, environment.orgId, "health.down", { title: `Down: ${label}`, text: `${label} failed ${next.consecutiveFailures} health checks in a row.`, severity: "critical", url: link, details });
       } else {
-        await sendMail(to, `[Recovered] ${label}`, `${label} is responding again (HTTP ${result.statusCode}).\n\nURL: ${check.url}\n\n${link}`);
+        await emitAlert(db, environment.orgId, "health.up", { title: `Recovered: ${label}`, text: `${label} is responding again (HTTP ${result.statusCode}).`, severity: "info", url: link, details });
       }
       await writeAudit(db, { orgId: environment.orgId, action: `health.${next.transition}`, entityType: "environment", entityId: environment.id, metadata: { url: check.url, error: result.error } });
     }

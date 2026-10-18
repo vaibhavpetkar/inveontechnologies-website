@@ -20,6 +20,13 @@ export function StatusBadge({ status }: { status: string }) {
       failure: "bad",
       failed: "bad",
       cancelled: "muted",
+      agent_online: "ok",
+      terminating: "warn",
+      stopping: "warn",
+      stopped: "muted",
+      starting: "warn",
+      resizing: "warn",
+      terminated: "muted",
     }[status] ?? "muted";
   return <span className={`badge badge-${tone}`}>{status.replace(/_/g, " ")}</span>;
 }

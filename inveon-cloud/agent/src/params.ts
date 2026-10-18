@@ -16,8 +16,25 @@ export const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 export const SHA_RE = /^[0-9a-f]{40}$/;
 export const BUCKET_RE = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
 export const S3_KEY_RE = /^[A-Za-z0-9._\/-]{1,512}$/;
+/** A backup folder: slash-separated words ending in a slash, with no empty, "." or ".." parts. */
+export const S3_PREFIX_RE = /^(?:(?!\.\.?\/)[A-Za-z0-9._-]{1,100}\/){1,10}$/;
+/** A backup archive's file name (no folders). */
+export const BACKUP_FILE_RE = /^[A-Za-z0-9._-]{1,200}\.tar\.gz$/;
 export const REGION_RE = /^[a-z]{2}(-[a-z]+)+-\d$/;
+/** One word of a release command: nothing a shell would interpret (same rule as the control plane). */
+export const RELEASE_ARG_RE = /^[A-Za-z0-9_@%+=:,./-]{1,200}$/;
+/** Images built on the server: a fixed local namespace, tagged with the commit. */
+export const BUILT_IMAGE_RE = /^inveon-build\/[a-z0-9][a-z0-9-]{0,80}:[0-9a-f]{40}$/;
+export const GITHUB_OWNER_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+export const GITHUB_REPO_RE = /^(?!\.\.?$)[A-Za-z0-9._-]{1,100}$/;
+export const REGISTRY_SERVER_RE = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::\d{1,5})?$/;
+export const REGISTRY_USER_RE = /^[A-Za-z0-9._@+-]{1,256}$/;
 export const URL_PATH_RE = /^\/[A-Za-z0-9._~\/?=&%-]{0,200}$/;
+/** A wildcard certificate's name: "wildcard_" and its base domain (never a hostname, so no clash with a domain's own). */
+export const WILDCARD_CERT_RE = /^wildcard_(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+export const wildcardCertName = (baseDomain: string) => `wildcard_${baseDomain}`;
+/** A certificate on disk: a hostname's own, or a wildcard's. */
+export const CERT_NAME_RE = new RegExp(`(?:${HOSTNAME_RE.source})|(?:${WILDCARD_CERT_RE.source})`);
 
 export function obj(v: unknown, what = "params"): Obj {
   if (typeof v !== "object" || v === null || Array.isArray(v)) throw new ParamError(`${what} must be an object`);
@@ -54,3 +71,8 @@ export function oneOf<T extends string>(p: Obj, key: string, values: readonly T[
 
 export const SLOTS = ["blue", "green", "main"] as const;
 export type Slot = (typeof SLOTS)[number];
+/**
+ * An image reference with a tag and no digest (registry/name:tag). Used only
+ * for removing archived releases' images, whose tag must carry a commit SHA.
+ */
+export const IMAGE_REF_RE = /^(?:[a-z0-9][a-z0-9.-]*(?::\d{1,5})?\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/;
