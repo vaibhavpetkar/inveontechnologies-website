@@ -137,6 +137,10 @@ services:
       # created by /var/www/Events/scripts/server/install-admin-agent.sh.
       - events-backups:/app/backups
       - /var/lib/inveon-ops:/app/ops
+      # The Events web build's index.html, read by /api/seo/page to serve
+      # search engines and link previews real page tags (Events
+      # docs/ops/SEO.md). Read-only.
+      - events-web-static:/app/web-dist:ro
     depends_on:
       - events-postgres
       - events-redis
